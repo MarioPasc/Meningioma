@@ -1,4 +1,4 @@
-# Raw data pre-processing: Image Coregistration
+# Raw data pre-processing: Image Co-registration
 
 > Start date: 29-07-24
 
@@ -81,7 +81,6 @@ transformed_masks = affine_transform(
 )
 ```
 
-
 The formula for transforming the segmentation coordinates to match the image coordinates is given by:
 
 $$ \mathbf{y} = \mathbf{T} \mathbf{x} + \mathbf{o} $$
@@ -118,7 +117,5 @@ $$ \mathbf{o} = \mathbf{A}_{\text{image}}^{-1} (\mathbf{o}_{\text{seg}} - \mathb
 The final formula for transforming the segmentation to align with the image is:
 
 $$ \mathbf{y} = \mathbf{A}_{\text{image}}^{-1} \mathbf{A}_{\text{seg}} \mathbf{x} + \mathbf{A}_{\text{image}}^{-1} (\mathbf{o}_{\text{seg}} - \mathbf{o}_{\text{image}}) $$
-
-
 
 - Using the `xml.tree` python module, we were able to extract the `.mrml` file from the directory, and print it in order to explore the different xml nodes, however, in the end, we were not able to find any useful information that could relate the image slices to the segmentation instances.
