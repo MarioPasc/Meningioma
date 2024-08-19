@@ -34,32 +34,32 @@ Meningioma_Transformed
 ├── RM/
 │   ├── SUSC/
 │   │   ├── Patient_1/
-│   │   │   ├── SUSC_Image.nrrd
-│   │   │   └── Segmentation.nrrd
+│   │   │   ├── SUSC_P1.nrrd
+│   │   │   └── SUSC_P1_seg.nrrd
 │   │   ├── (...)
 │   │   └── Patient_N/
 │   ├── T1/
 │   │   ├── Patient_1/
-│   │   │   ├── T1_Image.nrrd
-│   │   │   └── Segmentation.nrrd
+│   │   │   ├── T1_P1.nrrd
+│   │   │   └── T1_P1_seg.nrrd
 │   │   ├── (...)
 │   │   └── Patient_N/
 │   ├── T1SIN/
 │   │   ├── Patient_1/
-│   │   │   ├── T1SIN_Image.nrrd
-│   │   │   └── Segmentation.nrrd
+│   │   │   ├── T1SIN_P1.nrrd
+│   │   │   └── T1SIN_P1_SEG.nrrd
 │   │   ├── (...)
 │   │   └── Patient_N/
 │   └── T2/
 │       ├── Patient_1/
-│       │   ├── T2_Image.nrrd
-│       │   └── Segmentation.nrrd
+│       │   ├── T2_P1.nrrd
+│       │   └── T2_P1_seg.nrrd
 │       ├── (...)
 │       └── Patient_N/
 └── TC/
     ├── Patient_1/
-    │   ├── TC_Image.nrrd
-    │   └── Segmentation.nrrd
+    │   ├── TC_P1.nrrd
+    │   └── TC_P1_seg.nrrd
     ├── (...)
     └── Patient_N/
 ```
