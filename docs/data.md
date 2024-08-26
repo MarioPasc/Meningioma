@@ -70,3 +70,28 @@ Once the dataset has been transformed to this adquisition-based folder hierarchy
 
 ![patientcontrol](./figures/data_stats/patient_distribution_barplot.png)
 
+### Image Resolution
+
+Standardizing the image size across the dataset normalizes the model’s input data, ensuring consistent input conditions and yielding more objective results in brain tumor segmentation and characterization. To achieve this goal, a statistical analysis of the image resolution within the dataset was conducted, yielding the following results.
+
+### Height and Width as a continous variable
+
+![scattersize](../docs/figures/size_stats/scatter_height_vs_width.png)
+
+![boxplot](../docs/figures/size_stats/violin_height_width.png)
+
+By plotting the height and width using a kernel density scatter plot, we can identify the numeric intervals within which the image sizes fall. This distribution is further illustrated using a box plot, which highlights the degree of variability across different acquisition formats. As observed, only the CT images are fully standardized, with a resolution of (512x512). In contrast, for the other MRI sequences, image sizes range approximately from (512x512) to (256x256).
+
+### (Height, Width) pairs analysis
+
+![barplot](../docs/figures/size_stats/barplot_frequent_sizes.png)
+
+![heatmap](../docs/figures/size_stats/heatmap_size_frequency.png)
+
+These plots further reinforce the conclusions drawn from the previous analysis of image resolution. The majority of images have a resolution of (512x512), followed by (256x256) and (416x512).
+
+The YOLO model family archieves a flexibility in term of input image size by employing layers that inherently do not required fixed-size inputs, this means that the network accepts images of varying dimensions by accepting any size that is a multiple of the network's stride. 
+
+> "The resizing process during training and prediction does indeed use `cv2.resize` with linear interpolation to adjust the image to the specified `imgsz`, without padding. This ensures that the aspect ratio is maintained by scaling the image to fit within the defined size constraints."
+
+Given the need to control the process of image resizing and rescaling, the chapter 'Dimensionality Standardization' will be dedicated to exploring the various resizing methods that can be applied to medical imaging and evaluating their effectiveness for this specific problem.

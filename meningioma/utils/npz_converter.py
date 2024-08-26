@@ -54,8 +54,8 @@ class NRRDToNPZConverter:
                 sequence_type = os.path.basename(seq)
                 try:
                     nrrd_files = [os.path.join(seq, file) for file in os.listdir(seq) if file.endswith('.nrrd')]
-                    image_path = [file for file in nrrd_files if os.path.basename(file) != "Segmentation.seg.nrrd"][0]
-                    mask_path = [file for file in nrrd_files if os.path.basename(file) == "Segmentation.seg.nrrd"][0]
+                    image_path = [file for file in nrrd_files if os.path.basename(file) != "Segmentation.nrrd"][0]
+                    mask_path = [file for file in nrrd_files if os.path.basename(file) == "Segmentation.nrrd"][0]
 
                     images = self.load_nrrd_files(image_path)
                     masks = self.load_nrrd_files(mask_path)
@@ -94,8 +94,8 @@ class NRRDToNPZConverter:
             self.log_error(error_message)
 
 # Uso de la clase
-base_ds_path = "/home/mariopasc/Python/Datasets/Meningiomas/Original/MENINGIOMAS"
-output_base_path = os.path.join(base_ds_path, '../..', 'npz_dataset')
+base_ds_path = "/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_RM_nrrd"
+output_base_path = os.path.join(base_ds_path, '..', 'npz_dataset')
 log_file = os.path.join(output_base_path, 'conversion_errors.log')
 
 converter = NRRDToNPZConverter(base_ds_path, output_base_path, log_file)

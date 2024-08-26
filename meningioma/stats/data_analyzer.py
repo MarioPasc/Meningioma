@@ -7,6 +7,7 @@ import nrrd
 from typing import Dict
 from tqdm import tqdm
 from natsort import natsorted
+import numpy as np
 
 class AdquisitionStats:
 
@@ -87,7 +88,7 @@ class AdquisitionStats:
         # Define the order of bars
         keys = ['TC', 'RM/T1', 'RM/T1SIN', 'RM/T2', 'RM/SUSC']
         categories = ['Total Patients', 'Meningioma Patients', 'Control Patients']
-        colors = sns.color_palette("tab20")  
+        colors = ['#4e79a7', '#f28e2b', '#e15759']  
         plt.style.use('ggplot')  # A more formal grid style
         plt.rcParams['font.family'] = 'serif'  # Use a serif font, common in scientific papers
         plt.rcParams['font.size'] = 10  # Adjust font size for better readability
@@ -154,10 +155,17 @@ class SizeStats:
         self.verbose = verbose
 
         # Setting the visual style for plots
-        self.colors = sns.color_palette("tab20") 
+        self.pulse_colors = {
+            'RM/T1': '#4e79a7',
+            'RM/T1SIN': '#f28e2b',
+            'RM/T2': '#e15759',
+            'RM/SUSC': '#76b7b2',
+            'TC': '#59a14f'
+        }
+        self.colors = sns.color_palette("tab20")
         plt.style.use('ggplot')  
         plt.rcParams['font.family'] = 'serif'  
-        plt.rcParams['font.size'] = 10 
+        plt.rcParams['font.size'] = 10  
 
         # CSV target files
         self.images_csv = os.path.join(self.target, 'images_sizes.csv')
@@ -214,9 +222,9 @@ class SizeStats:
                                 segmentations_df = pd.concat([segmentations_df, pd.DataFrame({
                                     'Pulse': [f'{adquisition}/{pulse}'],
                                     'Patient': [patient],
-                                    'Height': [segmentation_header['sizes'][1]],
-                                    'Width': [segmentation_header['sizes'][2]],
-                                    'Slices': [segmentation_header['sizes'][0]]
+                                    'Height': [segmentation_header['sizes'][0]],
+                                    'Width': [segmentation_header['sizes'][1]],
+                                    'Slices': [segmentation_header['sizes'][2]]
                                 })], ignore_index=True)
 
                             elif file.endswith('.nrrd'):  # Image file
@@ -226,17 +234,13 @@ class SizeStats:
                                     if self.verbose: 
                                         print(f"    Error reading file {file} for Patient: {patient}. Error: {str(e)}")                      
                                     continue
-                                # Access the dimensions as if the image is in the transversal view (!!!!!!)
-                                transversal_height = image_header['sizes'][1]  # Access width (transversal height)
-                                transversal_width = image_header['sizes'][2]   # Access slices (transversal width)
-                                transversal_slices = image_header['sizes'][0]  # Access height (transversal slices)
 
                                 images_df = pd.concat([images_df, pd.DataFrame({
                                     'Pulse': [f'{adquisition}/{pulse}'],
                                     'Patient': [patient],
-                                    'Height': [transversal_height],
-                                    'Width': [transversal_width],
-                                    'Slices': [transversal_slices]
+                                    'Height': [image_header['sizes'][0]],
+                                    'Width': [image_header['sizes'][1]],
+                                    'Slices': [image_header['sizes'][2]]
                                 })], ignore_index=True)
 
             elif adquisition == 'TC':  # TC folder does not have any pulses or image formats
@@ -257,9 +261,9 @@ class SizeStats:
                             segmentations_df = pd.concat([segmentations_df, pd.DataFrame({
                                 'Pulse': [adquisition],
                                 'Patient': [patient],
-                                'Height': [segmentation_header['sizes'][1]],
-                                'Width': [segmentation_header['sizes'][2]],
-                                'Slices': [segmentation_header['sizes'][0]]
+                                'Height': [segmentation_header['sizes'][0]],
+                                'Width': [segmentation_header['sizes'][1]],
+                                'Slices': [segmentation_header['sizes'][2]]
                             })], ignore_index=True)
 
                         elif file.endswith('.nrrd'):  # Image file
@@ -272,16 +276,16 @@ class SizeStats:
                             images_df = pd.concat([images_df, pd.DataFrame({
                                 'Pulse': [adquisition],
                                 'Patient': [patient],
-                                'Height': [image_header['sizes'][1]],
-                                'Width': [image_header['sizes'][2]],
-                                'Slices': [image_header['sizes'][0]]
+                                'Height': [image_header['sizes'][0]],
+                                'Width': [image_header['sizes'][1]],
+                                'Slices': [image_header['sizes'][2]]
                             })], ignore_index=True)
 
         return {'images': images_df, 'segmentations': segmentations_df}
 
     def _scatter_plot_height_vs_width(self, csv_path: str) -> None:
         """
-        Generates a scatter plot of height vs. width, colored by the Pulse attribute.
+        Generates a scatter plot of height vs. width, colored by the Pulse attribute, with shaded KDE areas for each Pulse.
 
         Args:
             csv_path (str): Path to the images_sizes.csv file.
@@ -292,17 +296,69 @@ class SizeStats:
         # Load the data
         df = pd.read_csv(csv_path)
 
-        # Scatter plot
+        # Create the scatter plot
         plt.figure(figsize=(10, 6))
-        sns.scatterplot(data=df, x='Width', y='Height', hue='Pulse', palette=self.colors)
-        plt.title('Scatter Plot of Image Height vs. Width')
+        sns.scatterplot(data=df, x='Width', y='Height', hue='Pulse', palette=self.pulse_colors)
+
+        # Add KDE plots for each Pulse to shade the area between points
+        for pulse, color in self.pulse_colors.items():
+            subset = df[df['Pulse'] == pulse]
+            if len(subset) > 1:  # Only plot KDE if there's more than 1 point
+                sns.kdeplot(
+                    x=subset['Width'], y=subset['Height'],
+                    fill=True, color=color, alpha=0.25,
+                    warn_singular=False, label=f'{pulse} density'
+                )
+
+        plt.title('Image Height vs. Width')
         plt.xlabel('Width')
         plt.ylabel('Height')
         plt.legend(title='Pulse', loc='upper right')
         plt.tight_layout()
-
-        # Save the figure
+        plt.ylim(0, None)
         output_path = os.path.join(self.target, 'scatter_height_vs_width.png')
+        plt.savefig(output_path)
+
+    def _plot_violin_height_width(self, csv_path: str) -> None:
+        """
+        Generates a plot with two violin plots. One shows the distribution of heights, and the other shows
+        the distribution of widths for each acquisition type (Pulse).
+
+        Args:
+            csv_path (str): Path to the images_sizes.csv file.
+
+        Saves:
+            A plot image as 'violin_height_width.png' in the target directory.
+        """
+        # Load the data
+        df = pd.read_csv(csv_path)
+
+        # Set up the figure with two subplots
+        fig, axes = plt.subplots(1, 2, figsize=(15, 6), sharey=True)
+
+        # Violin plot for Height
+        sns.violinplot(
+            x='Pulse', y='Height', data=df, ax=axes[0],
+            palette=self.pulse_colors, inner="quartile"
+        )
+        axes[0].set_title('Height Distribution')
+        axes[0].set_xlabel('Acquisition Type')
+        axes[0].set_ylabel('Height')
+        axes[0].set_ylim(0, None)
+
+        # Violin plot for Width
+        sns.violinplot(
+            x='Pulse', y='Width', data=df, ax=axes[1],
+            palette=self.pulse_colors, inner="quartile"
+        )
+        axes[1].set_title('Width Distribution')
+        axes[1].set_xlabel('Acquisition Type')
+        axes[1].set_ylabel('Width')
+        axes[1].set_ylim(0, None)
+
+        # Adjust layout and save the figure
+        plt.tight_layout()
+        output_path = os.path.join(self.target, 'violin_height_width.png')
         plt.savefig(output_path)
 
     def _barplot_most_frequent_sizes(self, csv_path: str) -> None:
@@ -332,23 +388,15 @@ class SizeStats:
 
         # Plot the bar plot
         plt.figure(figsize=(10, 6))
-        sns.barplot(x=labels, y=counts, palette=self.colors + ['#76b7b2'])  # Add a similar color for "Other"
+        sns.barplot(x=labels, y=counts, palette=['#4e79a7', '#f28e2b', '#e15759', '#76b7b2', '#59a14f'])
         plt.title('Most Frequent (Height, Width) Pairs')
-        plt.xlabel('Size (Height x Width)')
+        plt.xlabel('Size (Height, Width)')
         plt.ylabel('Number of Occurrences')
         plt.tight_layout()
 
         # Save the figure
         output_path = os.path.join(self.target, 'barplot_frequent_sizes.png')
         plt.savefig(output_path)
-
-    def analyze_dimensionality(self) -> None:
-        results = self._analyze_image_sizes()
-
-        # Save results to CSV files
-        os.makedirs(self.target, exist_ok=True)
-        results.get('images').to_csv(self.images_csv, index=False)
-        results.get('segmentations').to_csv(self.segmentations_csv, index=False)
 
     def _heatmap_size_frequency(self, csv_path: str) -> None:
         """
@@ -367,6 +415,10 @@ class SizeStats:
         # Create a pivot table to aggregate frequencies for each (height, width) pair
         pivot_table = df.pivot_table(index='Height', columns='Width', aggfunc='size', fill_value=0)
 
+        # Sort the pivot table's index (Height) and columns (Width) in natural order
+        pivot_table = pivot_table.sort_index(axis=0, ascending=True)  # Sort rows by Height
+        pivot_table = pivot_table.sort_index(axis=1, ascending=True)  # Sort columns by Width
+
         # Plot the heatmap
         plt.figure(figsize=(12, 8))
         sns.heatmap(pivot_table, cmap='rocket_r', cbar_kws={'label': 'Frequency'})
@@ -379,22 +431,29 @@ class SizeStats:
         output_path = os.path.join(self.target, 'heatmap_size_frequency.png')
         os.makedirs(self.target, exist_ok=True)
         plt.savefig(output_path)
+        plt.show()
+
+    def analyze_dimensionality(self) -> None:
+        results = self._analyze_image_sizes()
+
+        # Save results to CSV files
+        os.makedirs(self.target, exist_ok=True)
+        results.get('images').to_csv(self.images_csv, index=False)
+        results.get('segmentations').to_csv(self.segmentations_csv, index=False)
 
     def show_plots(self) -> None:
         self._scatter_plot_height_vs_width(self.images_csv)
         self._barplot_most_frequent_sizes(self.images_csv)
         self._heatmap_size_frequency(self.images_csv)
-        
-
-
+        self._plot_violin_height_width(self.images_csv)
 
 
 def main() -> int:
     figures_root = './docs/figures/'
     source_transformed = os.path.join('/home/mariopasc/Python/Datasets/Meningiomas', 'Meningioma_Adquisition')
 
-    #stats_folder = os.path.join(figures_root, 'data_stats')
-    #stats_generator = AdquisitionStats(transformed_dir=source_transformed, target_dir=stats_folder)
+    stats_folder = os.path.join(figures_root, 'data_stats')
+    stats_generator = AdquisitionStats(transformed_dir=source_transformed, target_dir=stats_folder)
     #stats_generator.generate_stats()
 
     size_stats_folder = os.path.join(figures_root, 'size_stats')
