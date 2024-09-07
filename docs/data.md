@@ -90,7 +90,7 @@ By plotting the height and width using a kernel density scatter plot, we can ide
 
 These plots further reinforce the conclusions drawn from the previous analysis of image resolution. The majority of images have a resolution of (512x512), followed by (256x256) and (416x512).
 
-The YOLO model family archieves a flexibility in term of input image size by employing layers that inherently do not required fixed-size inputs, this means that the network accepts images of varying dimensions by accepting any size that is a multiple of the network's stride. 
+The YOLO model family archieves a flexibility in term of input image size by employing layers that inherently do not required fixed-size inputs, this means that the network accepts images of varying dimensions by accepting any size that is a multiple of the network's stride.
 
 > "The resizing process during training and prediction does indeed use `cv2.resize` with linear interpolation to adjust the image to the specified `imgsz`, without padding. This ensures that the aspect ratio is maintained by scaling the image to fit within the defined size constraints."
 
