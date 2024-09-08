@@ -101,7 +101,11 @@ Where:
 
 ## Methodology
 
-The evaluation process will involve resizing all images in each dataset using every available interpolation algorithm. For each dataset-interpolation pair, the Structural Similarity Index (SSIM) and the Normalized Cross-Correlation (NCC) will be calculated and recorded, along with the computational cost in time (seconds) and memory usage. Since the SUSC and T2 studies were not performed for every patient, each dataset contains a different number of patients. As a result, the data will be grouped by acquisition format for subsequent analysis.
+Since NCC and SSIM metrics can't be computed between two images with different resolution, the image will be upscaled/downscaled to the desired size, and then downscaled/upscaled to its original size, in order to compute the performance metrics between the original image and the resized one. This experiment setup is also seen in "Hidden Influences on Image Quality when Comparing Interpolation Methods" reference.
+
+In order to find the most suitable algorithm for each dataset, the pareto front will be plotted for the computational cost (X) against NCC/SSIM measure (Y).  
+
+
 
 ## Sources
 
@@ -111,3 +115,5 @@ The evaluation process will involve resizing all images in each dataset using ev
 - [Pareto front](https://en.wikipedia.org/wiki/Pareto_front)
 - [Development of Improved SSIM Quality Index for Compressed Medical Images](https://ieeexplore.ieee.org/stamp/stamp.jsp?arnumber=6707593&casa_token=GDxLE3Vdo2wAAAAA:M6DuC3s_g1QPakyG5-QuO-qDZswEMHB5YwACmI3RQMLD_B-YL_JXJ_aj1wYjpDaODrXFixa2fI0)
 - [OpenCV Documentation for Interpolation Algorithms](https://docs.opencv.org/3.4/da/d54/group__imgproc__transform.html#gga5bb5a1fea74ea38e1a5445ca803ff121ac6c578caa97f2d00f82bac879cf3c781)
+- [P. Thévenaz, T. Blu, M. Unser, "Image Interpolation and Resampling", Handbook of Medical Imaging, Processing and Analysis, Academic Press, pp. 393-420, 2000](https://biblioseb.wordpress.com/wp-content/uploads/2018/03/academic-press-handbook-medical-imaging-processing-analysis.pdf)
+- [Hidden Influences on Image Quality when Comparing Interpolation Methods](https://ieeexplore.ieee.org/abstract/document/4604443)
