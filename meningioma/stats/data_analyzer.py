@@ -7,8 +7,10 @@ import nrrd
 from typing import Dict
 from tqdm import tqdm
 from natsort import natsorted
-import numpy as np
-
+import scienceplots
+plt.style.use(['science', 'ieee', 'grid', 'std-colors']) 
+plt.rcParams['font.size'] = 10
+plt.rcParams.update({'figure.dpi': '100'})
 class AdquisitionStats:
 
     def __init__(self, transformed_dir: str, target_dir: str) -> None:
@@ -88,11 +90,6 @@ class AdquisitionStats:
         # Define the order of bars
         keys = ['TC', 'RM/T1', 'RM/T1SIN', 'RM/T2', 'RM/SUSC']
         categories = ['Total Patients', 'Meningioma Patients', 'Control Patients']
-        colors = ['#4e79a7', '#f28e2b', '#e15759']  
-        plt.style.use('ggplot')  # A more formal grid style
-        plt.rcParams['font.family'] = 'serif'  # Use a serif font, common in scientific papers
-        plt.rcParams['font.size'] = 10  # Adjust font size for better readability
-        
 
         # Create a figure and axis
         fig, ax = plt.subplots(figsize=(10, 6))
@@ -104,8 +101,7 @@ class AdquisitionStats:
                 [x + i * bar_width for x in range(len(keys))],
                 df[category].reindex(keys),
                 width=bar_width,
-                label=category,
-                color=colors[i]
+                label=category, alpha=0.6
             )
 
         # Set the x-axis labels and ticks
@@ -138,8 +134,6 @@ class AdquisitionStats:
         # Save the DataFrame as a CSV for reference
         df.to_csv(os.path.join(self.target_dir, "patient_distribution_stats.csv"))
 
-
-
 class SizeStats:
     def __init__(self, source: str, target: str, verbose: bool = False) -> None:
         """
@@ -153,19 +147,6 @@ class SizeStats:
         self.source = source
         self.target = target
         self.verbose = verbose
-
-        # Setting the visual style for plots
-        self.pulse_colors = {
-            'RM/T1': '#4e79a7',
-            'RM/T1SIN': '#f28e2b',
-            'RM/T2': '#e15759',
-            'RM/SUSC': '#76b7b2',
-            'TC': '#59a14f'
-        }
-        self.colors = sns.color_palette("tab20")
-        plt.style.use('ggplot')  
-        plt.rcParams['font.family'] = 'serif'  
-        plt.rcParams['font.size'] = 10  
 
         # CSV target files
         self.images_csv = os.path.join(self.target, 'images_sizes.csv')
@@ -285,7 +266,7 @@ class SizeStats:
 
     def _scatter_plot_height_vs_width(self, csv_path: str) -> None:
         """
-        Generates a scatter plot of height vs. width, colored by the Pulse attribute, with shaded KDE areas for each Pulse.
+        Generates a scatter plot of height vs. width, colored and shaped by the Pulse attribute.
 
         Args:
             csv_path (str): Path to the images_sizes.csv file.
@@ -296,28 +277,40 @@ class SizeStats:
         # Load the data
         df = pd.read_csv(csv_path)
 
-        # Create the scatter plot
-        plt.figure(figsize=(10, 6))
-        sns.scatterplot(data=df, x='Width', y='Height', hue='Pulse', palette=self.pulse_colors)
+        # Define unique pulses for coloring and shaping
+        pulses = df['Pulse'].unique()
 
-        # Add KDE plots for each Pulse to shade the area between points
-        for pulse, color in self.pulse_colors.items():
-            subset = df[df['Pulse'] == pulse]
-            if len(subset) > 1:  # Only plot KDE if there's more than 1 point
-                sns.kdeplot(
-                    x=subset['Width'], y=subset['Height'],
-                    fill=True, color=color, alpha=0.25,
-                    warn_singular=False, label=f'{pulse} density'
-                )
+        # Temporarily apply the scatter style from scienceplots
+        with plt.style.context(['science', 'scatter']):
+            # Create the scatter plot
+            plt.figure(figsize=(10, 6))
 
-        plt.title('Image Height vs. Width')
-        plt.xlabel('Width')
-        plt.ylabel('Height')
-        plt.legend(title='Pulse', loc='upper right')
-        plt.tight_layout()
-        plt.ylim(0, None)
-        output_path = os.path.join(self.target, 'scatter_height_vs_width.png')
-        plt.savefig(output_path)
+            # Get the current marker cycle from the scatter style
+            prop_cycle = plt.rcParams['axes.prop_cycle']
+            markers_and_colors = prop_cycle.by_key()
+            marker_cycle = markers_and_colors['marker']  # List of markers
+            color_cycle = markers_and_colors['color']    # List of colors
+
+            # Iterate through pulses and plot each with a different marker and color
+            for i, pulse in enumerate(pulses):
+                pulse_data = df[df['Pulse'] == pulse]
+                marker = marker_cycle[i % len(marker_cycle)]  # Cycle through markers
+                color = color_cycle[i % len(color_cycle)]     # Cycle through colors
+                plt.scatter(pulse_data['Width'], pulse_data['Height'], 
+                            label=pulse, marker=marker, color=color, alpha=0.8)
+
+            # Add labels, title, and legend
+            plt.title('Image Height vs. Width')
+            plt.xlabel('Width')
+            plt.ylabel('Height')
+            plt.legend(title='Pulse', loc='lower right')
+            plt.ylim(0, None)
+            plt.tight_layout()
+
+            # Save the figure
+            output_path = os.path.join(self.target, 'scatter_height_vs_width.png')
+            plt.savefig(output_path)
+            plt.show()
 
     def _plot_violin_height_width(self, csv_path: str) -> None:
         """
@@ -336,25 +329,28 @@ class SizeStats:
         # Set up the figure with two subplots
         fig, axes = plt.subplots(1, 2, figsize=(15, 6), sharey=True)
 
+        # Prepare data for the violin plots
+        pulses = df['Pulse'].unique()
+        height_data = [df[df['Pulse'] == pulse]['Height'] for pulse in pulses]
+        width_data = [df[df['Pulse'] == pulse]['Width'] for pulse in pulses]
+
         # Violin plot for Height
-        sns.violinplot(
-            x='Pulse', y='Height', data=df, ax=axes[0],
-            palette=self.pulse_colors, inner="quartile"
-        )
+        axes[0].violinplot(height_data, showmeans=True, showmedians=True, showextrema=True)
         axes[0].set_title('Height Distribution')
         axes[0].set_xlabel('Acquisition Type')
         axes[0].set_ylabel('Height')
         axes[0].set_ylim(0, None)
+        axes[0].set_xticks(range(1, len(pulses) + 1))
+        axes[0].set_xticklabels(pulses)
 
         # Violin plot for Width
-        sns.violinplot(
-            x='Pulse', y='Width', data=df, ax=axes[1],
-            palette=self.pulse_colors, inner="quartile"
-        )
+        axes[1].violinplot(width_data, showmeans=True, showmedians=True, showextrema=True)
         axes[1].set_title('Width Distribution')
         axes[1].set_xlabel('Acquisition Type')
         axes[1].set_ylabel('Width')
         axes[1].set_ylim(0, None)
+        axes[1].set_xticks(range(1, len(pulses) + 1))
+        axes[1].set_xticklabels(pulses)
 
         # Adjust layout and save the figure
         plt.tight_layout()
@@ -386,17 +382,27 @@ class SizeStats:
         labels = [f'{height}x{width}' for (height, width), _ in most_common] + ['Other']
         counts = [count for _, count in most_common] + [sum(count for pair, count in size_counts.items() if pair not in [pair for pair, _ in most_common])]
 
-        # Plot the bar plot
-        plt.figure(figsize=(10, 6))
-        sns.barplot(x=labels, y=counts, palette=['#4e79a7', '#f28e2b', '#e15759', '#76b7b2', '#59a14f'])
-        plt.title('Most Frequent (Height, Width) Pairs')
-        plt.xlabel('Size (Height, Width)')
-        plt.ylabel('Number of Occurrences')
-        plt.tight_layout()
+        # Generate the bar plot using matplotlib
+        fig, ax = plt.subplots(figsize=(10, 6))
+        
+        # Get the default colors from the std-colors palette
+        bar_positions = range(len(labels))
+        ax.bar(bar_positions, counts, color=plt.rcParams['axes.prop_cycle'].by_key()['color'], alpha=0.8)
 
-        # Save the figure
+        # Set the x-ticks and labels
+        ax.set_xticks(bar_positions)
+        ax.set_xticklabels(labels)
+
+        # Set labels and title
+        ax.set_xlabel('Size (Height, Width)')
+        ax.set_ylabel('Number of Occurrences')
+        ax.set_title('Most Frequent (Height, Width) Pairs')
+
+        # Adjust layout and save the figure
+        plt.tight_layout()
         output_path = os.path.join(self.target, 'barplot_frequent_sizes.png')
         plt.savefig(output_path)
+
 
     def _heatmap_size_frequency(self, csv_path: str) -> None:
         """
@@ -421,7 +427,7 @@ class SizeStats:
 
         # Plot the heatmap
         plt.figure(figsize=(12, 8))
-        sns.heatmap(pivot_table, cmap='rocket_r', cbar_kws={'label': 'Frequency'})
+        sns.heatmap(pivot_table, cmap='viridis', cbar_kws={'label': 'Frequency'})
         plt.title('Frequency of Image (Height, Width) Pairs')
         plt.xlabel('Width')
         plt.ylabel('Height')
@@ -454,7 +460,7 @@ def main() -> int:
 
     stats_folder = os.path.join(figures_root, 'data_stats')
     stats_generator = AdquisitionStats(transformed_dir=source_transformed, target_dir=stats_folder)
-    #stats_generator.generate_stats()
+    stats_generator.generate_stats()
 
     size_stats_folder = os.path.join(figures_root, 'size_stats')
     stats_generator = SizeStats(source=source_transformed, 

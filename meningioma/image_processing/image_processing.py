@@ -3,7 +3,7 @@ import numpy as np
 import cv2
 import nrrd
 import os
-from typing import Union, Tuple
+from typing import Union, Tuple, Dict
 
 class ImageProcessing:
     """
@@ -30,7 +30,7 @@ class ImageProcessing:
         return (np.ndarray(image), header) if return_header else np.ndarray(image)
 
 
-    def dimensionality_standarization_experiment(self, dataset_folder:str, save_path:str) -> None:
+    def dimensionality_standarization_experiment(self, dataset_folder:str, save_path:str, sizes: Tuple[int, int]) -> None:
         """
         Perform a dimensionality standarization experiment. This experiment aims to achieve the most suitable 
         interpolation technique for each dataset explored in this study: T1, T1SIN, T1, SUSC and CT.  
@@ -52,3 +52,11 @@ class ImageProcessing:
                 # e.g: SUSC_P1.nrrd for image ; SUSC_P1_seg.nrrd for its corresponding segmentation mask
                 image_file = f'{format.strip('RM/')}_{patient}.nrrd'
                 segmentation_file = f'{format.strip('RM/')}_{patient}_seg.nrrd'
+
+
+def main() -> None:
+
+    processor = ImageProcessing()
+    processor.dimensionality_standarization_experiment(dataset_folder="/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_Adquisition",
+                                                       save_path="./data/resolution",
+                                                       size = (256,256))
