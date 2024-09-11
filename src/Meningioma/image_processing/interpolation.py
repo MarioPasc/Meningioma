@@ -5,8 +5,7 @@ import time
 from typing import Union, Tuple
 from skimage.metrics import structural_similarity as ssim
 from skimage.metrics import peak_signal_noise_ratio as psnr
-import os
-import nrrd
+
 
 # Interpolation methods as enum
 class InterpolationMethod(Enum):
@@ -50,23 +49,4 @@ def compute_psnr(original_image: np.ndarray, resized_image: np.ndarray) -> float
     Compute the Peak Signal Noise Ratio (PSNR) between the original and resized image
     """
     return psnr(image1=original_image, image2=resized_image, data_range=resized_image.max() - resized_image.min())
-
-def open_nrrd(nrrd_path: str, return_header: bool = False) -> Union[np.ndarray, Tuple[np.ndarray, dict]]:
-    """
-    Open the given nrrd file path. 
-
-    params:
-        - nrrd_path (str): Path to the nrrd file to open.
-        - return_header (bool): If True, return the header along with the image. Defaults to False.
-    
-    returns:
-        - Union[np.ndarray, Tuple[np.ndarray, dict]]: 
-            If return_header is True, returns (image, header).
-            Otherwise, returns image only.
-    """
-    if not os.path.isfile(nrrd_path):
-        raise FileNotFoundError(f"{nrrd_path} is not a valid file path.")
-    
-    image, header = nrrd.read(nrrd_path)
-    return (image, header) if return_header else image
 

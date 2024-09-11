@@ -1,4 +1,3 @@
-import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 from collections import defaultdict, Counter
@@ -7,10 +6,16 @@ import nrrd
 from typing import Dict
 from tqdm import tqdm
 from natsort import natsorted
+from Meningioma.image_processing.nrrd_processing import transversal_axis, open_nrrd
+import matplotlib
+matplotlib.use('Agg') 
+import matplotlib.pyplot as plt
 import scienceplots
 plt.style.use(['science', 'ieee', 'grid', 'std-colors']) 
 plt.rcParams['font.size'] = 10
 plt.rcParams.update({'figure.dpi': '100'})
+
+
 class AdquisitionStats:
 
     def __init__(self, transformed_dir: str, target_dir: str) -> None:
@@ -147,122 +152,91 @@ class SizeStats:
         self.source = source
         self.target = target
         self.verbose = verbose
-
-        # CSV target files
+        self.images_df = pd.DataFrame(columns=['Pulse', 'Patient', 'Height', 'Width', 'Slices'])
+        self.segmentations_df = pd.DataFrame(columns=['Pulse', 'Patient', 'Height', 'Width', 'Slices'])
         self.images_csv = os.path.join(self.target, 'images_sizes.csv')
         self.segmentations_csv = os.path.join(self.target, 'segmentations_sizes.csv')
 
 
-    def _analyze_image_sizes(self) -> Dict[str, pd.DataFrame]:
-        """
-        Save and organize dimensionality data into a DataFrame for posterior visualizations and analysis.
-        The DataFrame structure is as follows: 
-        | Pulse | Patient | Height | Width | Slices |
+    def _log(self, message: str) -> None:
+        """Log messages if verbose mode is enabled."""
+        if self.verbose:
+            print(message)
 
-        This DataFrame structure will be used for images and segmentations for each patient, generating 2 `.csv` files.
+    def _process_file(self, file_path: str, pulse: str, patient: str, acquisition: str, is_segmentation: bool) -> None:
+        """Process a single NRRD file (either segmentation or image) and append its size details to the respective dataframe."""
+        try:
+            _, header = open_nrrd(file_path, return_header=True)
+        except Exception:
+            return
 
-        Returns:
-            Dict[str, pd.DataFrame]: Contains two DataFrames for images and segmentations.
-        """
-        images_df = pd.DataFrame(columns=['Pulse', 'Patient', 'Height', 'Width', 'Slices'])
-        segmentations_df = pd.DataFrame(columns=['Pulse', 'Patient', 'Height', 'Width', 'Slices'])
+        axis = transversal_axis(file_path)
+        sizes = header['sizes']
+        row = {
+            'Pulse': f'{acquisition}/{pulse}' if pulse else acquisition,
+            'Patient': patient,
+            'Height': sizes[(axis + 1) % 3],
+            'Width': sizes[(axis + 2) % 3],
+            'Slices': sizes[axis]
+        }
 
-        for adquisition in tqdm(os.listdir(self.source), desc="Analyzing Acquisitions"):  # First level is the acquisition format: RM or TC
-            adquisition_path = os.path.join(self.source, adquisition)
+        if is_segmentation:
+            self.segmentations_df = pd.concat([self.segmentations_df, pd.DataFrame([row])], ignore_index=True)
+        else:
+            self.images_df = pd.concat([self.images_df, pd.DataFrame([row])], ignore_index=True)
 
-            if not os.path.isdir(adquisition_path):
-                continue  # Skip non-directory files
+    def _process_patient_folder(self, patient_path: str, pulse: str, acquisition: str) -> None:
+        """Process all NRRD files (images and segmentations) within a patient's folder."""
+        patient = os.path.basename(patient_path)
 
-            if self.verbose:
-                print(f"Analyzing Acquisition: {adquisition}")
+        for file in os.listdir(patient_path):
+            file_path = os.path.join(patient_path, file)
 
-            if adquisition == 'RM':  # RM folder has pulses within itself
-                for pulse in os.listdir(adquisition_path):
-                    pulse_path = os.path.join(adquisition_path, pulse)
+            if file.endswith('_seg.nrrd'):
+                self._process_file(file_path, pulse, patient, acquisition, is_segmentation=True)
+            elif file.endswith('.nrrd'):
+                self._process_file(file_path, pulse, patient, acquisition, is_segmentation=False)
 
-                    if not os.path.isdir(pulse_path):
-                        continue  # Skip non-directory files
+    def _process_acquisition(self, acquisition: str, acquisition_path: str) -> None:
+        """Process an acquisition folder which could be 'RM' (with pulses) or 'TC' (without pulses)."""
+        if acquisition == 'RM':
+            for pulse in os.listdir(acquisition_path):
+                pulse_path = os.path.join(acquisition_path, pulse)
 
-                    if self.verbose:
-                        print(f"  Pulse: {pulse}")
+                if not os.path.isdir(pulse_path):
+                    continue
 
-                    for patient in natsorted(os.listdir(pulse_path)):  # List the patients within the current pulse
-                        patient_path = os.path.join(pulse_path, patient)
-
-                        if not os.path.isdir(patient_path):
-                            continue  # Skip non-directory files
-
-                        if self.verbose:
-                            print(f"    Patient: {patient}")
-
-                        for file in os.listdir(patient_path):  # List the image files
-                            file_path = os.path.join(patient_path, file)
-
-                            if file.endswith('_seg.nrrd'):  # Segmentation file
-                                segmentation_data, segmentation_header = nrrd.read(file_path)
-                                segmentations_df = pd.concat([segmentations_df, pd.DataFrame({
-                                    'Pulse': [f'{adquisition}/{pulse}'],
-                                    'Patient': [patient],
-                                    'Height': [segmentation_header['sizes'][0]],
-                                    'Width': [segmentation_header['sizes'][1]],
-                                    'Slices': [segmentation_header['sizes'][2]]
-                                })], ignore_index=True)
-
-                            elif file.endswith('.nrrd'):  # Image file
-                                try:
-                                    image_data, image_header = nrrd.read(file_path)
-                                except Exception as e:
-                                    if self.verbose: 
-                                        print(f"    Error reading file {file} for Patient: {patient}. Error: {str(e)}")                      
-                                    continue
-
-                                images_df = pd.concat([images_df, pd.DataFrame({
-                                    'Pulse': [f'{adquisition}/{pulse}'],
-                                    'Patient': [patient],
-                                    'Height': [image_header['sizes'][0]],
-                                    'Width': [image_header['sizes'][1]],
-                                    'Slices': [image_header['sizes'][2]]
-                                })], ignore_index=True)
-
-            elif adquisition == 'TC':  # TC folder does not have any pulses or image formats
-                for patient in natsorted(os.listdir(adquisition_path)):
-                    patient_path = os.path.join(adquisition_path, patient)
+                self._log(f"  Pulse: {pulse}")
+                for patient in os.listdir(pulse_path):
+                    patient_path = os.path.join(pulse_path, patient)
 
                     if not os.path.isdir(patient_path):
-                        continue  # Skip non-directory files
+                        continue
 
-                    if self.verbose:
-                        print(f"  Patient: {patient}")
+                    self._log(f"    Patient: {patient}")
+                    self._process_patient_folder(patient_path, pulse, acquisition)
+        elif acquisition == 'TC':
+            for patient in os.listdir(acquisition_path):
+                patient_path = os.path.join(acquisition_path, patient)
 
-                    for file in os.listdir(patient_path):  # List the image files
-                        file_path = os.path.join(patient_path, file)
+                if not os.path.isdir(patient_path):
+                    continue
 
-                        if file.endswith('_seg.nrrd'):  # Segmentation file
-                            segmentation_data, segmentation_header = nrrd.read(file_path)
-                            segmentations_df = pd.concat([segmentations_df, pd.DataFrame({
-                                'Pulse': [adquisition],
-                                'Patient': [patient],
-                                'Height': [segmentation_header['sizes'][0]],
-                                'Width': [segmentation_header['sizes'][1]],
-                                'Slices': [segmentation_header['sizes'][2]]
-                            })], ignore_index=True)
+                self._log(f"  Patient: {patient}")
+                self._process_patient_folder(patient_path, pulse=None, acquisition=acquisition)
 
-                        elif file.endswith('.nrrd'):  # Image file
-                            try:
-                                image_data, image_header = nrrd.read(file_path)
-                            except Exception as e:
-                                if self.verbose: 
-                                    print(f"    Error reading file {file} for Patient: {patient}. Error: {str(e)}")                      
-                                continue
-                            images_df = pd.concat([images_df, pd.DataFrame({
-                                'Pulse': [adquisition],
-                                'Patient': [patient],
-                                'Height': [image_header['sizes'][0]],
-                                'Width': [image_header['sizes'][1]],
-                                'Slices': [image_header['sizes'][2]]
-                            })], ignore_index=True)
+    def _analyze_image_sizes(self) -> Dict[str, pd.DataFrame]:
+        """Main function to traverse the dataset and collect image and segmentation sizes."""
+        for acquisition in tqdm(os.listdir(self.source), desc="Analyzing Acquisitions"):
+            acquisition_path = os.path.join(self.source, acquisition)
 
-        return {'images': images_df, 'segmentations': segmentations_df}
+            if not os.path.isdir(acquisition_path):
+                continue
+
+            self._log(f"Analyzing Acquisition: {acquisition}")
+            self._process_acquisition(acquisition, acquisition_path)
+
+        return {'images': self.images_df, 'segmentations': self.segmentations_df}
 
     def _scatter_plot_height_vs_width(self, csv_path: str) -> None:
         """
@@ -465,7 +439,7 @@ def main() -> int:
     size_stats_folder = os.path.join(figures_root, 'size_stats')
     stats_generator = SizeStats(source=source_transformed, 
                                 target=size_stats_folder, verbose=True)
-    #stats_generator.analyze_dimensionality()
+    stats_generator.analyze_dimensionality()
     stats_generator.show_plots()
 
 
