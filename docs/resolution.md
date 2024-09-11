@@ -101,11 +101,9 @@ Where:
 
 ## Methodology
 
-Since NCC and SSIM metrics can't be computed between two images with different resolution, the image will be upscaled/downscaled to the desired size, and then downscaled/upscaled to its original size, in order to compute the performance metrics between the original image and the resized one. This experiment setup is also seen in "Hidden Influences on Image Quality when Comparing Interpolation Methods" reference.
+NCC and SSIM cannot be computed between two images of different resolutions. Therefore, the primary course of action in this experiment will be to downsample the input image to an arbitrary size, intentionally losing some pixel information (e.g., from (512,512) to (256,256) or (128,128)), and then upscale it back to its original resolution. This allows us to compute the performance metrics between the original and upscaled images. A similar experimental setup is discussed in the paper 'Hidden Influences on Image Quality when Comparing Interpolation Methods'. The objective of this experiment is to determine which interpolation algorithm performs best when upscaling biomedical neuroimages.
 
-In order to find the most suitable algorithm for each dataset, the pareto front will be plotted for the computational cost (X) against NCC/SSIM measure (Y).  
-
-
+As noted in our earlier analysis of size variability across datasets, image resolution is far from standardized in this project, with aspect ratios that are not necessarily square. This raises the critical question of how to upscale the images while preserving the brain’s aspect ratio, to avoid introducing any anatomical distortions.
 
 ## Sources
 
