@@ -48,7 +48,7 @@ class AdquisitionStats:
         for pulse in self.rm_pulses:
             pulse_path = os.path.join(rm_root, pulse)
             if os.path.exists(pulse_path):
-                for patient_folder in os.listdir(pulse_path):
+                for patient_folder in natsorted(os.listdir(pulse_path)):
                     patient_path = os.path.join(pulse_path, patient_folder)
                     if os.path.isdir(patient_path):
                         patient_id = patient_folder.replace('P', '')
@@ -66,7 +66,7 @@ class AdquisitionStats:
         # Count patients in TC
         tc_path = os.path.join(self.transformed_dir, 'TC')
         if os.path.exists(tc_path):
-            for patient_folder in os.listdir(tc_path):
+            for patient_folder in natsorted(os.listdir(tc_path)):
                 patient_path = os.path.join(tc_path, patient_folder)
                 if os.path.isdir(patient_path):
                     patient_id = patient_folder.replace('P', '')
