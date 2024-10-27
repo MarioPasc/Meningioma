@@ -201,128 +201,49 @@ The primary objective of this project is the segmentation and characterization o
 
 ### Interpolation Methods used
 
-### Metrics
-
-#### Structural Similarity Index (SSIM)
-
-The **Structural Similarity Index (SSIM)** is a perceptual metric that assesses the similarity between two images by taking into account structural information, luminance, and contrast. Unlike traditional metrics like Mean Squared Error (MSE), which only measure pixel-wise differences, SSIM is designed to better mimic human visual perception by focusing on the structure of the objects in an image and how they relate to luminance and contrast.
-
-SSIM compares two images based on three components:
-
-1. **Luminance (brightness)**: How much the pixel values differ in brightness.
-2. **Contrast**: How much the images differ in contrast (variation of pixel intensities).
-3. **Structure**: The overall structural similarity, which refers to the patterns in the pixel values and their spatial distribution.
-
-##### SSIM Formula
-
-$$
-\text{SSIM}(x, y) = \left[\frac{(2\mu_x\mu_y + C_1)(2\sigma_{xy} + C_2)}{(\mu_x^2 + \mu_y^2 + C_1)(\sigma_x^2 + \sigma_y^2 + C_2)}\right]
-$$
-
-Where:
-
-- $x$ and $y$ are the two images being compared (original and resized).
-- $\mu_x$ and $\mu_y$ are the **mean intensities** of images $x$ and $y$, respectively.
-- $\sigma_x^2$ and $\sigma_y^2$ are the **variances** (representing contrast) of $x$ and $y$.
-- $\sigma_{xy}$ is the **covariance** between $x$ and $y$, representing structural similarity.
-- $C_1$ and $C_2$ are small constants to stabilize the division when the denominator is close to zero. These constants are typically derived from the dynamic range of the pixel values (e.g., $C_1 = (K_1 L)^2$ and $C_2 = (K_2 L)^2$, where $L$ is the dynamic range of the pixel values, and $K_1$ and $K_2$ are small constants like 0.01 and 0.03, respectively).
-
-##### Components in Detail
-
-1. **Luminance**:
-   $$
-   l(x, y) = \frac{2\mu_x\mu_y + C_1}{\mu_x^2 + \mu_y^2 + C_1}
-   $$
-   This compares the average luminance (brightness) between the two images.
-
-2. **Contrast**:
-   $$
-   c(x, y) = \frac{2\sigma_x\sigma_y + C_2}{\sigma_x^2 + \sigma_y^2 + C_2}
-   $$
-   This compares the contrast (variation of intensities) between the two images.
-
-3. **Structure**:
-   $$
-   s(x, y) = \frac{\sigma_{xy} + C_2}{\sigma_x\sigma_y + C_2}
-   $$
-   This compares the structural similarity by evaluating the correlation between the two images.
-
-##### Characteristics
-
-- **Range**: SSIM values range from $-1$ to $1$, where 1 indicates perfect similarity between the two images, 0 indicates no structural similarity, and negative values indicate structural dissimilarity.
-- **Window-Based Calculation**: SSIM is often computed locally, using a sliding window over small image patches (e.g., 11x11 pixels) to get a localized score. The final SSIM score is the average over all windows.
-
-#### Normalized Cross-Correlation (NCC)
-
-**Normalized Cross-Correlation (NCC)** is a similarity measure used primarily to compare the spatial structure of two images. It calculates the correlation between two images after normalizing the pixel intensities, which helps eliminate the effect of differences in overall intensity or brightness between the two images. NCC is widely used in image registration, template matching, and structural similarity tasks because it focuses on the correlation of intensity patterns rather than the absolute intensity values.
-
-NCC evaluates how well the pixel intensity values of two images correlate with each other, providing a structural similarity measure.
-
-##### NCC Formula
-
-$$
-\text{NCC}(x, y) = \frac{\sum_{i=1}^{N} (x_i - \mu_x)(y_i - \mu_y)}{\sqrt{\sum_{i=1}^{N} (x_i - \mu_x)^2 \sum_{i=1}^{N} (y_i - \mu_y)^2}}
-$$
-
-Where:
-
-- $x$ and $y$ are the two images being compared (typically one original and one resized).
-- $x_i$ and $y_i$ represent the intensity values of pixel $i$ in images $x$ and $y$, respectively.
-- $N$ is the total number of pixels in the image.
-- $\mu_x$ and $\mu_y$ are the mean intensity values of images $x$ and $y$, respectively.
-- The numerator, $\sum_{i=1}^{N} (x_i - \mu_x)(y_i - \mu_y)$, represents the cross-covariance between the two images.
-- The denominator, $\sqrt{\sum_{i=1}^{N} (x_i - \mu_x)^2 \sum_{i=1}^{N} (y_i - \mu_y)^2}$, normalizes the covariance, ensuring that the correlation is independent of image intensity scaling.
-
-##### Key Points of NCC
-
-1. **Covariance**: Measures how pixel intensity variations in the two images correspond to each other. If similar structures exist in both images, the covariance will be high.
-
-2. **Normalization**: By subtracting the mean intensity and dividing by the standard deviation, the NCC formula is normalized. This makes NCC invariant to changes in brightness or contrast between the two images, as it focuses purely on structural similarity.
-
-3. **Range**:
-   - NCC values range from $-1$ to $1$:
-     - $1$ indicates perfect positive correlation (the two images are identical in structure).
-     - $0$ indicates no correlation (no structural similarity).
-     - $-1$ indicates perfect negative correlation (inverse structures, where light and dark areas are swapped between the images).
-
-##### Properties of NCC
-
-- **Translation Invariant**: NCC works well when the images have the same structure, even if they have undergone linear transformations such as intensity scaling or shifts in brightness.
-- **Structural Preservation**: Since NCC compares patterns of pixel intensities rather than their absolute values, it captures the structural integrity of the image well.
-
-### Methodology
-
-NCC and SSIM cannot be computed between two images of different resolutions. Therefore, the primary course of action in this experiment will be to downsample the input image to an arbitrary size, intentionally losing some pixel information (e.g., from (512,512) to (256,256) or (128,128)), and then upscale it back to its original resolution. This allows us to compute the performance metrics between the original and upscaled images. A similar experimental setup is discussed in the paper 'Hidden Influences on Image Quality when Comparing Interpolation Methods'. **The objective of this experiment is to determine which interpolation algorithm performs best when upscaling biomedical neuroimages**.
-
 Once we've determined the most suitable interpolation algorithm for our problem, the procedure applied to the rest of images will have some extre steps in order to preserve the anatomical structure of the brain. As noted in our earlier analysis of size variability across datasets, image resolution is far from standardized in this project, with aspect ratios that are not necessarily square. This raises the critical question of how to upscale the images while preserving the brain’s aspect ratio, to avoid introducing any anatomical distortions.
 
 ![incorrect reshaping](./figures/size_stats/incorrect_reshaping.png)
 > In this image we can see how resizing an image with an aspect ratio that is not a square can affect the anatomical structures of the brain (Pulse T1; P1). Input image is (416, 512) it is standarized to a (512,512) shape using `cv2.INTER_LANCZOS`, then its downscaled to (256,256) and upscaled to (512,512) in order to compute PSNR and SSIM.
 
-In order to keep the aspect ratio of the brain in the images while succesfully resizing it to the desired resolution the following steps have been pourposed:
+### Keeping the aspect ratio
 
-1. **Rescaling with Aspect Ratio Preservation**. 
+In order to keep the aspect ratio of the brain in the images while succesfully resizing it to the desired resolution we are proposing the following pipeline:
 
-```python
-   @staticmethod
-   def calculate_aspect_ratio(image: np.ndarray, target_size: Tuple[int, int]) -> float:
-      """
-      Calculate the scaling factor to preserve the aspect ratio.
-      
-      Args:
-         image (np.ndarray): Input image.
-         target_size (tuple): Target resolution (width, height).
-      
-      Returns:
-         float: Scaling factor to preserve aspect ratio.
-      """
-      original_h, original_w = image.shape[:2]
-      target_w, target_h = target_size
-      scale = min(target_w / original_w, target_h / original_h)
-      return scale
-```
+1. **Resize with aspect ratio preservation**. The main idea is to upscale the image until one of the dimensions of the image has reached the desired size for that dimension, then, the remaining pixels of the other dimension of the image will be padded to match the desired output size.
 
-![correct reshaping](./figures/size_stats/Rescaling_and_Padding.png)
+   ```python
+      @staticmethod
+      def calculate_aspect_ratio(image: np.ndarray, target_size: Tuple[int, int]) -> float:
+         """
+         Calculate the scaling factor to preserve the aspect ratio.
+         
+         Args:
+            image (np.ndarray): Input image.
+            target_size (tuple): Target resolution (width, height).
+         
+         Returns:
+            float: Scaling factor to preserve aspect ratio.
+         """
+         original_h, original_w = image.shape[:2]
+         target_w, target_h = target_size
+         scale = min(target_w / original_w, target_h / original_h)
+         return scale
+   ```
+
+   ![correct reshaping](./figures/size_stats/Rescaling_and_Padding.png)
+
+2. **Model the RM noise of each image and recreate it in the padded area**. In order to preservate the different irregularities of the MR images, we will apply a Kernel Density Estimation to the original background noise of the image in order to obtains its Probability Density Function (PDF). We will then replace the pixels of the padded region with random samples from this function, making sure that the noise function is kept. In order to archieve this we will follow these steps:
+   1. **Separate the skull and intracreaneal structures from the input image**. Background's pixel intensity is lower than the intensity of the skull and intracraneal anatomical structures, therefore, we can find the smallest bounding box that fits the head of the patient.
+   ![example_kde](./figures/size_stats/example_kde.png)
+   2. **Use KDE to estimate the PDF of background noise**. Apply the *Parzen–Rosenblatt window method* to recreate the noise distribution from the background. The image bellow serves as an example as to why we should not use the Rician distribution to emulate RM background noise data, since it is a theoretical distribution, when, in reality, this noise PDF can vary from one RM machine to other.
+   ![example_kda_vs_rician](./figures/size_stats/parzen_rossenblatt_vs_rician.png)
+   3. **Sample pixel intensity values from the PDF to recreate background noise**. Sample values from the PDF and replace the 0-padded pixels with those values.
+
+#### Noise Modelling
+
+1. **Extract ROI mask with histogram segmentation**. We could visually check that the lin method for histogram segmentation is the one that works the best with all the methods (**NOTE**: This could be tuned for each method).
+2. **The largest bounding box in the mask**. Label the mask using `labeled_mask, num_labels = ndimage.label(mask == 1)`, then, using the following module from `scipy.ndimage`, we can obtain all the bboxes within the labeled mask, `regions = measure.regionprops(labeled_mask)`. Then, proceed by iterating through the bboxes to obtain the one with the maximum area.
 
 ## Sources
 

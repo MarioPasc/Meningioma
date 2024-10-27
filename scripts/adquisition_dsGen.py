@@ -5,7 +5,6 @@ from tqdm import tqdm
 import re # substring manipulation
 
 class DatasetTransformerAdquisition:
-
     def __init__(self, source_dir:str, target_dir:str) -> None:
         """
         Class to transform a dataset from its original structure to a structure 
