@@ -173,8 +173,8 @@ def kde(noise_values: List[int], sigma: float = 1.0, num_points: int = 1000) -> 
 
 def main() -> None:
     import matplotlib.pyplot as plt
-    from Meningioma.image_processing import ImageProcessing
-    from Meningioma.image_processing import metrics
+    from image_processing import ImageProcessing
+    import metrics
     import scienceplots
     plt.style.use(['science', 'ieee', 'std-colors'])
     plt.rcParams['font.size'] = 10
