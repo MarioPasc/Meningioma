@@ -15,7 +15,9 @@ setup(
         "SciencePlots",
         "pandas",
         "openpyxl",
-        "ipykernel"
+        "ipykernel",
+        "tqdm",
+        "scikit-learn"
     ],
 
     author="Pascual Gonzalez, Mario",

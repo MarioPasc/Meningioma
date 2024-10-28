@@ -3,9 +3,9 @@ from scipy import ndimage
 from skimage.filters import threshold_li, threshold_otsu
 from skimage import exposure, morphology, measure
 import numpy as np
-from typing import Tuple, List
+from typing import Tuple, List, Union
 
-def segment_intracraneal_region(image: np.ndarray, method: str = 'li', threshold: float = None, block_size: int = 35):
+def get_detected_mri_image(image: np.ndarray, method: str = 'li', threshold: float = None):
     """
     Segment an MRI image to separate the background from the cranial and intracranial regions.
     
@@ -46,7 +46,7 @@ def segment_intracraneal_region(image: np.ndarray, method: str = 'li', threshold
     
     return intracranial_mask
 
-def fill_mask(mask: np.ndarray, structure_size: int = 7, iterations: int = 3) -> np.ndarray:
+def get_filled_mask(mask: np.ndarray, structure_size: int = 7, iterations: int = 3) -> np.ndarray:
     """
     Fills the mask by applying morphological closing and hole filling multiple times.
     
@@ -69,7 +69,7 @@ def fill_mask(mask: np.ndarray, structure_size: int = 7, iterations: int = 3) ->
     
     return mask.astype(np.uint8)
 
-def find_largest_bbox(mask: np.ndarray, extra_margin: Tuple[int, int, int, int] = (0, 0, 0, 0)) -> Tuple[int, int, int, int]:
+def get_largest_bbox(mask: np.ndarray, extra_margin: Tuple[int, int, int, int] = (0, 0, 0, 0)) -> Tuple[int, int, int, int]:
     """
     Finds the largest bounding box within a binary mask and optionally extends it by 
     specified margins in each direction. Adjusts the bounding box if it exceeds image 
@@ -120,7 +120,7 @@ def find_largest_bbox(mask: np.ndarray, extra_margin: Tuple[int, int, int, int] 
 
     return largest_bbox
 
-def extract_noise_outside_bbox(image: np.ndarray, bbox: tuple[int, int, int, int], mask: np.ndarray) -> np.ndarray:
+def get_noise_outside_bbox(image: np.ndarray, bbox: tuple[int, int, int, int], mask: np.ndarray) -> np.ndarray:
     """
     Extracts noise values from an image that lie outside a specified bounding box.
 
@@ -144,7 +144,7 @@ def extract_noise_outside_bbox(image: np.ndarray, bbox: tuple[int, int, int, int
     noise_values = image[outside_bbox_mask]
     return noise_values
 
-def kde(noise_values: List[int], sigma: float = 1.0, num_points: int = 1000) -> np.ndarray:
+def get_kde(noise_values: List[int], h: float = 1.0, num_points: int = 1000, return_x_values: bool = False) -> Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]:
     """
     Estimate the probability density function (PDF) of noise values using a Kernel Density Estimation (KDE) approach.
 
@@ -153,28 +153,43 @@ def kde(noise_values: List[int], sigma: float = 1.0, num_points: int = 1000) -> 
 
     Parameters:
     - noise_values (List[int]): A list of noise values sampled from an MRI image's background or similar data.
-    - sigma (float, optional): The bandwidth smoothing parameter for KDE. Controls the width of the Gaussian kernel.
+    - h (float, optional): The bandwidth smoothing parameter for KDE. Controls the width of the Gaussian kernel.
       Higher values result in smoother KDEs. Default is 1.0.
     - num_points (int, optional): The number of points to evaluate the KDE over the range of `noise_values`.
       A higher number increases resolution of the PDF but may require more computation time. Default is 1000.
 
     Returns:
     - np.ndarray: The estimated PDF values across the specified number of points within the range of `noise_values`.
+    - Tuple[np.ndarray, np.ndarray]: The estimated PDF values across the specified number of points within the range of `noise_values` and the x values used.
     """
+
     # Define the range over which to evaluate the KDE
     x_values = np.linspace(np.min(noise_values), np.max(noise_values), num_points)
 
     # Apply Gaussian KDE with specified bandwidth (sigma)
-    kde = gaussian_kde(noise_values, bw_method=sigma)
+    kde = gaussian_kde(noise_values, bw_method=h)
 
     # Evaluate KDE over x_values and return
-    return kde(x_values)
+    if return_x_values: return  kde(x_values) 
+    else: return (kde(x_values), x_values)
     
+def get_rician(x_values: np.ndarray, sigma: float) -> np.ndarray:
+    """
+    Calculate the Rician probability density function (PDF) for given values and sigma.
+
+    Parameters:
+    - x_values (np.ndarray): Values over which to calculate the Rician PDF.
+    - sigma (float): Scale parameter of the Rician distribution.
+
+    Returns:
+    - np.ndarray: Calculated Rician PDF values.
+    """
+    return rice.pdf(x_values, b=0, scale=sigma)
 
 def main() -> None:
     import matplotlib.pyplot as plt
     from image_processing import ImageProcessing
-    import metrics
+    import Meningioma.src.metrics.metrics as metrics
     import scienceplots
     plt.style.use(['science', 'ieee', 'std-colors'])
     plt.rcParams['font.size'] = 10
@@ -193,15 +208,15 @@ def main() -> None:
     original_im = ImageProcessing.extract_middle_transversal_slice(image, transversal_axis=axis)
 
     # Segment the MRI image and fill the mask with the specified parameters
-    mask = segment_intracraneal_region(original_im)
-    mask = fill_mask(mask, structure_size=7, iterations=3)
+    mask = get_detected_mri_image(original_im)
+    mask = get_filled_mask(mask, structure_size=7, iterations=3)
 
     # Define bounding boxes with and without margin
-    largest_bbox_nomargin = find_largest_bbox(mask)
-    largest_bbox_margin = find_largest_bbox(mask, extra_margin=(5, 5, 5, 5))
+    largest_bbox_nomargin = get_largest_bbox(mask)
+    largest_bbox_margin = get_largest_bbox(mask, extra_margin=(5, 5, 5, 5))
 
     # Extract noise values outside the bounding box
-    noise_outside_bbox = extract_noise_outside_bbox(image=original_im, bbox=largest_bbox_margin, mask=mask)
+    noise_outside_bbox = get_noise_outside_bbox(image=original_im, bbox=largest_bbox_margin, mask=mask)
 
     # Define a list of sigma values for Parzen-Rosenblatt KDE
     sigma_values = [0.5, 1, 1.5, 2]  # List of sigma values for different KDE smoothing levels
@@ -209,7 +224,7 @@ def main() -> None:
 
     # Inside the `main()` function, after calculating the KDE PDF:
     sigma = 1  # Choose a sigma for KDE, or loop over multiple sigma values
-    kde_pdf = kde(noise_outside_bbox, sigma=sigma)
+    kde_pdf = get_kde(noise_outside_bbox, sigma=sigma)
 
     # Compute KL divergence between empirical and KDE PDFs
     kl_divergence_value = metrics.kl_divergence(noise_outside_bbox, kde_pdf)
@@ -261,9 +276,6 @@ def main() -> None:
     axes[4].legend()
     plt.tight_layout()
     plt.show()
-
-    
-
 
 
 if __name__ == "__main__":
