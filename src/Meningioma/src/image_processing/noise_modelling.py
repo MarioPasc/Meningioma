@@ -5,7 +5,7 @@ from skimage import exposure, morphology, measure
 import numpy as np
 from typing import Tuple, List
 
-def segment_mri_image(image: np.ndarray, method: str = 'li', threshold: float = None, block_size: int = 35):
+def segment_intracraneal_region(image: np.ndarray, method: str = 'li', threshold: float = None, block_size: int = 35):
     """
     Segment an MRI image to separate the background from the cranial and intracranial regions.
     
@@ -193,7 +193,7 @@ def main() -> None:
     original_im = ImageProcessing.extract_middle_transversal_slice(image, transversal_axis=axis)
 
     # Segment the MRI image and fill the mask with the specified parameters
-    mask = segment_mri_image(original_im)
+    mask = segment_intracraneal_region(original_im)
     mask = fill_mask(mask, structure_size=7, iterations=3)
 
     # Define bounding boxes with and without margin

@@ -36,17 +36,18 @@ class ImageProcessing:
         return transversal_axis(nrrd_path=nrrd_path)
 
     @staticmethod
-    def extract_middle_transversal_slice(image_data: np.ndarray, transversal_axis: int) -> np.ndarray:
+    def extract_middle_transversal_slice(image_data: np.ndarray, transversal_axis: int, slice_index:int = None) -> np.ndarray:
         """
         Extracts the middle slice along the transversal axis.
         """
-        # Calculate the middle slice index along the transversal axis
-        middle_slice_idx = image_data.shape[transversal_axis] // 2
+        if slice_index is None:
+            # Calculate the middle slice index along the transversal axis
+            slice_index = image_data.shape[transversal_axis] // 2
         
         # Use np.take to extract the middle slice from the correct axis
-        middle_slice = np.take(image_data, middle_slice_idx, axis=transversal_axis)
+        slice = np.take(image_data, slice_index, axis=transversal_axis)
         
-        return middle_slice
+        return slice
 
     @staticmethod
     def find_center_of_mass(image: np.ndarray, threshold: Optional[Tuple[int, int]] = None) -> Tuple[int, int]:

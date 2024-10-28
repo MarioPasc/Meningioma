@@ -13,6 +13,9 @@ setup(
         "scipy",
         "pynrrd",
         "SciencePlots",
+        "pandas",
+        "openpyxl",
+        "ipykernel"
     ],
 
     author="Pascual Gonzalez, Mario",
