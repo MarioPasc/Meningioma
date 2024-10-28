@@ -1,6 +1,13 @@
-import interpolation as Interpolation
-import nrrd_processing as Nrrd
-import noise_modelling as NoiseModelling
+from .interpolation import resize, InterpolationMethod
+from .nrrd_processing import open_nrrd, transversal_axis
+from .noise_modelling import (
+    get_detected_mri_image,
+    get_filled_mask,
+    get_kde,
+    get_largest_bbox,
+    get_noise_outside_bbox,
+    get_rician
+)
 import numpy as np
 import cv2
 from typing import Tuple, Optional, Union, Dict, List
@@ -21,7 +28,7 @@ class ImageProcessing:
         Returns:
             np.ndarray: Mask where background is 0 and intracranial region is 1.
         """
-        return NoiseModelling.get_detected_mri_image(image = image, method = method, threshold = threshold)
+        return get_detected_mri_image(image = image, method = method, threshold = threshold)
 
     @staticmethod
     def fill_mask(mask: np.ndarray, structure_size: int = 7, iterations: int = 3) -> np.ndarray:
@@ -36,7 +43,7 @@ class ImageProcessing:
         Returns:
             np.ndarray: Mask after applying the filter multiple times.
         """
-        return NoiseModelling.get_filled_mask(mask = mask, structure_size = structure_size, iterations = iterations)
+        return get_filled_mask(mask = mask, structure_size = structure_size, iterations = iterations)
 
     @staticmethod
     def find_largest_bbox(mask: np.ndarray, extra_margin: Tuple[int, int, int, int] = (0, 0, 0, 0)) -> Tuple[int, int, int, int]:
@@ -57,7 +64,7 @@ class ImageProcessing:
         adjusted to fit within the image boundaries.
         """
 
-        return NoiseModelling.get_largest_bbox(mask = mask, extra_margin = extra_margin)
+        return get_largest_bbox(mask = mask, extra_margin = extra_margin)
 
     @staticmethod
     def extract_noise_outside_bbox(image: np.ndarray, bbox: tuple[int, int, int, int], mask: np.ndarray) -> np.ndarray:
@@ -74,10 +81,10 @@ class ImageProcessing:
         Returns:
         - np.ndarray: An array of pixel values from `image` that are outside the specified bounding box.
         """
-        return NoiseModelling.get_noise_outside_bbox(image = image, bbox = bbox, mask = mask)
+        return get_noise_outside_bbox(image = image, bbox = bbox, mask = mask)
 
     @staticmethod
-    def kde(noise_values: List[int], h: float = 1.0, num_points: int = 1000) -> np.ndarray:
+    def kde(noise_values: List[int], h: float = 1.0, num_points: int = 1000, return_x_values: bool = False) -> Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]:
         """
         Estimate the probability density function (PDF) of noise values using a Kernel Density Estimation (KDE) approach.
 
@@ -94,7 +101,7 @@ class ImageProcessing:
         Returns:
         - np.ndarray: The estimated PDF values across the specified number of points within the range of `noise_values`.
         """
-        return NoiseModelling.get_kde(noise_values = noise_values, h = h, num_points = num_points)
+        return get_kde(noise_values = noise_values, h = h, num_points = num_points, return_x_values = return_x_values)
 
     @staticmethod
     def rician(x_values: np.ndarray, sigma: float) -> np.ndarray:
@@ -108,7 +115,7 @@ class ImageProcessing:
         Returns:
         - np.ndarray: Calculated Rician PDF values.
         """
-        return NoiseModelling.get_rician(x_values = x_values, sigma = sigma)
+        return get_rician(x_values = x_values, sigma = sigma)
 
     @staticmethod
     def open_nrrd_file(nrrd_path: str, return_header: bool = False) -> Union[np.ndarray, Tuple[np.ndarray, dict]]:
@@ -124,7 +131,7 @@ class ImageProcessing:
                 If return_header is True, returns (image, header).
                 Otherwise, returns image only.
         """
-        return Nrrd.open_nrrd(nrrd_path=nrrd_path, return_header=return_header)
+        return open_nrrd(nrrd_path=nrrd_path, return_header=return_header)
 
     @staticmethod
     def get_transversal_axis(nrrd_path: str) -> int:
@@ -137,7 +144,7 @@ class ImageProcessing:
         returns:
             - transversal_axis: Tranversal axis of the nrrd file.
         """
-        return Nrrd.transversal_axis(nrrd_path=nrrd_path)
+        return transversal_axis(nrrd_path=nrrd_path)
 
     @staticmethod
     def extract_transversal_slice(image_data: np.ndarray, transversal_axis: int, slice_index:int = None) -> np.ndarray:
@@ -242,7 +249,7 @@ class ImageProcessing:
         return translated_image
 
     @staticmethod
-    def resize_image_with_method(image: np.ndarray, target_size: Tuple[int, int], method: Interpolation.InterpolationMethod) -> np.ndarray:
+    def resize_image_with_method(image: np.ndarray, target_size: Tuple[int, int], method: InterpolationMethod) -> np.ndarray:
         """
         Resize the image using the specified interpolation method.
         
@@ -254,13 +261,13 @@ class ImageProcessing:
         Returns:
             np.ndarray: Resized image.
         """
-        resized_image = Interpolation.resize(image, target_size, method)
+        resized_image = resize(image, target_size, method)
         return resized_image
     
     @staticmethod
     def resize_with_padding_and_center(image: np.ndarray, 
                                        target_size: Tuple[int]=(512, 512), 
-                                       method: Interpolation.InterpolationMethod = Interpolation.InterpolationMethod.INTER_LANCZOS4,
+                                       method: InterpolationMethod = InterpolationMethod.INTER_LANCZOS4,
                                        return_centers_of_mass: bool = False) -> Union[np.ndarray, Tuple[np.ndarray, Dict[str, Tuple[int, int]]]]:
         """
         Resizes the image while preserving aspect ratio, then pads and centers the brain in the target resolution.

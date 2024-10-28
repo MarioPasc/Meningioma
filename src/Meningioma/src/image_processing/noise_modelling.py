@@ -170,7 +170,7 @@ def get_kde(noise_values: List[int], h: float = 1.0, num_points: int = 1000, ret
     kde = gaussian_kde(noise_values, bw_method=h)
 
     # Evaluate KDE over x_values and return
-    if return_x_values: return  kde(x_values) 
+    if not return_x_values: return  kde(x_values) 
     else: return (kde(x_values), x_values)
     
 def get_rician(x_values: np.ndarray, sigma: float) -> np.ndarray:
@@ -266,7 +266,7 @@ def main() -> None:
     # Plot multiple Parzen-Rosenblatt PDFs for different sigma values
     for sigma in sigma_values:
         # Calculate the PDF for the current sigma value
-        pdf_parzen_rosenblatt = kde(noise_values=noise_outside_bbox, sigma=sigma)
+        pdf_parzen_rosenblatt = get_kde(noise_values=noise_outside_bbox, sigma=sigma)
         
         # Plot the PDF on the same axis
         axes[4].plot(pdf_parzen_rosenblatt, label=f'sigma={sigma}')

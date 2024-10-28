@@ -42,6 +42,7 @@ try:
     from image_processing import ImageProcessing
     from metrics import Metrics
     import pandas as pd
+    import numpy as np
     from typing import List
     from sklearn.model_selection import train_test_split
 
@@ -118,40 +119,52 @@ def main(patient_ids: List[int]):
                 slices, train_size=TRAIN_TEST_SPLIT, random_state=RANDOM_SEED
             )
 
-            for slice_image, data_type in zip([train_slices, test_slices], ["train", "test"]):
-                for img in slice_image:
-                    # 3. Segment intracranial region and mask background
-                    mask = ImageProcessing.segment_intracraneal_region(img)
-                    filled_mask = ImageProcessing.fill_mask(mask)
+            # Training Phase: Collect noise data from all training slices
+            train_noise_data = []
+            for img in train_slices:
+                mask = ImageProcessing.segment_intracraneal_region(img)
+                filled_mask = ImageProcessing.fill_mask(mask)
+                bbox = ImageProcessing.find_largest_bbox(filled_mask)
+                noise_values = ImageProcessing.extract_noise_outside_bbox(img, bbox, filled_mask)
+                train_noise_data.extend(noise_values)
+            train_noise_data = np.array(train_noise_data)
 
-                    # 4. Identify largest bounding box and extract noise outside it
-                    bbox = ImageProcessing.find_largest_bbox(filled_mask)
-                    noise_values = ImageProcessing.extract_noise_outside_bbox(img, bbox, filled_mask)
+            # Train Parzen-Rosenblatt KDE models with different h values
+            kde_models = {h: ImageProcessing.kde(train_noise_data, h=h, return_x_values=False) for h in H_VALUES}
 
-                    # Model training and evaluation based on noise extracted from `train` or `test` images
+            # Testing Phase: Collect noise data from all test slices
+            test_noise_data = []
+            for img in test_slices:
+                mask = ImageProcessing.segment_intracraneal_region(img)
+                filled_mask = ImageProcessing.fill_mask(mask)
+                bbox = ImageProcessing.find_largest_bbox(filled_mask)
+                noise_values = ImageProcessing.extract_noise_outside_bbox(img, bbox, filled_mask)
+                test_noise_data.extend(noise_values)
+            test_noise_data = np.array(test_noise_data)
 
-                    if data_type == "train":
-                        # Parzen-Rosenblatt KDE for train slices
-                        for h in H_VALUES:
-                            kde_pdf, x_values = ImageProcessing.kde(noise_values, h=h, return_x_values=True)
+            # Generate x_values for model evaluations
+            x_values = np.linspace(np.min(test_noise_data), np.max(test_noise_data), 1000)
 
-                            # Compute Bhattacharyya's and KL Divergences using Metrics class
-                            bhattacharyya_distance = Metrics.compute_bhattacharyya_distance(noise_values, kde_pdf)
-                            kl_divergence = Metrics.compute_kl_divergence(noise_values, kde_pdf)
+            # Create Rician models with different sigma values
+            rician_models = {sigma: ImageProcessing.rician(x_values, sigma) for sigma in SIGMA_VALUES}
 
-                            # Record results in DataFrame
-                            results_df.loc[len(results_df)] = [pulse, patient_id, 'ParzenRosenblatt', h, bhattacharyya_distance, kl_divergence]
+            # Evaluate Parzen-Rosenblatt models with test data
+            for h, kde_pdf in kde_models.items():
+                # Compute Bhattacharyya's and KL Divergences
+                bhattacharyya_distance = Metrics.compute_bhattacharyya_distance(test_noise_data, kde_pdf)
+                kl_divergence = Metrics.compute_kl_divergence(test_noise_data, kde_pdf)
 
-                    # Rician Distribution for train and test slices
-                    for sigma in SIGMA_VALUES:
-                        rician_pdf = ImageProcessing.rician(x_values, sigma)
+                # Record results for Parzen-Rosenblatt model
+                results_df.loc[len(results_df)] = [pulse, patient_id, 'ParzenRosenblatt', h, bhattacharyya_distance, kl_divergence]
 
-                        # Compute Bhattacharyya's and KL Divergences using Metrics class
-                        bhattacharyya_distance = Metrics.compute_bhattacharyya_distance(noise_values, rician_pdf)
-                        kl_divergence = Metrics.compute_kl_divergence(noise_values, rician_pdf)
+            # Evaluate Rician models with test data
+            for sigma, rician_pdf in rician_models.items():
+                # Compute Bhattacharyya's and KL Divergences
+                bhattacharyya_distance = Metrics.compute_bhattacharyya_distance(test_noise_data, rician_pdf)
+                kl_divergence = Metrics.compute_kl_divergence(test_noise_data, rician_pdf)
 
-                        # Record results in DataFrame
-                        results_df.loc[len(results_df)] = [pulse, patient_id, 'Rician', sigma, bhattacharyya_distance, kl_divergence]
+                # Record results for Rician model
+                results_df.loc[len(results_df)] = [pulse, patient_id, 'Rician', sigma, bhattacharyya_distance, kl_divergence]
 
     # Save results to CSV
     os.makedirs(OUTPUT_FOLDER, exist_ok=True)  # Ensure output directory exists
