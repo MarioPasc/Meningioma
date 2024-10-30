@@ -6,60 +6,66 @@ from skimage.metrics import peak_signal_noise_ratio as psnr
 class Metrics:
 
     @staticmethod
-    def compute_kl_divergence(noise_values: np.ndarray, kde_pdf: np.ndarray) -> float:
+    def compute_kl_divergence(noise_values: np.ndarray, reference_pdf: np.ndarray, epsilon: float = 1e-10) -> float:
         """
         Compute the Kullback-Leibler divergence between an empirical noise distribution
-        and a KDE-estimated distribution.
+        and a KDE-estimated distribution, adding epsilon to avoid division by zero.
 
         Parameters:
         - noise_values (np.ndarray): Original noise values outside the bounding box.
-        - kde_pdf (np.ndarray): Discrete KDE-estimated PDF values.
+        - reference_pdf (np.ndarray): Discrete KDE-estimated PDF values.
+        - epsilon (float): Small value to prevent division by zero.
 
         Returns:
         - float: KL divergence between the empirical and KDE distributions.
         """
         # Compute a histogram of the noise values
-        hist_counts, bin_edges = np.histogram(noise_values, bins=len(kde_pdf), density=True)
+        hist_counts, _ = np.histogram(noise_values, bins=len(reference_pdf), density=True)
         
-        # Calculate the midpoints of the bins to match kde_pdf points
-        hist_pdf = hist_counts / np.sum(hist_counts)  # Normalize histogram to get a PDF
+        # Normalize histogram to create an empirical probability distribution (PDF)
+        hist_pdf = hist_counts / np.sum(hist_counts)
         
-        # Ensure both hist_pdf and kde_pdf are of the same length
-        if len(hist_pdf) != len(kde_pdf):
-            min_len = min(len(hist_pdf), len(kde_pdf))
-            hist_pdf, kde_pdf = hist_pdf[:min_len], kde_pdf[:min_len]
+        # Ensure both hist_pdf and reference_pdf have the same length
+        min_len = min(len(hist_pdf), len(reference_pdf))
+        hist_pdf, reference_pdf = hist_pdf[:min_len], reference_pdf[:min_len]
         
-        # Compute KL divergence using scipy's kl_div function, and sum to get total divergence
-        kl_divergence = np.sum(kl_div(hist_pdf, kde_pdf))
+        # Avoid zeros in reference_pdf by adding epsilon, and renormalize
+        reference_pdf = reference_pdf + epsilon
+        reference_pdf /= np.sum(reference_pdf)  # Normalize to ensure it remains a PDF
+        hist_pdf = hist_pdf + epsilon
+        hist_pdf /= np.sum(hist_pdf)  # Normalize as well
+
+        # Compute KL divergence
+        kl_divergence = np.sum(hist_pdf * np.log(hist_pdf / reference_pdf))
         
         return kl_divergence
 
     @staticmethod
-    def compute_bhattacharyya_distance(noise_values: np.ndarray, kde_pdf: np.ndarray) -> float:
+    def compute_bhattacharyya_distance(noise_values: np.ndarray, reference_pdf: np.ndarray, epsilon: float = 1e-10) -> float:
         """
         Compute the Bhattacharyya distance between an empirical noise distribution
         and a KDE-estimated distribution.
 
         Parameters:
         - noise_values (np.ndarray): Original noise values outside the bounding box.
-        - kde_pdf (np.ndarray): Discrete KDE-estimated PDF values.
+        - reference_pdf (np.ndarray): Discrete KDE-estimated PDF values.
+        - epsilon (float): Small value to prevent log(0) issues.
 
         Returns:
         - float: Bhattacharyya distance between the empirical and KDE distributions.
         """
         # Compute a histogram of the noise values
-        hist_counts, _ = np.histogram(noise_values, bins=len(kde_pdf), density=True)
+        hist_counts, _ = np.histogram(noise_values, bins=len(reference_pdf), density=True)
         
         # Normalize the histogram to create a probability distribution (PDF)
         hist_pdf = hist_counts / np.sum(hist_counts)
         
-        # Ensure both hist_pdf and kde_pdf have the same length
-        if len(hist_pdf) != len(kde_pdf):
-            min_len = min(len(hist_pdf), len(kde_pdf))
-            hist_pdf, kde_pdf = hist_pdf[:min_len], kde_pdf[:min_len]
+        # Ensure both hist_pdf and reference_pdf have the same length
+        min_len = min(len(hist_pdf), len(reference_pdf))
+        hist_pdf, reference_pdf = hist_pdf[:min_len], reference_pdf[:min_len]
         
-        # Compute the Bhattacharyya distance
-        bc_coefficient = np.sum(np.sqrt(hist_pdf * kde_pdf))  # Bhattacharyya coefficient
+        # Compute the Bhattacharyya coefficient with an epsilon to prevent log(0)
+        bc_coefficient = np.sum(np.sqrt(hist_pdf * reference_pdf)) + epsilon  # Bhattacharyya coefficient with stability term
         bhattacharyya_distance = -np.log(bc_coefficient)
         
         return bhattacharyya_distance
