@@ -68,9 +68,9 @@ OUTPUT_FOLDER = "/home/mariopasc/Python/Results/Meningioma/dataset_crafting"
 CSV_PATH = os.path.join(OUTPUT_FOLDER, 'results.csv')
 
 # Main parameters
-H_VALUES = [0.05, 0.1, 0.2, 0.3, 0.4, 0.5]        # Bandwidths for KDE models
-SIGMA_VALUES = [9, 9.5, 10, 10.5, 11, 11.5, 12]    # Sigma values for Rician distribution
-N_SLICES = 5                       # Number of slices around the middle slice
+H_VALUES = [0.00005, 0.0001, 0.005, 0.01, 0.05, 0.1, 0.5, 1]        # Bandwidths for KDE models
+SIGMA_VALUES = [9, 9.5, 10, 10.5, 11, 11.5]    # Sigma values for Rician distribution
+N_SLICES = 6                       # Number of slices around the middle slice
 PULSE_TYPES = ['T1']
 TRAIN_TEST_SPLIT = 0.67            # Percentage for train set
 RANDOM_SEED = 42                   # Seed for reproducibility
@@ -168,8 +168,8 @@ def plot_distributions(patient_ids: List[int], target_pulse: str):
                 return new_cmap
 
             # Apply truncated colormaps
-            truncated_reds = truncate_colormap(plt.cm.Reds, min_val=0.2, max_val=1.0)
-            truncated_blues = truncate_colormap(plt.cm.Blues, min_val=0.2, max_val=1.0)
+            truncated_reds = truncate_colormap(plt.cm.Reds, min_val=np.min(H_VALUES) * 0.5, max_val=np.max(H_VALUES))
+            truncated_blues = truncate_colormap(plt.cm.Blues, min_val=np.min(H_VALUES) * 0.5, max_val=np.max(SIGMA_VALUES))
 
 
             fig, ax = plt.subplots(figsize=(10, 6))
@@ -256,6 +256,7 @@ def perform_test(patient_ids: List[int]):
 
             # Train Parzen-Rosenblatt KDE models with different h values
             kde_models = {h: ImageProcessing.kde(train_noise_data, h=h, return_x_values=False) for h in H_VALUES}
+            x_values = np.linspace(np.min(train_noise_data), np.max(train_noise_data), 1000)
 
             # Testing Phase: Collect noise data from all test slices
             test_noise_data = []
@@ -267,17 +268,14 @@ def perform_test(patient_ids: List[int]):
                 test_noise_data.extend(noise_values)
             test_noise_data = np.array(test_noise_data)
 
-            # Generate x_values for model evaluations
-            x_values = np.linspace(np.min(test_noise_data), np.max(test_noise_data), 1000)
-
             # Create Rician models with different sigma values
             rician_models = {sigma: ImageProcessing.rician(x_values, sigma) for sigma in SIGMA_VALUES}
 
             # Evaluate Parzen-Rosenblatt models with test data
             for h, kde_pdf in kde_models.items():
                 # Compute Bhattacharyya's and KL Divergences
-                bhattacharyya_distance = Metrics.compute_bhattacharyya_distance(test_noise_data, kde_pdf)
-                kl_divergence = Metrics.compute_kl_divergence(test_noise_data, kde_pdf)
+                bhattacharyya_distance = Metrics.compute_bhattacharyya_distance(noise_values=test_noise_data, reference_pdf=kde_pdf, x_values=x_values)
+                kl_divergence = Metrics.compute_kl_divergence(noise_values=test_noise_data, reference_pdf=kde_pdf, x_values=x_values)
 
                 # Record results for Parzen-Rosenblatt model
                 results_df.loc[len(results_df)] = [pulse, patient_id, 'ParzenRosenblatt', h, bhattacharyya_distance, kl_divergence]
@@ -285,8 +283,8 @@ def perform_test(patient_ids: List[int]):
             # Evaluate Rician models with test data
             for sigma, rician_pdf in rician_models.items():
                 # Compute Bhattacharyya's and KL Divergences
-                bhattacharyya_distance = Metrics.compute_bhattacharyya_distance(test_noise_data, rician_pdf)
-                kl_divergence = Metrics.compute_kl_divergence(test_noise_data, rician_pdf)
+                bhattacharyya_distance = Metrics.compute_bhattacharyya_distance(noise_values=test_noise_data, reference_pdf=rician_pdf, x_values=x_values)
+                kl_divergence = Metrics.compute_kl_divergence(noise_values=test_noise_data, reference_pdf=rician_pdf, x_values=x_values)
 
                 # Record results for Rician model
                 results_df.loc[len(results_df)] = [pulse, patient_id, 'Rician', sigma, bhattacharyya_distance, kl_divergence]
@@ -296,5 +294,6 @@ def perform_test(patient_ids: List[int]):
     results_df.to_csv(CSV_PATH, index=False)
     print("Results saved to", CSV_PATH)
 
-plot_distributions(patient_ids=[1], target_pulse="T1")
+
 perform_test(patient_ids=[1])
+plot_distributions(patient_ids=[1], target_pulse="T1")

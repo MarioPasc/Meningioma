@@ -6,42 +6,40 @@ from skimage.metrics import peak_signal_noise_ratio as psnr
 class Metrics:
 
     @staticmethod
-    def compute_kl_divergence(noise_values: np.ndarray, reference_pdf: np.ndarray, epsilon: float = 1e-10) -> float:
+    def compute_kl_divergence(noise_values: np.ndarray, reference_pdf: np.ndarray, x_values: np.ndarray, epsilon: float = 1e-10) -> float:
         """
         Compute the Kullback-Leibler divergence between an empirical noise distribution
         and a KDE-estimated distribution, adding epsilon to avoid division by zero.
 
         Parameters:
         - noise_values (np.ndarray): Original noise values outside the bounding box.
-        - reference_pdf (np.ndarray): Discrete KDE-estimated PDF values.
+        - reference_pdf (np.ndarray): Discrete KDE-estimated PDF values evaluated at x_values.
+        - x_values (np.ndarray): The x-values over which the PDFs are evaluated.
         - epsilon (float): Small value to prevent division by zero.
 
         Returns:
         - float: KL divergence between the empirical and KDE distributions.
         """
-        # Compute a histogram of the noise values
-        hist_counts, _ = np.histogram(noise_values, bins=len(reference_pdf), density=True)
-        
-        # Normalize histogram to create an empirical probability distribution (PDF)
-        hist_pdf = hist_counts / np.sum(hist_counts)
-        
-        # Ensure both hist_pdf and reference_pdf have the same length
-        min_len = min(len(hist_pdf), len(reference_pdf))
-        hist_pdf, reference_pdf = hist_pdf[:min_len], reference_pdf[:min_len]
-        
-        # Avoid zeros in reference_pdf by adding epsilon, and renormalize
-        reference_pdf = reference_pdf + epsilon
-        reference_pdf /= np.sum(reference_pdf)  # Normalize to ensure it remains a PDF
-        hist_pdf = hist_pdf + epsilon
-        hist_pdf /= np.sum(hist_pdf)  # Normalize as well
+        # Step 1: Discretize the reference PDF into probability masses
+        dx = x_values[1] - x_values[0]  # Width of each small interval
+        prob_masses = reference_pdf * dx  # Approximate probability masses
+        prob_masses += epsilon  # Add epsilon to avoid zeros
+        prob_masses /= np.sum(prob_masses)  # Normalize to sum to 1
 
-        # Compute KL divergence
-        kl_divergence = np.sum(hist_pdf * np.log(hist_pdf / reference_pdf))
+        # Step 2: Create empirical probability distribution from noise_values
+        # Use the same bins as x_values for histogram
+        bins = np.append(x_values, x_values[-1] + dx)  # Ensure the last bin captures the max value
+        hist_counts, _ = np.histogram(noise_values, bins=bins, density=False)
+        noise_prob_masses = hist_counts.astype(float) + epsilon  # Add epsilon to avoid zeros
+        noise_prob_masses /= np.sum(noise_prob_masses)  # Normalize to sum to 1
+
+        # Step 3: Compute KL divergence
+        kl_divergence = np.sum(noise_prob_masses * np.log(noise_prob_masses / prob_masses))
         
         return kl_divergence
 
     @staticmethod
-    def compute_bhattacharyya_distance(noise_values: np.ndarray, reference_pdf: np.ndarray, epsilon: float = 1e-10) -> float:
+    def compute_bhattacharyya_distance(noise_values: np.ndarray, reference_pdf: np.ndarray, x_values:np.ndarray, epsilon: float = 1e-10) -> float:
         """
         Compute the Bhattacharyya distance between an empirical noise distribution
         and a KDE-estimated distribution.
@@ -54,18 +52,18 @@ class Metrics:
         Returns:
         - float: Bhattacharyya distance between the empirical and KDE distributions.
         """
-        # Compute a histogram of the noise values
-        hist_counts, _ = np.histogram(noise_values, bins=len(reference_pdf), density=True)
-        
-        # Normalize the histogram to create a probability distribution (PDF)
-        hist_pdf = hist_counts / np.sum(hist_counts)
-        
-        # Ensure both hist_pdf and reference_pdf have the same length
-        min_len = min(len(hist_pdf), len(reference_pdf))
-        hist_pdf, reference_pdf = hist_pdf[:min_len], reference_pdf[:min_len]
-        
-        # Compute the Bhattacharyya coefficient with an epsilon to prevent log(0)
-        bc_coefficient = np.sum(np.sqrt(hist_pdf * reference_pdf)) + epsilon  # Bhattacharyya coefficient with stability term
+        # Step 1: Discretize the reference PDF into probability masses
+        dx = x_values[1] - x_values[0]  # Width of each small interval
+        prob_masses = reference_pdf * dx  # Approximate probability masses
+        prob_masses /= np.sum(prob_masses)  # Normalize to sum to 1
+
+        # Step 2: Create empirical probability distribution from noise_values
+        # Use the same bins as x_values for histogram
+        hist_counts, _ = np.histogram(noise_values, bins=np.append(x_values, x_values[-1] + dx), density=False)
+        noise_prob_masses = hist_counts.astype(float) / np.sum(hist_counts)  # Normalize to sum to 1
+
+        # Step 3: Compute the Bhattacharyya coefficient
+        bc_coefficient = np.sum(np.sqrt(noise_prob_masses * prob_masses)) + epsilon  # Add epsilon for numerical stability
         bhattacharyya_distance = -np.log(bc_coefficient)
         
         return bhattacharyya_distance
