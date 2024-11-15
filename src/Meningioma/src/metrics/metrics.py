@@ -28,8 +28,7 @@ class Metrics:
 
         # Step 2: Create empirical probability distribution from noise_values
         # Use the same bins as x_values for histogram
-        bins = np.append(x_values, x_values[-1] + dx)  # Ensure the last bin captures the max value
-        hist_counts, _ = np.histogram(noise_values, bins=bins, density=False)
+        hist_counts, _ = np.histogram(noise_values, bins=np.append(x_values, x_values[-1] + dx), density=False)
         noise_prob_masses = hist_counts.astype(float) + epsilon  # Add epsilon to avoid zeros
         noise_prob_masses /= np.sum(noise_prob_masses)  # Normalize to sum to 1
 
@@ -55,10 +54,11 @@ class Metrics:
         # Step 1: Discretize the reference PDF into probability masses
         dx = x_values[1] - x_values[0]  # Width of each small interval
         prob_masses = reference_pdf * dx  # Approximate probability masses
+        prob_masses += epsilon  # Add epsilon to avoid zeros
         prob_masses /= np.sum(prob_masses)  # Normalize to sum to 1
 
         # Step 2: Create empirical probability distribution from noise_values
-        # Use the same bins as x_values for histogram
+        # Use the same bins as x_values for histogram, this way, both PDF have the same length.
         hist_counts, _ = np.histogram(noise_values, bins=np.append(x_values, x_values[-1] + dx), density=False)
         noise_prob_masses = hist_counts.astype(float) / np.sum(hist_counts)  # Normalize to sum to 1
 
