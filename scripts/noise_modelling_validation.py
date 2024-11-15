@@ -45,6 +45,7 @@ try:
     import numpy as np
     from typing import List
     from sklearn.model_selection import train_test_split
+    import logging
     import matplotlib.pyplot as plt
     import matplotlib.colors as mcolors
     import scienceplots
@@ -76,6 +77,14 @@ TRAIN_TEST_SPLIT = 0.67            # Percentage for train set
 RANDOM_SEED = 42                   # Seed for reproducibility
 
 METADATA_PATH = os.path.join(DATASET_FOLDER, "metadata.xlsx")
+
+# Setup logging
+os.makedirs("./logs", exist_ok=True)  
+logging.basicConfig(
+    filename="logs/script.log",
+    level=logging.DEBUG,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
 
 ##############
 #   SCRIPT   #
@@ -171,7 +180,6 @@ def plot_distributions(patient_ids: List[int], target_pulse: str):
             truncated_reds = truncate_colormap(plt.cm.Reds, min_val=np.min(H_VALUES) * 0.5, max_val=np.max(H_VALUES))
             truncated_blues = truncate_colormap(plt.cm.Blues, min_val=np.min(H_VALUES) * 0.5, max_val=np.max(SIGMA_VALUES))
 
-
             fig, ax = plt.subplots(figsize=(10, 6))
 
             # Plot KDE models with gradient red (using truncated colormap)
@@ -228,72 +236,166 @@ def plot_distributions(patient_ids: List[int], target_pulse: str):
 def perform_test(patient_ids: List[int]):
     for pulse in PULSE_TYPES:
         for patient_id in patient_ids:
-            nrrd_path = f"{DATASET_FOLDER}/RM/{pulse}/P{patient_id}/{pulse}_P{patient_id}.nrrd"
-            
-            # 1. Load MRI Image
-            image_data = ImageProcessing.open_nrrd_file(nrrd_path)
-            transversal_axis = ImageProcessing.get_transversal_axis(nrrd_path)
-            mid_slice_idx = image_data.shape[transversal_axis] // 2
-            
-            # 2. Extract 2N+1 slices around the middle slice
-            slices = [ImageProcessing.extract_transversal_slice(image_data, transversal_axis, slice_index=mid_slice_idx + offset)
-                      for offset in range(-N_SLICES, N_SLICES + 1)]
+            try:
+                # Construct the file path
+                nrrd_path = f"{DATASET_FOLDER}/RM/{pulse}/P{patient_id}/{pulse}_P{patient_id}.nrrd"
+                pulse_directory = os.path.dirname(nrrd_path)
 
-            # Split slices into train and test sets at the image level
-            train_slices, test_slices = train_test_split(
-                slices, train_size=TRAIN_TEST_SPLIT, random_state=RANDOM_SEED
-            )
+                # Check if the directory for the pulse exists
+                if not os.path.exists(pulse_directory):
+                    logging.warning(f"Pulse {pulse} is not available for Patient {patient_id}. Skipping this patient.")
+                    continue  # Skip to the next patient without saving any data
 
-            # Training Phase: Collect noise data from all training slices
-            train_noise_data = []
-            for img in train_slices:
-                mask = ImageProcessing.segment_intracraneal_region(img)
-                filled_mask = ImageProcessing.fill_mask(mask)
-                bbox = ImageProcessing.find_largest_bbox(filled_mask)
-                noise_values = ImageProcessing.extract_noise_outside_bbox(img, bbox, filled_mask)
-                train_noise_data.extend(noise_values)
-            train_noise_data = np.array(train_noise_data)
+                # Step 1: Load MRI Image
+                try:
+                    image_data = ImageProcessing.open_nrrd_file(nrrd_path)
+                    transversal_axis = ImageProcessing.get_transversal_axis(nrrd_path)
+                    mid_slice_idx = image_data.shape[transversal_axis] // 2
+                    logging.info(f"Successfully loaded image for Patient {patient_id} and Pulse {pulse}")
+                except Exception as e:
+                    logging.error(f"Failed to load image for Patient {patient_id} and Pulse {pulse}: {str(e)}")
+                    results_df.loc[len(results_df)] = [pulse, patient_id, 'ERROR', None, None, None]
+                    continue
 
-            # Train Parzen-Rosenblatt KDE models with different h values
-            kde_models = {h: ImageProcessing.kde(train_noise_data, h=h, return_x_values=False) for h in H_VALUES}
-            x_values = np.linspace(np.min(train_noise_data), np.max(train_noise_data), 1000)
+                # Step 2: Extract 2N+1 slices around the middle slice
+                try:
+                    # Get the total number of slices along the transversal axis
+                    total_slices = image_data.shape[transversal_axis]
 
-            # Testing Phase: Collect noise data from all test slices
-            test_noise_data = []
-            for img in test_slices:
-                mask = ImageProcessing.segment_intracraneal_region(img)
-                filled_mask = ImageProcessing.fill_mask(mask)
-                bbox = ImageProcessing.find_largest_bbox(filled_mask)
-                noise_values = ImageProcessing.extract_noise_outside_bbox(img, bbox, filled_mask)
-                test_noise_data.extend(noise_values)
-            test_noise_data = np.array(test_noise_data)
+                    # Compute the slice indices, ensuring they stay within the valid range
+                    start_idx = max(mid_slice_idx - N_SLICES, 0)
+                    end_idx = min(mid_slice_idx + N_SLICES + 1, total_slices)  # +1 because the end index is exclusive
+                    slices = [
+                        ImageProcessing.extract_transversal_slice(image_data, transversal_axis, slice_index=index)
+                        for index in range(start_idx, end_idx)
+                    ]
 
-            # Create Rician models with different sigma values
-            rician_models = {sigma: ImageProcessing.rician(x_values, sigma) for sigma in SIGMA_VALUES}
+                    # Log the number of slices taken and the total number of slices
+                    logging.info(f"Taken {len(slices)} slices from {total_slices} total slices for Patient {patient_id}")
 
-            # Evaluate Parzen-Rosenblatt models with test data
-            for h, kde_pdf in kde_models.items():
-                # Compute Bhattacharyya's and KL Divergences
-                bhattacharyya_distance = Metrics.compute_bhattacharyya_distance(noise_values=test_noise_data, reference_pdf=kde_pdf, x_values=x_values)
-                kl_divergence = Metrics.compute_kl_divergence(noise_values=test_noise_data, reference_pdf=kde_pdf, x_values=x_values)
+                    # If the extracted range is smaller than the requested 2N+1 slices, log a warning
+                    if len(slices) < (2 * N_SLICES + 1):
+                        logging.warning(
+                            f"Requested {2 * N_SLICES + 1} slices, but only {len(slices)} slices were available for Patient {patient_id}"
+                        )
 
-                # Record results for Parzen-Rosenblatt model
-                results_df.loc[len(results_df)] = [pulse, patient_id, 'ParzenRosenblatt', h, bhattacharyya_distance, kl_divergence]
+                    logging.info(f"Slices extracted successfully for Patient {patient_id}")
 
-            # Evaluate Rician models with test data
-            for sigma, rician_pdf in rician_models.items():
-                # Compute Bhattacharyya's and KL Divergences
-                bhattacharyya_distance = Metrics.compute_bhattacharyya_distance(noise_values=test_noise_data, reference_pdf=rician_pdf, x_values=x_values)
-                kl_divergence = Metrics.compute_kl_divergence(noise_values=test_noise_data, reference_pdf=rician_pdf, x_values=x_values)
+                except Exception as e:
+                    logging.error(f"Failed to extract slices for Patient {patient_id}: {str(e)}")
+                    results_df.loc[len(results_df)] = [pulse, patient_id, 'ERROR', None, None, None]
+                    continue
 
-                # Record results for Rician model
-                results_df.loc[len(results_df)] = [pulse, patient_id, 'Rician', sigma, bhattacharyya_distance, kl_divergence]
+
+                # Step 3: Split slices into train and test sets
+                try:
+                    train_slices, test_slices = train_test_split(
+                        slices, train_size=TRAIN_TEST_SPLIT, random_state=RANDOM_SEED
+                    )
+                    logging.info(f"Train-test split successful for Patient {patient_id}")
+                except Exception as e:
+                    logging.error(f"Failed to split slices for Patient {patient_id}: {str(e)}")
+                    results_df.loc[len(results_df)] = [pulse, patient_id, 'ERROR', None, None, None]
+                    continue
+
+                # Step 4: Training Phase
+                try:
+                    train_noise_data = []
+                    for img in train_slices:
+                        mask = ImageProcessing.segment_intracraneal_region(img)
+                        filled_mask = ImageProcessing.fill_mask(mask)
+                        bbox = ImageProcessing.find_largest_bbox(filled_mask)
+                        noise_values = ImageProcessing.extract_noise_outside_bbox(img, bbox, filled_mask)
+                        train_noise_data.extend(noise_values)
+                    train_noise_data = np.array(train_noise_data)
+                    logging.info(f"Training data collection successful for Patient {patient_id}")
+                except Exception as e:
+                    logging.error(f"Failed to collect training noise data for Patient {patient_id}: {str(e)}")
+                    results_df.loc[len(results_df)] = [pulse, patient_id, 'ERROR', None, None, None]
+                    continue
+
+                # Train KDE models
+                try:
+                    kde_models = {h: ImageProcessing.kde(train_noise_data, h=h, return_x_values=False) for h in H_VALUES}
+                    x_values = np.linspace(np.min(train_noise_data), np.max(train_noise_data), 1000)
+                    logging.info(f"KDE models trained successfully for Patient {patient_id}")
+                except Exception as e:
+                    logging.error(f"Failed to train KDE models for Patient {patient_id}: {str(e)}")
+                    results_df.loc[len(results_df)] = [pulse, patient_id, 'ERROR', None, None, None]
+                    continue
+
+                # Step 5: Testing Phase
+                try:
+                    test_noise_data = []
+                    for img in test_slices:
+                        mask = ImageProcessing.segment_intracraneal_region(img)
+                        filled_mask = ImageProcessing.fill_mask(mask)
+                        bbox = ImageProcessing.find_largest_bbox(filled_mask)
+                        noise_values = ImageProcessing.extract_noise_outside_bbox(img, bbox, filled_mask)
+                        test_noise_data.extend(noise_values)
+                    test_noise_data = np.array(test_noise_data)
+                    logging.info(f"Testing data collection successful for Patient {patient_id}")
+                except Exception as e:
+                    logging.error(f"Failed to collect testing noise data for Patient {patient_id}: {str(e)}")
+                    results_df.loc[len(results_df)] = [pulse, patient_id, 'ERROR', None, None, None]
+                    continue
+
+                # Create Rician models
+                try:
+                    rician_models = {sigma: ImageProcessing.rician(x_values, sigma) for sigma in SIGMA_VALUES}
+                    logging.info(f"Rician models created successfully for Patient {patient_id}")
+                except Exception as e:
+                    logging.error(f"Failed to create Rician models for Patient {patient_id}: {str(e)}")
+                    results_df.loc[len(results_df)] = [pulse, patient_id, 'ERROR', None, None, None]
+                    continue
+
+                # Evaluate Parzen-Rosenblatt models
+                try:
+                    for h, kde_pdf in kde_models.items():
+                        bhattacharyya_distance = Metrics.compute_bhattacharyya_distance(
+                            noise_values=test_noise_data, reference_pdf=kde_pdf, x_values=x_values
+                        )
+                        kl_divergence = Metrics.compute_kl_divergence(
+                            noise_values=test_noise_data, reference_pdf=kde_pdf, x_values=x_values
+                        )
+                        results_df.loc[len(results_df)] = [pulse, patient_id, 'ParzenRosenblatt', h, bhattacharyya_distance, kl_divergence]
+                    logging.info(f"Parzen-Rosenblatt model evaluation successful for Patient {patient_id}")
+                except Exception as e:
+                    logging.error(f"Failed to evaluate Parzen-Rosenblatt models for Patient {patient_id}: {str(e)}")
+                    results_df.loc[len(results_df)] = [pulse, patient_id, 'ERROR', None, None, None]
+                    continue
+
+                # Evaluate Rician models
+                try:
+                    for sigma, rician_pdf in rician_models.items():
+                        bhattacharyya_distance = Metrics.compute_bhattacharyya_distance(
+                            noise_values=test_noise_data, reference_pdf=rician_pdf, x_values=x_values
+                        )
+                        kl_divergence = Metrics.compute_kl_divergence(
+                            noise_values=test_noise_data, reference_pdf=rician_pdf, x_values=x_values
+                        )
+                        results_df.loc[len(results_df)] = [pulse, patient_id, 'Rician', sigma, bhattacharyya_distance, kl_divergence]
+                    logging.info(f"Rician model evaluation successful for Patient {patient_id}")
+                except Exception as e:
+                    logging.error(f"Failed to evaluate Rician models for Patient {patient_id}: {str(e)}")
+                    results_df.loc[len(results_df)] = [pulse, patient_id, 'ERROR', None, None, None]
+                    continue
+
+            except Exception as e:
+                logging.critical(f"Unexpected error for Patient {patient_id} and Pulse {pulse}: {str(e)}")
+                results_df.loc[len(results_df)] = [pulse, patient_id, 'ERROR', None, None, None]
+                continue
 
     # Save results to CSV
-    os.makedirs(OUTPUT_FOLDER, exist_ok=True)  # Ensure output directory exists
-    results_df.to_csv(CSV_PATH, index=False)
-    print("Results saved to", CSV_PATH)
+    try:
+        os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+        results_df.to_csv(CSV_PATH, index=False)
+        logging.info(f"Results successfully saved to {CSV_PATH}")
+    except Exception as e:
+        logging.error(f"Failed to save results to CSV: {str(e)}")
 
 
 perform_test(patient_ids=[1])
-plot_distributions(patient_ids=[1], target_pulse="T1")
+
+
+# plot_distributions(patient_ids=[1], target_pulse="T1")
