@@ -234,7 +234,7 @@ def plot_distributions(patient_ids: List[int], target_pulse: str):
             # End plotting for this pulse
             break
 
-def perform_test(patient_ids: List[int]):
+def perform_test_normal(patient_ids: List[int]):
     total_start_time = time.perf_counter()
     for pulse in PULSE_TYPES:
         for patient_id in patient_ids:
@@ -430,15 +430,169 @@ def perform_test(patient_ids: List[int]):
     logging.info(f"Total execution time for perform_test: {total_elapsed_time:.2f} seconds")
 
     # Save results to CSV
+    
     try:
         os.makedirs(OUTPUT_FOLDER, exist_ok=True)
         results_df.to_csv(CSV_PATH, index=False)
         logging.info(f"Results successfully saved to {CSV_PATH}")
     except Exception as e:
         logging.error(f"Failed to save results to CSV: {str(e)}")
+    
+import os
+import numpy as np
+import time
+import logging
+from typing import List
+from sklearn.model_selection import train_test_split
+
+# Assume all necessary imports and constants like PULSE_TYPES, DATASET_FOLDER, etc., are defined
+
+def perform_test(patient_ids: List[int]):
+    total_start_time = time.perf_counter()
+    for pulse in PULSE_TYPES:
+        for patient_id in patient_ids:
+            try:
+                patient_start_time = time.perf_counter()
+                nrrd_path = f"{DATASET_FOLDER}/RM/{pulse}/P{patient_id}/{pulse}_P{patient_id}.nrrd"
+                pulse_directory = os.path.dirname(nrrd_path)
+
+                if not os.path.exists(pulse_directory):
+                    logging.warning(f"Pulse {pulse} is not available for Patient {patient_id}. Skipping this patient.")
+                    continue
+
+                # Step 1: Load MRI Image
+                try:
+                    start_time = time.perf_counter()
+                    image_data = ImageProcessing.open_nrrd_file(nrrd_path)
+                    transversal_axis = ImageProcessing.get_transversal_axis(nrrd_path)
+                    mid_slice_idx = image_data.shape[transversal_axis] // 2
+                    elapsed_time = time.perf_counter() - start_time
+                    logging.info(f"Successfully loaded image for Patient {patient_id} and Pulse {pulse} in {elapsed_time:.4f} seconds")
+                except Exception as e:
+                    logging.error(f"Failed to load image for Patient {patient_id} and Pulse {pulse}: {str(e)}")
+                    continue
+
+                # Step 2: Extract 2N+1 slices around the middle slice
+                try:
+                    start_time = time.perf_counter()
+                    total_slices = image_data.shape[transversal_axis]
+                    start_idx = max(mid_slice_idx - N_SLICES, 0)
+                    end_idx = min(mid_slice_idx + N_SLICES + 1, total_slices)
+                    slices = [
+                        ImageProcessing.extract_transversal_slice(image_data, transversal_axis, index)
+                        for index in range(start_idx, end_idx)
+                    ]
+                    elapsed_time = time.perf_counter() - start_time
+                    logging.info(f"Extracted {len(slices)} slices for Patient {patient_id} in {elapsed_time:.4f} seconds")
+
+                    if len(slices) < (2 * N_SLICES + 1):
+                        logging.warning(
+                            f"Requested {2 * N_SLICES + 1} slices, but only {len(slices)} slices were available for Patient {patient_id}"
+                        )
+                except Exception as e:
+                    logging.error(f"Failed to extract slices for Patient {patient_id}: {str(e)}")
+                    continue
+
+                # Step 3: Split slices into train and test sets
+                try:
+                    start_time = time.perf_counter()
+                    train_slices, test_slices = train_test_split(
+                        slices, train_size=TRAIN_TEST_SPLIT, random_state=RANDOM_SEED
+                    )
+                    elapsed_time = time.perf_counter() - start_time
+                    logging.info(f"Train-test split successful for Patient {patient_id} in {elapsed_time:.4f} seconds")
+                except Exception as e:
+                    logging.error(f"Failed to split slices for Patient {patient_id}: {str(e)}")
+                    continue
+
+                # Step 4: Create the Training set
+                try:
+                    start_time = time.perf_counter()
+                    train_noise_data = []
+                    for img in train_slices:
+                        mask = ImageProcessing.segment_intracraneal_region(img)
+                        filled_mask = ImageProcessing.fill_mask(mask)
+                        bbox = ImageProcessing.find_largest_bbox(filled_mask)
+                        noise_values = ImageProcessing.extract_noise_outside_bbox(img, bbox, filled_mask)
+                        train_noise_data.extend(noise_values)
+                    train_noise_data = np.array(train_noise_data)
+                    elapsed_time = time.perf_counter() - start_time
+                    logging.info(f"Training data collection successful for Patient {patient_id} in {elapsed_time:.4f} seconds")
+                except Exception as e:
+                    logging.error(f"Failed to collect training noise data for Patient {patient_id}: {str(e)}")
+                    continue
+
+                # Step 5: Create the Test set
+                try:
+                    start_time = time.perf_counter()
+                    test_noise_data = []
+                    for img in test_slices:
+                        mask = ImageProcessing.segment_intracraneal_region(img)
+                        filled_mask = ImageProcessing.fill_mask(mask)
+                        bbox = ImageProcessing.find_largest_bbox(filled_mask)
+                        noise_values = ImageProcessing.extract_noise_outside_bbox(img, bbox, filled_mask)
+                        test_noise_data.extend(noise_values)
+                    test_noise_data = np.array(test_noise_data)
+                    elapsed_time = time.perf_counter() - start_time
+                    logging.info(f"Testing data collection successful for Patient {patient_id} in {elapsed_time:.4f} seconds")
+                except Exception as e:
+                    logging.error(f"Failed to collect testing noise data for Patient {patient_id}: {str(e)}")
+                    continue
+
+                # Step 6: Train Parzen-Rosenblatt KDE models
+                try:
+                    start_time = time.perf_counter()
+                    kde_models = {h: ImageProcessing.kde(train_noise_data, h=h, return_x_values=False) for h in H_VALUES}
+                    x_values = np.linspace(np.min(train_noise_data), np.max(train_noise_data), 1000)
+                    elapsed_time = time.perf_counter() - start_time
+                    logging.info(f"KDE models trained successfully for Patient {patient_id} in {elapsed_time:.4f} seconds")
+                except Exception as e:
+                    logging.error(f"Failed to train KDE models for Patient {patient_id}: {str(e)}")
+                    continue
+
+                # Step 7: Create Rician models
+                try:
+                    start_time = time.perf_counter()
+                    rician_models = {sigma: ImageProcessing.rician(x_values, sigma) for sigma in SIGMA_VALUES}
+                    elapsed_time = time.perf_counter() - start_time
+                    logging.info(f"Rician models created successfully for Patient {patient_id} in {elapsed_time:.4f} seconds")
+                except Exception as e:
+                    logging.error(f"Failed to create Rician models for Patient {patient_id}: {str(e)}")
+                    continue
+
+                # Save the data
+                save_folder = f"saved_data/Patient_{patient_id}_{pulse}"
+                os.makedirs(save_folder, exist_ok=True)
+
+                try:
+                    np.savez(f"{save_folder}/train_noise_data.npz", data=train_noise_data)
+                    np.savez(f"{save_folder}/test_noise_data.npz", data=test_noise_data)
+                    np.savez(f"{save_folder}/x_values.npz", data=x_values)
+                    np.savez(f"{save_folder}/kde_models.npz", **{str(h): kde for h, kde in kde_models.items()})
+                    np.savez(f"{save_folder}/rician_models.npz", **{str(sigma): model for sigma, model in rician_models.items()})
+                    logging.info(f"Data successfully saved for Patient {patient_id} and Pulse {pulse}")
+                except Exception as e:
+                    logging.error(f"Failed to save data for Patient {patient_id} and Pulse {pulse}: {str(e)}")
+                    continue
+
+                patient_elapsed_time = time.perf_counter() - patient_start_time
+                logging.info(f"Total time for Patient {patient_id}: {patient_elapsed_time:.2f} seconds")
+
+            except Exception as e:
+                logging.critical(f"Unexpected error for Patient {patient_id} and Pulse {pulse}: {str(e)}")
+                continue
+
+    total_elapsed_time = time.perf_counter() - total_start_time
+    logging.info(f"Total execution time for perform_test: {total_elapsed_time:.2f} seconds")
 
 
-perform_test(patient_ids=np.arange(1, 74))
+H_VALUES = [0.0001, 0.001, 0.01, 0.1, 1]        # Bandwidths for KDE models
+SIGMA_VALUES = [8]    # Sigma values for Rician distribution
+N_SLICES = 6                       # Number of slices around the middle slice
+PULSE_TYPES = ['T1']
+TRAIN_TEST_SPLIT = 0.67            # Percentage for train set
+RANDOM_SEED = 42                   # Seed for reproducibility
+perform_test(patient_ids=[1])
 
 
 # plot_distributions(patient_ids=[1], target_pulse="T1")
