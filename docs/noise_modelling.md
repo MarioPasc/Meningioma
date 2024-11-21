@@ -4,12 +4,11 @@
 
 This is the documentation of the experiments conducted to model background noise in MRI images with the aim to replicate this noise in the padding pixels of resized images. The experiments conducted in during this stages of the creation of the **Meningioma** dataset will be documented to publish an academic paper.  
 
-The main objective is to determine if the *non-parametrized Parzen-Rosenblatt sliding window* method can outperform traditional methods like *Rice distribution*, and the *Non-Central $\chi$* distribution **(*)**, as well as other SOTA models in the modelling of the Probability Mass Distribution (PMF) of the Meningioma MR images.
+The main objective is to determine if the *non-parametrized Parzen-Rosenblatt sliding window* method can outperform traditional statistical models like the *Rice distribution*, the *Non-Central $\chi$ distribution**, or the *Rayleight distribution*, (*Maximum Likelihood estimator for Gaussian RV's?*) as well as other SOTA models in the modelling of the Probability Mass Distribution (PMF) of the Meningioma MR images.
 
 Our main Research Questions (*RQ*) are:
 
-  - **RQ1**. Could the Parzen-Rosenblatt KDE method outperform the traditional statistical noise-modelling models?
-  - **RQ2**. Could the Parzen-Rosenblatt KDE method outperform other SOTA MRI noise modelling models, like the ones proposed by S.Ajá-Fernández et al. (1)?
+- **RQ1**. Could the Parzen-Rosenblatt KDE method outperform the traditional statistical noise-modelling models?
 
 Taking the theoretical Rician distribution as the baseline, we will train a model that aims to predict the PDF of this background noise using the Parzen-Rosenblatt sliding window method.
 
@@ -21,9 +20,9 @@ To assess the quality of the noise modeling, we evaluate the similarity between 
 
 This procedure is considered a multi-objective optimization problem, therefore the results will be presented using a *Pareto front*. By plotting two data series, one corresponding to the optimization of $\sigma_{Rice}$ (Rician Distribution) and the other representing the optimization of $h$ (Parzen-Rosenblatt KDE), the most optimal value for each data series will be conformed by the minimum value for both validation metrics (X-axis for *Bhattacharyya's Distance* and Y-axis for *Kullback-Leibler's Divergence*).
 
-**(*)** The nc-$\chi$ distribution is the same as the $\sigma = 1$ Rice distribution for $\lambda = 2$ degrees of freedom. 
+\* The nc-$\chi$ distribution is the same as the $\sigma = 1$ Rice distribution for $\lambda = 2$ degrees of freedom.
 
-### Previous studies made 
+### Previous studies made
 
 *Why model the noise for each patient and pulse?*
 
