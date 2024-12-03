@@ -1,5 +1,5 @@
 import numpy as np
-from ..utils.statistical_manipulation import Stats
+from Meningioma.utils.statistical_manipulation import Stats
 
 
 class Metrics:

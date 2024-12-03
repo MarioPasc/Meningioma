@@ -166,3 +166,5 @@ jupyter/
 *.csv
 saved_data/
 *.npz
+.flake8
+.vscode/
