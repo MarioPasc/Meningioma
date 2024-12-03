@@ -3,15 +3,17 @@ from skimage.metrics import structural_similarity as ssim
 from skimage.metrics import peak_signal_noise_ratio as psnr
 from utils.statistical_manipulation import Stats
 
+
 class Metrics:
 
     @staticmethod
-    def compute_kullback_leibler_divergence(noise_values: np.ndarray, 
-                                            reference_pdf: np.ndarray, 
-                                            x_values: np.ndarray, 
-                                            epsilon: float = 1e-10, 
-                                            only_kb_divergence: bool = True
-                                            ) -> float:
+    def compute_kullback_leibler_divergence(
+        noise_values: np.ndarray,
+        reference_pdf: np.ndarray,
+        x_values: np.ndarray,
+        epsilon: float = 1e-10,
+        only_kb_divergence: bool = True,
+    ) -> float:
         """
         Compute the Kullback-Leibler divergence between an empirical noise distribution
         and a KDE-estimated distribution, adding epsilon to avoid division by zero.
@@ -30,10 +32,18 @@ class Metrics:
         """
         if not only_kb_divergence:
             # Discretize the PDF
-            reference_prob_masses = Stats.approximate_pmf_from_pdf(reference_pdf = reference_pdf, x_values = x_values, epsilon = epsilon)
-            
+            reference_prob_masses = Stats.approximate_pmf_from_pdf(
+                reference_pdf=reference_pdf,
+                x_values=x_values,
+                epsilon=epsilon,
+            )
+
             # Estimate the empirical probability distribution from the discrete background noise values
-            noise_prob_masses = Stats.histogram_based_pmf_estimation(noise_values = noise_values, x_values = x_values, epsilon = epsilon)
+            noise_prob_masses = Stats.histogram_based_pmf_estimation(
+                noise_values=noise_values,
+                x_values=x_values,
+                epsilon=epsilon,
+            )
 
         else:
             # Treat input arrays as probability distributions and normalize them
@@ -49,10 +59,18 @@ class Metrics:
             reference_prob_masses /= np.sum(reference_prob_masses)
 
         # Compute the Kullback-Leibler divergence
-        return np.sum(noise_prob_masses * np.log(noise_prob_masses / reference_prob_masses))        
+        return np.sum(
+            noise_prob_masses
+            * np.log(noise_prob_masses / reference_prob_masses)
+        )
 
     @staticmethod
-    def compute_jensen_shannon_divergence(noise_values: np.ndarray, reference_pdf: np.ndarray, x_values: np.ndarray, epsilon: float = 1e-10) -> float:
+    def compute_jensen_shannon_divergence(
+        noise_values: np.ndarray,
+        reference_pdf: np.ndarray,
+        x_values: np.ndarray,
+        epsilon: float = 1e-10,
+    ) -> float:
         """
         Compute the Jensen-Shannon divergence between an empirical noise distribution
         and a KDE-estimated distribution, adding epsilon to avoid division by zero.
@@ -72,13 +90,19 @@ class Metrics:
         """
 
         # Discretize the PDF
-        reference_prob_masses = Stats.approximate_pmf_from_pdf(reference_pdf = reference_pdf, x_values = x_values, epsilon = epsilon)
-        
+        reference_prob_masses = Stats.approximate_pmf_from_pdf(
+            reference_pdf=reference_pdf, x_values=x_values, epsilon=epsilon
+        )
+
         # Estimate the empirical probability distribution from the discrete background noise values
-        noise_prob_masses = Stats.histogram_based_pmf_estimation(noise_values = noise_values, x_values = x_values, epsilon = epsilon)
+        noise_prob_masses = Stats.histogram_based_pmf_estimation(
+            noise_values=noise_values, x_values=x_values, epsilon=epsilon
+        )
 
         # Compute the mixture distribution
-        mixture_distribution = 0.5 * (reference_prob_masses + noise_prob_masses)
+        mixture_distribution = 0.5 * (
+            reference_prob_masses + noise_prob_masses
+        )
 
         # Compute the Kullback-Leibler divergence for each PMF distribution with the mixture
 
@@ -90,7 +114,7 @@ class Metrics:
             reference_pdf=mixture_distribution,  # Mixture distribution
             x_values=x_values,
             epsilon=epsilon,
-            only_kb_divergence=True
+            only_kb_divergence=True,
         )
 
         kl_noise_mixture = Metrics.compute_kullback_leibler_divergence(
@@ -98,17 +122,18 @@ class Metrics:
             reference_pdf=mixture_distribution,  # Mixture distribution
             x_values=x_values,
             epsilon=epsilon,
-            only_kb_divergence=True
+            only_kb_divergence=True,
         )
         return 0.5 * (kl_reference_mixture + kl_noise_mixture)
 
     @staticmethod
-    def compute_bhattacharyya_distance(noise_values: np.ndarray, 
-                                       reference_pdf: np.ndarray, 
-                                       x_values:np.ndarray, 
-                                       epsilon: float = 1e-10,
-                                       only_bhattacharyya_distance: bool = True
-                                       ) -> float:
+    def compute_bhattacharyya_distance(
+        noise_values: np.ndarray,
+        reference_pdf: np.ndarray,
+        x_values: np.ndarray,
+        epsilon: float = 1e-10,
+        only_bhattacharyya_distance: bool = True,
+    ) -> float:
         """
         Compute the Bhattacharyya distance between an empirical noise distribution
         and a KDE-estimated distribution.
@@ -125,10 +150,18 @@ class Metrics:
         """
         if not only_bhattacharyya_distance:
             # Discretize the PDF
-            reference_prob_masses = Stats.approximate_pmf_from_pdf(reference_pdf = reference_pdf, x_values = x_values, epsilon = epsilon)
-            
+            reference_prob_masses = Stats.approximate_pmf_from_pdf(
+                reference_pdf=reference_pdf,
+                x_values=x_values,
+                epsilon=epsilon,
+            )
+
             # Estimate the empirical probability distribution from the discrete background noise values
-            noise_prob_masses = Stats.histogram_based_pmf_estimation(noise_values = noise_values, x_values = x_values, epsilon = epsilon)
+            noise_prob_masses = Stats.histogram_based_pmf_estimation(
+                noise_values=noise_values,
+                x_values=x_values,
+                epsilon=epsilon,
+            )
         else:
             # Treat input arrays as probability distributions and normalize them
             noise_prob_masses = noise_values / np.sum(noise_values)
@@ -141,24 +174,37 @@ class Metrics:
             # Re-normalize to ensure both are proper PMFs
             noise_prob_masses /= np.sum(noise_prob_masses)
             reference_prob_masses /= np.sum(reference_prob_masses)
-        
+
         # Compute the Bhattacharyya coefficient
-        bc_coefficient = np.sum(np.sqrt(noise_prob_masses * reference_prob_masses)) 
+        bc_coefficient = np.sum(
+            np.sqrt(noise_prob_masses * reference_prob_masses)
+        )
         # Compute the Bhattacharyya distance
         bhattacharyya_distance = -np.log(bc_coefficient)
         return bhattacharyya_distance
 
     @staticmethod
-    def compute_ssim(original_image: np.ndarray, resized_image: np.ndarray) -> float:
+    def compute_ssim(
+        original_image: np.ndarray, resized_image: np.ndarray
+    ) -> float:
         """
         Compute the Structural Similarity Index between the original and resized image
         """
-        return ssim(image1=original_image, image2=resized_image, data_range=resized_image.max() - resized_image.min())
+        return ssim(
+            image1=original_image,
+            image2=resized_image,
+            data_range=resized_image.max() - resized_image.min(),
+        )
 
     @staticmethod
-    def compute_psnr(original_image: np.ndarray, resized_image: np.ndarray) -> float:
+    def compute_psnr(
+        original_image: np.ndarray, resized_image: np.ndarray
+    ) -> float:
         """
         Compute the Peak Signal Noise Ratio (PSNR) between the original and resized image
         """
-        return psnr(image1=original_image, image2=resized_image, data_range=resized_image.max() - resized_image.min())
-
+        return psnr(
+            image1=original_image,
+            image2=resized_image,
+            data_range=resized_image.max() - resized_image.min(),
+        )

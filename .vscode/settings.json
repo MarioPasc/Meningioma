@@ -1,0 +1,53 @@
+{
+    // Linting with Flake8
+    "python.linting.enabled": true, // Enable linting
+    "python.linting.flake8Enabled": true, // Use Flake8 as the linter
+    "python.linting.flake8Path": "flake8", // Path to Flake8 (ensure it's installed in your environment)
+    "python.linting.flake8Args": [
+        "--max-line-length=88", // Match Black's line length
+        "--ignore=E203,W503" // Ignore errors incompatible with Black
+    ],
+    // Formatting with Black
+    "editor.formatOnSave": true,
+    "python.formatting.blackArgs": [
+        "--line-length",
+        "70"
+    ],
+    "python.formatting.provider": "black", // Use Black as the formatter
+    "python.formatting.blackPath": "black", // Path to Black (ensure it's installed)
+    // Type Checking with MyPy
+    "python.linting.mypyEnabled": true, // Enable MyPy
+    "python.linting.mypyPath": "mypy", // Path to MyPy
+    "python.linting.mypyArgs": [
+        "--ignore-missing-imports", // Suppress errors for third-party libraries
+        "--strict" // Enable strict type checking
+    ],
+    // Jupyter Notebook
+    "jupyter.notebookFileRoot": "${workspaceFolder}",
+    "jupyter.enableTelemetry": false, // Disable telemetry
+    // Code Spell Checker
+    "cSpell.enabled": true, // Enable spell checker
+    "cSpell.language": "en", // Set the language to English
+    "cSpell.ignoreWords": [
+        "numpy",
+        "scipy",
+        "pandas"
+    ], // Ignore common scientific Python terms
+    "cSpell.userWords": [
+        "Meningioma"
+    ], // Add custom project-specific words
+    // GitLens
+    "gitlens.hovers.currentLine.over": "line", // Show GitLens info on current line
+    // General Settings
+    "files.exclude": {
+        "**/__pycache__/": true, // Hide __pycache__ folders
+        "**/*.pyc": true // Hide .pyc files
+    },
+    "editor.codeActionsOnSave": {
+        "source.organizeImports": "explicit"
+    },
+    "python.analysis.autoImportCompletions": true, // Enable auto-import suggestions
+    "python.analysis.typeCheckingMode": "standard", // Strict type checking
+    "python.analysis.autoSearchPaths": true,
+    "python.analysis.useLibraryCodeForTypes": true,
+}

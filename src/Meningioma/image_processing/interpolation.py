@@ -4,6 +4,7 @@ import numpy as np
 import time
 from typing import Union, Tuple
 
+
 # Interpolation methods as enum
 class InterpolationMethod(Enum):
     INTER_CUBIC = cv2.INTER_CUBIC
@@ -11,19 +12,25 @@ class InterpolationMethod(Enum):
     INTER_NEAREST = cv2.INTER_NEAREST
     INTER_LANCZOS4 = cv2.INTER_LANCZOS4
 
-def resize(image: np.ndarray, size: Tuple[int, int], method: InterpolationMethod, measure_time: bool = False) -> Union[np.ndarray, Tuple[np.ndarray, float]]:
+
+def resize(
+    image: np.ndarray,
+    size: Tuple[int, int],
+    method: InterpolationMethod,
+    measure_time: bool = False,
+) -> Union[np.ndarray, Tuple[np.ndarray, float]]:
     """
     Resizes an image to the specified size using the given interpolation method.
-    
+
     Args:
         image (np.ndarray): The image to resize.
         size (Tuple[int, int]): The target size as (width, height).
         method (InterpolationMethod): The interpolation method to use.
         measure_time (bool): If True, returns the resized image and the time taken.
-    
+
     Returns:
-        Union[np.ndarray, Tuple[np.ndarray, float]]: 
-        If measure_time is False, returns the resized image. 
+        Union[np.ndarray, Tuple[np.ndarray, float]]:
+        If measure_time is False, returns the resized image.
         If True, returns a tuple (resized image, execution_time).
     """
     if measure_time:
