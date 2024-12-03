@@ -9,6 +9,7 @@ from .noise_modelling import (
     get_rician,
 )
 import numpy as np
+from numpy.typing import NDArray
 import cv2
 from typing import Tuple, Optional, Union, Dict, List
 
@@ -17,7 +18,7 @@ class ImageProcessing:
 
     @staticmethod
     def segment_intracraneal_region(
-        image: np.ndarray, method: str = "li", threshold: float = None
+        image: np.ndarray, method: str = "li", threshold: float = -1
     ):
         """
         Segment an MRI image to separate the background from the cranial and intracranial regions.
@@ -31,9 +32,7 @@ class ImageProcessing:
         Returns:
             np.ndarray: Mask where background is 0 and intracranial region is 1.
         """
-        return get_detected_mri_image(
-            image=image, method=method, threshold=threshold
-        )
+        return get_detected_mri_image(image=image, method=method, threshold=threshold)
 
     @staticmethod
     def fill_mask(
@@ -101,7 +100,7 @@ class ImageProcessing:
 
     @staticmethod
     def kde(
-        noise_values: List[int],
+        noise_values: Union[NDArray[np.float64], List[float]],
         h: float = 1.0,
         num_points: int = 1000,
         return_x_values: bool = False,
@@ -113,7 +112,7 @@ class ImageProcessing:
         and controlling the granularity of the output PDF with `num_points`.
 
         Parameters:
-        - noise_values (List[int]): A list of noise values sampled from an MRI image's background or similar data.
+        - noise_values (Union[NDArray[np.float64], List[float]]): A list of noise values sampled from an MRI image's background or similar data.
         - h (float, optional): The bandwidth smoothing parameter for KDE. Controls the width of the Gaussian kernel.
         Higher values result in smoother KDEs. Default is 1.0.
         - num_points (int, optional): The number of points to evaluate the KDE over the range of `noise_values`.
@@ -162,7 +161,7 @@ class ImageProcessing:
         return open_nrrd(nrrd_path=nrrd_path, return_header=return_header)
 
     @staticmethod
-    def get_transversal_axis(nrrd_path: str) -> int:
+    def get_transversal_axis(nrrd_path: str) -> np.intp:
         """
         Finds the transversal axis of a nrrd file
 
@@ -178,12 +177,12 @@ class ImageProcessing:
     def extract_transversal_slice(
         image_data: np.ndarray,
         transversal_axis: int,
-        slice_index: int = None,
+        slice_index: int = -1,
     ) -> np.ndarray:
         """
         Extracts the middle slice along the transversal axis.
         """
-        if slice_index is None:
+        if slice_index == -1:
             # Calculate the middle slice index along the transversal axis
             slice_index = image_data.shape[transversal_axis] // 2
 
@@ -242,9 +241,7 @@ class ImageProcessing:
         return scale
 
     @staticmethod
-    def add_padding(
-        image: np.ndarray, target_size: Tuple[int, int]
-    ) -> np.ndarray:
+    def add_padding(image: np.ndarray, target_size: Tuple[int, int]) -> np.ndarray:
         """
         Pad the image to fit the target resolution.
 
@@ -261,51 +258,57 @@ class ImageProcessing:
         new_h, new_w = image.shape[:2]
         start_y = (target_h - new_h) // 2
         start_x = (target_w - new_w) // 2
-        padded_image[start_y : start_y + new_h, start_x : start_x + new_w] = (
-            image
-        )
+        padded_image[start_y : start_y + new_h, start_x : start_x + new_w] = image
 
         return padded_image
 
     @staticmethod
     def apply_translation(
-        image: np.ndarray,
+        image: NDArray[np.uint8],
         center_x: int,
         center_y: int,
         target_size: Tuple[int, int],
-    ) -> np.ndarray:
+    ) -> NDArray[np.uint8]:
         """
         Apply translation to center the region of interest in the image.
 
         Args:
-            image (np.ndarray): Input image with padding.
+            image (NDArray[np.uint8]): Input image with padding.
             center_x (int): X-coordinate of the region's center.
             center_y (int): Y-coordinate of the region's center.
-            target_size (tuple): Target resolution (width, height).
+            target_size (Tuple[int, int]): Target resolution (width, height).
 
         Returns:
-            np.ndarray: Translated image with the region centered.
+            NDArray[np.uint8]: Translated image with the region centered.
         """
+        # Extract target width and height
         target_w, target_h = target_size
+
+        # Calculate the center of the target image
         image_center_x, image_center_y = target_w // 2, target_h // 2
-        offset_x, offset_y = (
-            image_center_x - center_x,
-            image_center_y - center_y,
+
+        # Compute translation offsets
+        offset_x: int = image_center_x - center_x
+        offset_y: int = image_center_y - center_y
+
+        # Create a 2D translation matrix for affine transformation
+        translation_matrix: NDArray[np.float32] = np.float32(
+            [[1, 0, offset_x], [0, 1, offset_y]]  # type: ignore
         )
 
-        translation_matrix = np.float32([[1, 0, offset_x], [0, 1, offset_y]])
-        translated_image = cv2.warpAffine(
-            image, translation_matrix, (target_w, target_h)
+        # Apply the affine transformation (translation) to the image
+        translated_image: NDArray[np.uint8] = cv2.warpAffine(
+            image, translation_matrix, (target_w, target_h)  # type: ignore
         )
 
         return translated_image
 
     @staticmethod
     def resize_image_with_method(
-        image: np.ndarray,
+        image: NDArray[np.float64],
         target_size: Tuple[int, int],
         method: InterpolationMethod,
-    ) -> np.ndarray:
+    ) -> NDArray[np.float64]:
         """
         Resize the image using the specified interpolation method.
 
@@ -323,7 +326,7 @@ class ImageProcessing:
     @staticmethod
     def resize_with_padding_and_center(
         image: np.ndarray,
-        target_size: Tuple[int] = (512, 512),
+        target_size: Tuple[int, int] = (512, 512),
         method: InterpolationMethod = InterpolationMethod.INTER_LANCZOS4,
         return_centers_of_mass: bool = False,
     ) -> Union[np.ndarray, Tuple[np.ndarray, Dict[str, Tuple[int, int]]]]:
@@ -354,9 +357,7 @@ class ImageProcessing:
         padded_image = ImageProcessing.add_padding(resized_image, target_size)
 
         # Step 3: Find the center of mass of the resized image (brain region)
-        cx_resized, cy_resized = ImageProcessing.find_center_of_mass(
-            resized_image
-        )
+        cx_resized, cy_resized = ImageProcessing.find_center_of_mass(resized_image)
 
         # Step 4: Calculate the translation offsets to center the brain region
         target_center_x, target_center_y = (
@@ -383,31 +384,3 @@ class ImageProcessing:
             )
         else:
             return centered_image
-
-
-def main() -> None:
-    import matplotlib.pyplot as plt
-
-    patient = 51
-    pulse = "T1"
-    rm_nrrd_path = f"/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_Adquisition/RM/{pulse}/P{patient}/{pulse}_P{patient}.nrrd"
-    tc_nrrd_path = f"/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_Adquisition/TC/P{patient}/TC_P{patient}.nrrd"
-
-    processing = ImageProcessing()
-    image = processing.open_nrrd_file(rm_nrrd_path)
-    print(f"Image size: {image.shape}, max pixel value: {np.max(image)}")
-    original_im = image[:, 100, :]
-
-    fig, axes = plt.subplots(1, 2, figsize=(10, 6))
-    axes[0].imshow(original_im, cmap="gray")
-    axes[1].imshow(
-        processing.resize_with_padding_and_center(
-            image=original_im, target_size=(512, 512)
-        ),
-        cmap="gray",
-    )
-    plt.show()
-
-
-if __name__ == "__main__":
-    main()

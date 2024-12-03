@@ -2,7 +2,8 @@ from enum import Enum
 import cv2
 import numpy as np
 import time
-from typing import Union, Tuple
+from typing import Tuple
+from numpy.typing import NDArray
 
 
 # Interpolation methods as enum
@@ -14,30 +15,23 @@ class InterpolationMethod(Enum):
 
 
 def resize(
-    image: np.ndarray,
+    image: NDArray[np.float64],
     size: Tuple[int, int],
     method: InterpolationMethod,
-    measure_time: bool = False,
-) -> Union[np.ndarray, Tuple[np.ndarray, float]]:
+) -> NDArray[np.float64]:
     """
     Resizes an image to the specified size using the given interpolation method.
 
     Args:
-        image (np.ndarray): The image to resize.
+        image (NDArray[np.float64]): The image to resize.
         size (Tuple[int, int]): The target size as (width, height).
         method (InterpolationMethod): The interpolation method to use.
-        measure_time (bool): If True, returns the resized image and the time taken.
 
     Returns:
-        Union[np.ndarray, Tuple[np.ndarray, float]]:
-        If measure_time is False, returns the resized image.
-        If True, returns a tuple (resized image, execution_time).
+        NDArray[np.float64]: The resized image.
     """
-    if measure_time:
-        start_time = time.time()
-        resized_image = cv2.resize(image, size, interpolation=method.value)
-        end_time = time.time()
-        execution_time = end_time - start_time
-        return resized_image, execution_time
-    else:
-        return cv2.resize(image, size, interpolation=method.value)
+    # Resize the image and explicitly cast the result to NDArray[np.float64]
+    resized_image: NDArray[np.float64] = np.asarray(
+        cv2.resize(image, size, interpolation=method.value), dtype=np.float64
+    )
+    return resized_image

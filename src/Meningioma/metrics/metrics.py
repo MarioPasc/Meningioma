@@ -1,7 +1,5 @@
 import numpy as np
-from skimage.metrics import structural_similarity as ssim
-from skimage.metrics import peak_signal_noise_ratio as psnr
-from utils.statistical_manipulation import Stats
+from ..utils.statistical_manipulation import Stats
 
 
 class Metrics:
@@ -60,8 +58,7 @@ class Metrics:
 
         # Compute the Kullback-Leibler divergence
         return np.sum(
-            noise_prob_masses
-            * np.log(noise_prob_masses / reference_prob_masses)
+            noise_prob_masses * np.log(noise_prob_masses / reference_prob_masses)
         )
 
     @staticmethod
@@ -100,9 +97,7 @@ class Metrics:
         )
 
         # Compute the mixture distribution
-        mixture_distribution = 0.5 * (
-            reference_prob_masses + noise_prob_masses
-        )
+        mixture_distribution = 0.5 * (reference_prob_masses + noise_prob_masses)
 
         # Compute the Kullback-Leibler divergence for each PMF distribution with the mixture
 
@@ -176,35 +171,7 @@ class Metrics:
             reference_prob_masses /= np.sum(reference_prob_masses)
 
         # Compute the Bhattacharyya coefficient
-        bc_coefficient = np.sum(
-            np.sqrt(noise_prob_masses * reference_prob_masses)
-        )
+        bc_coefficient = np.sum(np.sqrt(noise_prob_masses * reference_prob_masses))
         # Compute the Bhattacharyya distance
         bhattacharyya_distance = -np.log(bc_coefficient)
         return bhattacharyya_distance
-
-    @staticmethod
-    def compute_ssim(
-        original_image: np.ndarray, resized_image: np.ndarray
-    ) -> float:
-        """
-        Compute the Structural Similarity Index between the original and resized image
-        """
-        return ssim(
-            image1=original_image,
-            image2=resized_image,
-            data_range=resized_image.max() - resized_image.min(),
-        )
-
-    @staticmethod
-    def compute_psnr(
-        original_image: np.ndarray, resized_image: np.ndarray
-    ) -> float:
-        """
-        Compute the Peak Signal Noise Ratio (PSNR) between the original and resized image
-        """
-        return psnr(
-            image1=original_image,
-            image2=resized_image,
-            data_range=resized_image.max() - resized_image.min(),
-        )

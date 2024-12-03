@@ -1,13 +1,11 @@
 import os
 import numpy as np
-import nrrd
+import nrrd  # type: ignore
 from typing import Tuple
 
 
 class NRRDToNPZConverter:
-    def __init__(
-        self, base_ds_path: str, output_base_path: str, log_file: str
-    ):
+    def __init__(self, base_ds_path: str, output_base_path: str, log_file: str):
         self.base_ds_path = base_ds_path
         self.output_base_path = output_base_path
         self.log_file = log_file
@@ -112,9 +110,7 @@ class NRRDToNPZConverter:
                     print(error_message)
                     self.log_error(error_message)
         except Exception as e:
-            error_message = (
-                f"Error converting data for patient {patient_id}: {e}"
-            )
+            error_message = f"Error converting data for patient {patient_id}: {e}"
             print(error_message)
             self.log_error(error_message)
 
