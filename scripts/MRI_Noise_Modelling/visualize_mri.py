@@ -16,59 +16,58 @@ def main(image_path: str, matfile_path: str, save_path: str) -> None:
         matfile_path (str): Path to the .mat file containing the responsibilities matrix.
         save_path (str): Path to save the visualization.
     """
-    # Load the MRI image
-    image: npt.NDArray[np.uint8] = np.array(Image.open(image_path))
+    # Load the MRI image and ensure it is grayscale
+    image: npt.NDArray[np.uint8] = np.array(Image.open(image_path).convert('L'))
+
+    print(f"Image shape: {image.shape}")
 
     # Load the responsibilities matrix from the .mat file
     mat_data = sio.loadmat(matfile_path)
-    responsibilities: npt.NDArray[np.float64] = mat_data.get(
-        "SaveResponsibilities", None
-    )
+    responsibilities: npt.NDArray[np.float64] = mat_data.get('SaveResponsibilities', None)
 
     if responsibilities is None:
         raise ValueError("Responsibilities matrix not found in the .mat file.")
+
+    print(f"Responsibilities shape: {responsibilities.shape}")
 
     # Ensure the responsibilities matrix matches the image shape
     if image.shape != responsibilities.shape:
         raise ValueError("Image and responsibilities matrix must have the same shape.")
 
     # Normalize the responsibilities for visualization
-    responsibilities_visual: npt.NDArray[np.float64] = (
-        responsibilities / responsibilities.max()
-    )
+    responsibilities_visual: npt.NDArray[np.float64] = responsibilities / responsibilities.max()
 
     # Superpose responsibilities on the image (overlay)
     overlay: npt.NDArray[np.float64] = (
         0.5 * image.astype(np.float64) / 255 + 0.5 * responsibilities_visual
     )
 
-    # Plot the MRI image, responsibilities matrix, and overlay
-    plt.figure(figsize=(15, 5))
+    # Create a figure with constrained layout
+    fig, axes = plt.subplots(1, 3, figsize=(15, 6), constrained_layout=True)
 
     # Original MRI image
-    plt.subplot(1, 3, 1)
-    plt.imshow(image, cmap="gray")
-    plt.title("MRI Image")
-    plt.axis("off")
+    axes[0].imshow(image, cmap='gray')
+    axes[0].set_title('MRI Image')
+    axes[0].axis('off')
 
     # Responsibilities matrix
-    plt.subplot(1, 3, 2)
-    plt.imshow(responsibilities_visual, cmap="hot")
-    plt.title("Responsibilities Matrix")
-    plt.axis("off")
+    im = axes[1].imshow(responsibilities_visual, cmap='hot', vmin=0, vmax=1)
+    axes[1].set_title('Responsibilities Matrix')
+    axes[1].axis('off')
 
     # Overlay
-    plt.subplot(1, 3, 3)
-    plt.imshow(overlay, cmap="hot")
-    plt.title("Overlay: MRI + Responsibilities")
-    plt.axis("off")
+    axes[2].imshow(overlay, cmap='hot', vmin=0, vmax=1)
+    axes[2].set_title('Overlay: MRI + Responsibilities')
+    axes[2].axis('off')
+
+    # Add a horizontal colorbar across the bottom
+    cbar = fig.colorbar(im, ax=axes, orientation='horizontal', fraction=0.05, pad=0.08)
+    cbar.set_label('Responsibility Probability', fontsize=12)
 
     # Save the visualization
-    plt.tight_layout()
     plt.savefig(save_path, dpi=300)
     print(f"Visualization saved to {save_path}")
-
-
+    
 if __name__ == "__main__":
     # Argument parser
     parser = argparse.ArgumentParser(

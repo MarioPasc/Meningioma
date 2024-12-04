@@ -41,8 +41,13 @@ function SaveResponsibilities = HDIR_MRI(NoisyImg, SavePath)
     % Compute responsibilities (posterior probabilities)
     [~, Responsibilities] = SimMixGaussUnif(Model, EstimError(:)');
     
-    % Reshape the responsibilities to match the image dimensions
-    SaveResponsibilities = reshape(Responsibilities(1, :), size(NoisyImg));
+    fprintf('Responsibilities pre-reshape size: %s\n', mat2str(size(Responsibilities)));
+    
+    % Extract the impulse noise probabilities (row 2) and reshape
+    SaveResponsibilities = reshape(Responsibilities(2, :), size(NoisyImg));
+    
+    fprintf('Responsibilities post-reshape size: %s\n', mat2str(size(SaveResponsibilities)));
+
 
     % Normalize to ensure values are between [0, 1]
     SaveResponsibilities = min(max(SaveResponsibilities, 0), 1);
