@@ -2,7 +2,7 @@
 
 ## Methodology
 
-To estimate the probability of each pixel in an MRI image being corrupted by impulse noise, the process begins with an initial restoration step. Since the original pixel values $z(x_i)$ are unknown, an estimate $\tilde{z}(x_i)$ is obtained using the **Iteratively Reweighted Norm (IRN)** method. This method minimizes a functional that combines fidelity to the noisy input image and regularization to suppress abrupt changes, which are indicative of noise. The output is a restored image providing predicted pixel values $\tilde{z}(x_i)$, and the errors are approximated as:
+To estimate the probability of each pixel in an MRI image being corrupted by impulse noise, the process begins with an initial restoration step. Since the original pixel values $z(x_i)$ are unknown, an estimate $\tilde{z}(x_i)$ is obtained using the **Iteratively Reweighted Norm (IRN)** method. This method minimizes a functional that combines fidelity to the noisy input image and regularization to suppress abrupt changes, which are indicative of noise (for now, whatever this means, this is the wikipedia explanation). The output is a restored image providing predicted pixel values $\tilde{z}(x_i)$, and the errors are approximated as:
 $$
 \tilde{e}_i = y_i - \tilde{z}(x_i),
 $$
