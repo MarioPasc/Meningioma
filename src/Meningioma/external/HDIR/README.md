@@ -18,6 +18,8 @@ This external component of the **Meningioma** project was originally developed b
   - Adjusted input retrieval (e.g., `wsize`) to use `mwSize` for consistency.
 
 - The `SteeringMatrix.c` script requires the Matlab _Image Processing Toolbox_.
+- When starting matlab, select opengl as the rendering software `/usr/local/MATLAB/R2024b/bin/matlab -softwareopengl`
+- 
 
 ## References
 
