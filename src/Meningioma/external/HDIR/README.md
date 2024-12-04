@@ -12,6 +12,11 @@ This external component of the **Meningioma** project was originally developed b
 /usr/local/MATLAB/R2024b/bin/mex -v -L/usr/lib/x86_64-linux-gnu -lblas -llapack -lf2c -I. SteeringMatrix.c MatesLap.c Debugging.c
 ```
 
+- Updated `SteeringMatrix.c` to ensure compatibility with 64-bit systems. These changes address potential integer size mismatches on 64-bit systems, ensuring proper memory allocation and array indexing:
+  - Replaced `int` with `mwSize` for variables related to array dimensions (`N`, `M`, `radius`, etc.) and loop indices.
+  - Ensured `mwSize` is used for all variables passed to MEX API functions like `mxMalloc`, `mxCreateNumericArray`, and `memcpy`.
+  - Adjusted input retrieval (e.g., `wsize`) to use `mwSize` for consistency.
+
 
 ## References
 
