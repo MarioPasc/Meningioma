@@ -129,10 +129,12 @@ class NRRDToNPZConverter:
             self.log_error(error_message)
 
 
-# Uso de la clase
-base_ds_path = "/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_RM_nrrd"
-output_base_path = os.path.join(base_ds_path, "..", "npz_dataset")
-log_file = os.path.join(output_base_path, "conversion_errors.log")
+def main() -> None:
 
-converter = NRRDToNPZConverter(base_ds_path, output_base_path, log_file)
-converter.convert_all_patients()
+    # Uso de la clase
+    base_ds_path = "/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_RM_nrrd"
+    output_base_path = os.path.join(base_ds_path, "..", "npz_dataset")
+    log_file = os.path.join(output_base_path, "conversion_errors.log")
+
+    converter = NRRDToNPZConverter(base_ds_path, output_base_path, log_file)
+    converter.convert_all_patients()
