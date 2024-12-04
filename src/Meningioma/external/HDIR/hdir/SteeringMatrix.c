@@ -6,6 +6,29 @@
 #include <string.h>
 #include <stdlib.h>
 
+/* 
+
+In order to compile this MEX function, type the following at the MATLAB prompt:
+32-bit Windows:
+mex SteeringMatrix.c MatesLap.c Debugging.c lapack.a blas.a libf2c.a
+64-bit Windows:
+mex LINKFLAGS="$LINKFLAGS /NODEFAULTLIB:LIBCMT" SteeringMatrix.c MatesLap.c Debugging.c clapack_nowrap.lib BLAS_nowrap.lib libf2c.lib
+
+Usage:
+C = SteeringMatrix(GradX, GradY, Resp, wsize, lambda, alpha);
+
+Notes:
+GradX=Gradient in the horizontal direction
+GradY=Gradient in the vertical direction
+Resp=Probability that a given pixel is not impulse corrupted
+wsize=size of local analysis window
+lambda=regularization for the elongation parameter
+alpha=structure sensitive parameter
+C=map of steering matrices
+
+
+*/
+
 /* Extend a 2D matrix (mirror extension at the edges) */
 void Extend(double *Dest, double *Orig, mwSize N, mwSize M, mwSize radius);
 

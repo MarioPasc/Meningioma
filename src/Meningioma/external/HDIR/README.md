@@ -17,6 +17,7 @@ This external component of the **Meningioma** project was originally developed b
   - Ensured `mwSize` is used for all variables passed to MEX API functions like `mxMalloc`, `mxCreateNumericArray`, and `memcpy`.
   - Adjusted input retrieval (e.g., `wsize`) to use `mwSize` for consistency.
 
+- The `SteeringMatrix.c` script requires the Matlab _Image Processing Toolbox_.
 
 ## References
 
