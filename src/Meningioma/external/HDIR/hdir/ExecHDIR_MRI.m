@@ -7,15 +7,19 @@ clc;
 % Load the input image
 fprintf('Loading image from: %s\n', inputImagePath);
 NoisyImg = imread(inputImagePath);
+
+% Debug: Print the image size
 fprintf('Image size: %s\n', mat2str(size(NoisyImg)));
+
+% Ensure the image is grayscale
+if size(NoisyImg, 3) > 1
+    fprintf('Converting image to grayscale...\n');
+    NoisyImg = rgb2gray(NoisyImg);
+end
 
 % Ensure the image is in double format
 NoisyImg = double(NoisyImg);
 
-% Validate the input image is single-channel
-if size(NoisyImg, 3) ~= 1
-    error('Input image must be single-channel (grayscale).');
-end
 
 % Call HDIR_MRI to compute and save the responsibilities matrix
 fprintf('Processing the image to compute responsibilities...\n');
