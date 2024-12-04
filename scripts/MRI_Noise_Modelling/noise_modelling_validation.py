@@ -16,11 +16,10 @@ import subprocess
 import sys
 import importlib.util
 import os
+import logging
 
 # Path to the directory where the built package is located
-MENINGIOMA_PACKAGE_PATH = (
-    "./src/Meningioma/dist/Meningioma-0.1.0-py3-none-any.whl"
-)
+MENINGIOMA_PACKAGE_PATH = "./src/Meningioma/dist/Meningioma-0.1.0-py3-none-any.whl"
 
 
 def is_package_installed(package_name: str) -> bool:
@@ -42,39 +41,32 @@ else:
         [sys.executable, "-m", "pip", "install", MENINGIOMA_PACKAGE_PATH]
     )
 
-# Test importing to ensure installation
-try:
-    # Import the module you need to test from your package
-    from image_processing import ImageProcessing
-    from metrics import Metrics
-    import pandas as pd
-    import numpy as np
-    from typing import List
-    from sklearn.model_selection import train_test_split
-    import logging
-    import time
-    import matplotlib.pyplot as plt
-    import matplotlib.colors as mcolors
-    import scienceplots
 
-    plt.style.use(["science", "ieee", "std-colors"])
-    plt.rcParams["font.size"] = 10
-    plt.rcParams.update({"figure.dpi": "100"})
-    plt.rcParams["axes.spines.top"] = False
-    plt.rcParams["axes.spines.right"] = False
+# Import the module you need to test from your package
+from Meningioma.image_processing import ImageProcessing
+from Meningioma.metrics import Metrics
+import pandas as pd
+import numpy as np
+from typing import List
+from sklearn.model_selection import train_test_split
+import time
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+import scienceplots
 
-    print("Package installed and imported successfully.")
-except ImportError as e:
-    print("Failed to import the package. Check the structure and path.")
-    print(e)
+plt.style.use(["science", "ieee", "std-colors"])
+plt.rcParams["font.size"] = 10
+plt.rcParams.update({"figure.dpi": "100"})
+plt.rcParams["axes.spines.top"] = False
+plt.rcParams["axes.spines.right"] = False
+
+print("Package installed and imported successfully.")
 
 # Configure global variables
 
 # Input paths
 
-DATASET_FOLDER = (
-    "/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_Adquisition"
-)
+DATASET_FOLDER = "/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_Adquisition"
 OUTPUT_FOLDER = "/home/mariopasc/Python/Results/Meningioma/dataset_crafting"
 CSV_PATH = os.path.join(OUTPUT_FOLDER, "noise_modelling_results.csv")
 
@@ -162,7 +154,9 @@ def plot_distributions(patient_ids: List[int], target_pulse: str):
             if pulse != target_pulse:
                 continue  # Skip pulses not specified for plotting
 
-            nrrd_path = f"{DATASET_FOLDER}/RM/{pulse}/P{patient_id}/{pulse}_P{patient_id}.nrrd"
+            nrrd_path = (
+                f"{DATASET_FOLDER}/RM/{pulse}/P{patient_id}/{pulse}_P{patient_id}.nrrd"
+            )
 
             # 1. Load MRI Image
             image_data = ImageProcessing.open_nrrd_file(nrrd_path)
@@ -200,9 +194,7 @@ def plot_distributions(patient_ids: List[int], target_pulse: str):
 
             # Train Parzen-Rosenblatt KDE models with different h values
             kde_models = {
-                h: ImageProcessing.kde(
-                    train_noise_data, h=h, return_x_values=False
-                )
+                h: ImageProcessing.kde(train_noise_data, h=h, return_x_values=False)
                 for h in H_VALUES
             }
 
@@ -225,8 +217,7 @@ def plot_distributions(patient_ids: List[int], target_pulse: str):
 
             # Create Rician models with different sigma values
             rician_models = {
-                sigma: ImageProcessing.rician(x_values, sigma)
-                for sigma in SIGMA_VALUES
+                sigma: ImageProcessing.rician(x_values, sigma) for sigma in SIGMA_VALUES
             }
 
             # Plotting
@@ -269,9 +260,7 @@ def plot_distributions(patient_ids: List[int], target_pulse: str):
 
             # Create colorbars for h and sigma values with the truncated colormaps
             sm_h = plt.cm.ScalarMappable(cmap=truncated_reds, norm=norm_h)
-            sm_sigma = plt.cm.ScalarMappable(
-                cmap=truncated_blues, norm=norm_sigma
-            )
+            sm_sigma = plt.cm.ScalarMappable(cmap=truncated_blues, norm=norm_sigma)
             sm_h.set_array([])
             sm_sigma.set_array([])
             fig.colorbar(
@@ -293,9 +282,7 @@ def plot_distributions(patient_ids: List[int], target_pulse: str):
             test_hist_counts, test_hist_edges = np.histogram(
                 test_noise_data, bins=121, density=True
             )
-            test_hist_centers = (
-                test_hist_edges[:-1] + test_hist_edges[1:]
-            ) / 2
+            test_hist_centers = (test_hist_edges[:-1] + test_hist_edges[1:]) / 2
             ax.plot(
                 test_hist_centers,
                 test_hist_counts,
@@ -370,9 +357,7 @@ def perform_test_normal(patient_ids: List[int]):
                 try:
                     start_time = time.perf_counter()
                     image_data = ImageProcessing.open_nrrd_file(nrrd_path)
-                    transversal_axis = ImageProcessing.get_transversal_axis(
-                        nrrd_path
-                    )
+                    transversal_axis = ImageProcessing.get_transversal_axis(nrrd_path)
                     mid_slice_idx = image_data.shape[transversal_axis] // 2
                     end_time = time.perf_counter()
                     elapsed_time = end_time - start_time
@@ -480,10 +465,8 @@ def perform_test_normal(patient_ids: List[int]):
                         mask = ImageProcessing.segment_intracraneal_region(img)
                         filled_mask = ImageProcessing.fill_mask(mask)
                         bbox = ImageProcessing.find_largest_bbox(filled_mask)
-                        noise_values = (
-                            ImageProcessing.extract_noise_outside_bbox(
-                                img, bbox, filled_mask
-                            )
+                        noise_values = ImageProcessing.extract_noise_outside_bbox(
+                            img, bbox, filled_mask
                         )
                         train_noise_data.extend(noise_values)
                     train_noise_data = np.array(train_noise_data)
@@ -515,10 +498,8 @@ def perform_test_normal(patient_ids: List[int]):
                         mask = ImageProcessing.segment_intracraneal_region(img)
                         filled_mask = ImageProcessing.fill_mask(mask)
                         bbox = ImageProcessing.find_largest_bbox(filled_mask)
-                        noise_values = (
-                            ImageProcessing.extract_noise_outside_bbox(
-                                img, bbox, filled_mask
-                            )
+                        noise_values = ImageProcessing.extract_noise_outside_bbox(
+                            img, bbox, filled_mask
                         )
                         test_noise_data.extend(noise_values)
                     test_noise_data = np.array(test_noise_data)
@@ -607,12 +588,10 @@ def perform_test_normal(patient_ids: List[int]):
                 try:
                     start_time = time.perf_counter()
                     for h, kde_pdf in kde_models.items():
-                        bhattacharyya_distance = (
-                            Metrics.compute_bhattacharyya_distance(
-                                noise_values=test_noise_data,
-                                reference_pdf=kde_pdf,
-                                x_values=x_values,
-                            )
+                        bhattacharyya_distance = Metrics.compute_bhattacharyya_distance(
+                            noise_values=test_noise_data,
+                            reference_pdf=kde_pdf,
+                            x_values=x_values,
                         )
                         kl_divergence = Metrics.compute_kl_divergence(
                             noise_values=test_noise_data,
@@ -654,12 +633,10 @@ def perform_test_normal(patient_ids: List[int]):
                 try:
                     start_time = time.perf_counter()
                     for sigma, rician_pdf in rician_models.items():
-                        bhattacharyya_distance = (
-                            Metrics.compute_bhattacharyya_distance(
-                                noise_values=test_noise_data,
-                                reference_pdf=rician_pdf,
-                                x_values=x_values,
-                            )
+                        bhattacharyya_distance = Metrics.compute_bhattacharyya_distance(
+                            noise_values=test_noise_data,
+                            reference_pdf=rician_pdf,
+                            x_values=x_values,
                         )
                         kl_divergence = Metrics.compute_kl_divergence(
                             noise_values=test_noise_data,
@@ -763,9 +740,7 @@ def perform_test(patient_ids: List[int]):
                 try:
                     start_time = time.perf_counter()
                     image_data = ImageProcessing.open_nrrd_file(nrrd_path)
-                    transversal_axis = ImageProcessing.get_transversal_axis(
-                        nrrd_path
-                    )
+                    transversal_axis = ImageProcessing.get_transversal_axis(nrrd_path)
                     mid_slice_idx = image_data.shape[transversal_axis] // 2
                     elapsed_time = time.perf_counter() - start_time
                     logging.info(
@@ -830,10 +805,8 @@ def perform_test(patient_ids: List[int]):
                         mask = ImageProcessing.segment_intracraneal_region(img)
                         filled_mask = ImageProcessing.fill_mask(mask)
                         bbox = ImageProcessing.find_largest_bbox(filled_mask)
-                        noise_values = (
-                            ImageProcessing.extract_noise_outside_bbox(
-                                img, bbox, filled_mask
-                            )
+                        noise_values = ImageProcessing.extract_noise_outside_bbox(
+                            img, bbox, filled_mask
                         )
                         train_noise_data.extend(noise_values)
                     train_noise_data = np.array(train_noise_data)
@@ -855,10 +828,8 @@ def perform_test(patient_ids: List[int]):
                         mask = ImageProcessing.segment_intracraneal_region(img)
                         filled_mask = ImageProcessing.fill_mask(mask)
                         bbox = ImageProcessing.find_largest_bbox(filled_mask)
-                        noise_values = (
-                            ImageProcessing.extract_noise_outside_bbox(
-                                img, bbox, filled_mask
-                            )
+                        noise_values = ImageProcessing.extract_noise_outside_bbox(
+                            img, bbox, filled_mask
                         )
                         test_noise_data.extend(noise_values)
                     test_noise_data = np.array(test_noise_data)
@@ -933,10 +904,7 @@ def perform_test(patient_ids: List[int]):
                     )
                     np.savez(
                         f"{save_folder}/rician_models.npz",
-                        **{
-                            str(sigma): model
-                            for sigma, model in rician_models.items()
-                        },
+                        **{str(sigma): model for sigma, model in rician_models.items()},
                     )
                     logging.info(
                         f"Data successfully saved for Patient {patient_id} and Pulse {pulse}"

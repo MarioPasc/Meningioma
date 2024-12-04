@@ -176,7 +176,7 @@ class ImageProcessing:
     @staticmethod
     def extract_transversal_slice(
         image_data: np.ndarray,
-        transversal_axis: int,
+        transversal_axis: np.intp,
         slice_index: int = -1,
     ) -> np.ndarray:
         """
