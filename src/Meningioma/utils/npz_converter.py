@@ -1,140 +1,101 @@
 import os
-import numpy as np
 import nrrd  # type: ignore
-from typing import Tuple
+import numpy as np
+from numpy.typing import NDArray
+from typing import List, Tuple
+from Meningioma.image_processing.nrrd_processing import transversal_axis
+
+# Global variable for pulse types
+PULSE_TYPES: List[str] = ["SUSC", "T1", "T2", "T1SIN"]
 
 
-class NRRDToNPZConverter:
-    def __init__(self, base_ds_path: str, output_base_path: str, log_file: str):
-        self.base_ds_path = base_ds_path
-        self.output_base_path = output_base_path
-        self.log_file = log_file
+def reorder_to_transversal(
+    image_data: NDArray[np.float64], mask_data: NDArray[np.float64], nrrd_path: str
+) -> Tuple[NDArray[np.float64], NDArray[np.float64]]:
+    """
+    Reorders the image and mask data to ensure the transversal axis is in the last position.
 
-    def load_nrrd_files(self, path: str) -> np.ndarray:
-        try:
-            data, header = nrrd.read(path)
-            return data
-        except Exception as e:
-            raise IOError(f"Error loading NRRD file {path}: {e}")
+    Args:
+        image_data (NDArray[np.float64]): The image data array.
+        mask_data (NDArray[np.float64]): The mask data array.
+        nrrd_path (str): Path to the NRRD file for determining the transversal axis.
 
-    def reorganize_axes(
-        self, images: np.ndarray, masks: np.ndarray
-    ) -> Tuple[np.ndarray, np.ndarray]:
-        try:
-            images_reordered = np.transpose(images, (2, 1, 0))
-            masks_reordered = np.transpose(masks, (2, 1, 0))
-            return images_reordered, masks_reordered
-        except Exception as e:
-            raise ValueError(f"Error reorganizing axes: {e}")
-
-    def combine_images_and_masks(
-        self, images: np.ndarray, masks: np.ndarray
-    ) -> np.ndarray:
-        try:
-            combined = np.stack((images, masks), axis=-1)
-            return combined
-        except Exception as e:
-            raise ValueError(f"Error combining images and masks: {e}")
-
-    def save_to_npz(
-        self, combined: np.ndarray, patient_id: str, sequence_type: str
-    ) -> None:
-        try:
-            output_path = os.path.join(self.output_base_path, sequence_type)
-            os.makedirs(output_path, exist_ok=True)
-            npz_filename = f"{patient_id}_{sequence_type}.npz"
-            np.savez(os.path.join(output_path, npz_filename), combined)
-            print(f"Saved: {os.path.join(output_path, npz_filename)}")
-        except Exception as e:
-            raise IOError(
-                f"Error saving NPZ file for patient {patient_id}, sequence {sequence_type}: {e}"
-            )
-
-    def log_error(self, message: str) -> None:
-        with open(self.log_file, "a") as log:
-            log.write(message + "\n")
-
-    def convert_patient_data(self, patient_id: str) -> None:
-        try:
-            patient_path = os.path.join(self.base_ds_path, patient_id, "RM")
-            sequences = [
-                os.path.join(patient_path, seq)
-                for seq in os.listdir(patient_path)
-                if os.path.isdir(os.path.join(patient_path, seq))
-            ]
-
-            for seq in sequences:
-                sequence_type = os.path.basename(seq)
-                try:
-                    nrrd_files = [
-                        os.path.join(seq, file)
-                        for file in os.listdir(seq)
-                        if file.endswith(".nrrd")
-                    ]
-                    image_path = [
-                        file
-                        for file in nrrd_files
-                        if os.path.basename(file) != "Segmentation.nrrd"
-                    ][0]
-                    mask_path = [
-                        file
-                        for file in nrrd_files
-                        if os.path.basename(file) == "Segmentation.nrrd"
-                    ][0]
-
-                    images = self.load_nrrd_files(image_path)
-                    masks = self.load_nrrd_files(mask_path)
-
-                    print(f"Sequence: {sequence_type}")
-                    print(f"Original image shape: {images.shape}")
-                    print(f"Original mask shape: {masks.shape}")
-
-                    images_reordered, masks_reordered = self.reorganize_axes(
-                        images, masks
-                    )
-
-                    print(f"Reorganized image shape: {images_reordered.shape}")
-                    print(f"Reorganized mask shape: {masks_reordered.shape}")
-
-                    if images_reordered.shape != masks_reordered.shape:
-                        raise ValueError(
-                            f"Shapes do not match for patient {patient_id}, sequence {sequence_type}"
-                        )
-
-                    combined = self.combine_images_and_masks(
-                        images_reordered, masks_reordered
-                    )
-                    self.save_to_npz(combined, patient_id, sequence_type)
-                except Exception as e:
-                    error_message = f"Error converting data for patient {patient_id}, sequence {sequence_type}: {e}"
-                    print(error_message)
-                    self.log_error(error_message)
-        except Exception as e:
-            error_message = f"Error converting data for patient {patient_id}: {e}"
-            print(error_message)
-            self.log_error(error_message)
-
-    def convert_all_patients(self) -> None:
-        try:
-            patients = [
-                d
-                for d in os.listdir(self.base_ds_path)
-                if os.path.isdir(os.path.join(self.base_ds_path, d))
-            ]
-            for patient_id in patients:
-                self.convert_patient_data(patient_id)
-        except Exception as e:
-            error_message = f"Error converting all patients: {e}"
-            print(error_message)
-            self.log_error(error_message)
+    Returns:
+        Tuple[NDArray[np.float64], NDArray[np.float64]]: Reordered image and mask data arrays.
+    """
+    axis: np.intp = transversal_axis(nrrd_path)
+    if axis != image_data.ndim - 1:
+        image_data = np.moveaxis(image_data, axis, -1)
+        mask_data = np.moveaxis(mask_data, axis, -1)
+    return image_data, mask_data
 
 
-def main() -> None:
+def convert_to_npz(base_path: str, output_path: str, pulse: str, patient: str) -> None:
+    """
+    Converts a patient-pulse pair from NRRD files to NPZ format.
 
-    # Uso de la clase
-    base_ds_path = "/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_RM_nrrd"
-    output_base_path = os.path.join(base_ds_path, "..", "npz_dataset")
-    log_file = os.path.join(output_base_path, "conversion_errors.log")
+    Args:
+        base_path (str): Base path to the dataset directory.
+        output_path (str): Path to save the NPZ files.
+        pulse (str): Pulse type of the patient.
+        patient (str): Patient identifier.
 
-    converter = NRRDToNPZConverter(base_ds_path, output_base_path, log_file)
-    converter.convert_all_patients()
+    Returns:
+        None
+    """
+    patient_path: str = os.path.join(base_path, "RM", pulse, patient)
+    img_file: str = os.path.join(patient_path, f"{pulse}_{patient}.nrrd")
+    mask_file: str = os.path.join(patient_path, f"{pulse}_{patient}_seg.nrrd")
+
+    if not os.path.exists(img_file) or not os.path.exists(mask_file):
+        print(f"Skipping: Missing files for {patient} with pulse {pulse}")
+        return
+
+    try:
+        img_data: NDArray[np.float64]
+        mask_data: NDArray[np.float64]
+        img_data, _ = nrrd.read(img_file)
+        mask_data, _ = nrrd.read(mask_file)
+        img_data, mask_data = reorder_to_transversal(img_data, mask_data, img_file)
+        stacked_data: NDArray[np.float64] = np.stack([img_data, mask_data], axis=0)
+
+        patient_output_dir: str = os.path.join(output_path, patient)
+        os.makedirs(patient_output_dir, exist_ok=True)
+        output_file: str = os.path.join(patient_output_dir, f"{patient}_{pulse}.npz")
+        np.savez_compressed(output_file, data=stacked_data)
+        print(f"Converted: {output_file}")
+    except Exception as e:
+        print(f"Error processing {patient} with pulse {pulse}: {e}")
+
+
+# Example usage
+if __name__ == "__main__":
+    patient: str = "P4"
+
+    convert_to_npz(
+        base_path="/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_Adquisition",
+        output_path="/home/mariopasc/Python/Datasets/Meningiomas/outputNPZ",
+        patient=patient,
+        pulse="T1",
+    )
+
+    convert_to_npz(
+        base_path="/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_Adquisition",
+        output_path="/home/mariopasc/Python/Datasets/Meningiomas/outputNPZ",
+        patient=patient,
+        pulse="T1SIN",
+    )
+
+    convert_to_npz(
+        base_path="/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_Adquisition",
+        output_path="/home/mariopasc/Python/Datasets/Meningiomas/outputNPZ",
+        patient=patient,
+        pulse="T2",
+    )
+
+    convert_to_npz(
+        base_path="/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_Adquisition",
+        output_path="/home/mariopasc/Python/Datasets/Meningiomas/outputNPZ",
+        patient=patient,
+        pulse="SUSC",
+    )

@@ -18,6 +18,6 @@ echo "======================"
 echo "Running Python program"
 echo "======================"
 
-python3 $scriptspath/visualize_mri.py --image $INPUT_IMAGE_PATH --matfile $OUTPUT_MATRIX_PATH --output $scriptspath/visualization.png
+python3 $scriptspath/visualize_mri.py --image $INPUT_IMAGE_PATH --matfile $OUTPUT_MATRIX_PATH --output $scriptspath/visualization_responsibilities.png
 
 echo "======================"
