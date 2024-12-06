@@ -7,6 +7,7 @@ from .noise_modelling import (
     get_largest_bbox,
     get_noise_outside_bbox,
     get_rician,
+    get_preprocess_slice_with_thresholding,
 )
 import numpy as np
 from numpy.typing import NDArray
@@ -17,7 +18,7 @@ from typing import Tuple, Optional, Union, Dict, List
 class ImageProcessing:
 
     @staticmethod
-    def segment_intracraneal_region(
+    def segment_by_histogram(
         image: np.ndarray, method: str = "li", threshold: float = -1
     ):
         """
@@ -33,6 +34,26 @@ class ImageProcessing:
             np.ndarray: Mask where background is 0 and intracranial region is 1.
         """
         return get_detected_mri_image(image=image, method=method, threshold=threshold)
+
+    @staticmethod
+    def preprocess_slice_with_thresholding(
+        slice_data: NDArray[np.float64], w: int, thresholding_method: str = "li"
+    ) -> Tuple[NDArray[np.uint8], NDArray[np.float64]]:
+        """
+        Applies mean filtering and binarizes the image using a specified thresholding method.
+
+        Args:
+            slice_data (NDArray[np.float64]): The original MRI slice.
+            w (int): Neighborhood size for the mean filter.
+            thresholding_method (str): The thresholding method to apply ('otsu', 'li', 'weighted_mean', 'manual').
+
+        Returns:
+            Tuple[NDArray[np.bool_], NDArray[np.float64]]: A tuple containing the binarized image
+            and the mean-filtered image.
+        """
+        return get_preprocess_slice_with_thresholding(
+            slice_data=slice_data, w=w, thresholding_method=thresholding_method
+        )
 
     @staticmethod
     def fill_mask(

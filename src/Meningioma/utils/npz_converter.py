@@ -68,34 +68,41 @@ def convert_to_npz(base_path: str, output_path: str, pulse: str, patient: str) -
         print(f"Error processing {patient} with pulse {pulse}: {e}")
 
 
-# Example usage
-if __name__ == "__main__":
-    patient: str = "P4"
+def load_mri_slice(
+    filepath: str, slice_index: int, mask: bool = False
+) -> NDArray[np.float64]:
+    """
+    Loads a specific slice from an MRI .npz file. If slice_index is -1, loads the middle slice.
 
-    convert_to_npz(
-        base_path="/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_Adquisition",
-        output_path="/home/mariopasc/Python/Datasets/Meningiomas/outputNPZ",
-        patient=patient,
-        pulse="T1",
-    )
+    Args:
+        filepath (str): Path to the .npz file containing the MRI data.
+        slice_index (int): Index of the desired slice. If -1, the middle slice is selected.
+        mask (bool): If True, load the mask data. If False, load the raw MRI data.
 
-    convert_to_npz(
-        base_path="/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_Adquisition",
-        output_path="/home/mariopasc/Python/Datasets/Meningiomas/outputNPZ",
-        patient=patient,
-        pulse="T1SIN",
-    )
+    Returns:
+        NDArray[np.float64]: The selected slice as a 2D NumPy array.
+    """
+    try:
+        data = np.load(filepath)
 
-    convert_to_npz(
-        base_path="/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_Adquisition",
-        output_path="/home/mariopasc/Python/Datasets/Meningiomas/outputNPZ",
-        patient=patient,
-        pulse="T2",
-    )
+        # Determine which part of the data to load (mask or raw image)
+        mri_data = data["data"][1] if mask else data["data"][0]
 
-    convert_to_npz(
-        base_path="/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_Adquisition",
-        output_path="/home/mariopasc/Python/Datasets/Meningiomas/outputNPZ",
-        patient=patient,
-        pulse="SUSC",
-    )
+        # If slice_index is -1, select the middle slice
+        if slice_index == -1:
+            slice_index = mri_data.shape[-1] // 2
+
+        # Extract the desired slice
+        slice_data = np.squeeze(mri_data[:, :, slice_index])
+
+        return slice_data
+    except FileNotFoundError:
+        raise FileNotFoundError(f"File not found: {filepath}")
+    except KeyError:
+        raise KeyError("The .npz file must contain a 'data' array.")
+    except IndexError:
+        raise IndexError(
+            f"Slice index {slice_index} is out of bounds for the provided data."
+        )
+    except Exception as e:
+        raise RuntimeError(f"Unexpected error while loading the file: {e}")

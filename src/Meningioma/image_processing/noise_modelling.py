@@ -7,6 +7,10 @@ from typing import Tuple, List, Union
 from numpy.typing import NDArray
 from typing import Any
 
+# This part of the module is made to process the images,
+# general-pourpose tools like segmenting the image with histogram techniques,
+# extracting a portion of the image that belongs to the largest bbox, etc...
+
 
 def get_detected_mri_image(
     image: NDArray[np.float32], method: str = "li", threshold: float = 0.0
@@ -14,8 +18,7 @@ def get_detected_mri_image(
     ...
 
     """
-    Segment an MRI image to separate the background from the cranial and
-    intracranial regions.
+    Segment an MRI image to segment the image based on the histogram
 
     Args:
         image (np.ndarray): MRI image to segment.
@@ -58,10 +61,44 @@ def get_detected_mri_image(
     # Create mask where values less than or equal to the threshold are considered background
     background_mask = image <= threshold
 
-    # Invert the mask so that 0 is background and 1 is intracranial region
+    # Invert the mask so that 0 is background
     intracranial_mask = ~background_mask
 
     return intracranial_mask
+
+
+def get_preprocess_slice_with_thresholding(
+    slice_data: NDArray[np.float64], w: int, thresholding_method: str = "li"
+) -> Tuple[NDArray[np.uint8], NDArray[np.float64]]:
+    """
+    Applies mean filtering and binarizes the image using a specified thresholding method.
+
+    Args:
+        slice_data (NDArray[np.float64]): The original MRI slice.
+        w (int): Neighborhood size for the mean filter.
+        thresholding_method (str): The thresholding method to apply ('otsu', 'li', 'weighted_mean', 'manual').
+
+    Returns:
+        Tuple[NDArray[np.uint8], NDArray[np.float64]]: A tuple containing the binarized image
+        and the mean-filtered image.
+    """
+    try:
+        # Apply a mean filter
+        mean_filtered = ndimage.uniform_filter(
+            slice_data, size=w
+        ) + 0.0001 * np.random.normal(size=slice_data.shape)
+
+        # Binarize using the thresholding function
+        binarized_mask = get_detected_mri_image(
+            mean_filtered, method=thresholding_method
+        )
+
+        # Convert boolean mask to uint8
+        binarized_image = binarized_mask.astype(np.uint8)
+
+        return binarized_image, mean_filtered
+    except Exception as e:
+        raise RuntimeError(f"Error during preprocessing with thresholding: {e}")
 
 
 def get_filled_mask(
@@ -163,6 +200,9 @@ def get_noise_outside_bbox(
     # Extract noise values from the image that are outside the bounding box
     noise_values: NDArray[np.float64] = image[outside_bbox_mask]
     return noise_values
+
+
+# Here we are defining some noise models
 
 
 def get_kde(
