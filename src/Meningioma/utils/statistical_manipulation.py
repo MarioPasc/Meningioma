@@ -105,27 +105,35 @@ class Stats:
             pad_width = z // 2
             binary_padded = np.pad(binarized_image, pad_width, constant_values=0)
             joint_frequencies = np.zeros((n, m, 4), dtype=np.float64)
+            binary_padded_rolled = np.roll(binary_padded, 1, axis=0)
 
+            # Fill the 3D ndarray
             for i in range(n):
                 for j in range(m):
+                    # Define z x z neighborhood
                     i_start, i_end = i, i + z
                     j_start, j_end = j, j + z
                     neighborhood = binary_padded[i_start:i_end, j_start:j_end]
-                    central_value = binarized_image[i, j]
 
+                    # Original pixel values
+                    # pixel_value = binarized_image[i, j]
+                    pixel_value = binary_padded_rolled[i_start:i_end, j_start:j_end]
+
+                    # Calculate counts
                     joint_frequencies[i, j, 0] = np.sum(
-                        (neighborhood == 0) & (central_value == 0)
+                        (neighborhood == 0) & (pixel_value == 0)
                     )
                     joint_frequencies[i, j, 1] = np.sum(
-                        (neighborhood == 1) & (central_value == 0)
+                        (neighborhood == 1) & (pixel_value == 0)
                     )
                     joint_frequencies[i, j, 2] = np.sum(
-                        (neighborhood == 0) & (central_value == 1)
+                        (neighborhood == 0) & (pixel_value == 1)
                     )
                     joint_frequencies[i, j, 3] = np.sum(
-                        (neighborhood == 1) & (central_value == 1)
+                        (neighborhood == 1) & (pixel_value == 1)
                     )
 
+            # Normalize the probabilities
             joint_frequencies /= z * z
             return joint_frequencies
         except Exception as e:

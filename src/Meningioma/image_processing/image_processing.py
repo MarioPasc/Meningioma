@@ -1,13 +1,16 @@
 from .interpolation import resize, InterpolationMethod
 from .nrrd_processing import open_nrrd, transversal_axis
 from .noise_modelling import (
-    get_detected_mri_image,
-    get_filled_mask,
     get_kde,
-    get_largest_bbox,
     get_noise_outside_bbox,
     get_rician,
-    get_preprocess_slice_with_thresholding,
+)
+from .segmentation import (
+    apply_active_contours,
+    get_global_umbralization,
+    get_local_umbralization,
+    get_largest_bbox,
+    get_filled_mask,
 )
 import numpy as np
 from numpy.typing import NDArray
@@ -18,7 +21,7 @@ from typing import Tuple, Optional, Union, Dict, List
 class ImageProcessing:
 
     @staticmethod
-    def segment_by_histogram(
+    def global_histogram_segmentation(
         image: np.ndarray, method: str = "li", threshold: float = -1
     ):
         """
@@ -33,10 +36,10 @@ class ImageProcessing:
         Returns:
             np.ndarray: Mask where background is 0 and intracranial region is 1.
         """
-        return get_detected_mri_image(image=image, method=method, threshold=threshold)
+        return get_global_umbralization(image=image, method=method, threshold=threshold)
 
     @staticmethod
-    def preprocess_slice_with_thresholding(
+    def local_histogram_segmentation(
         slice_data: NDArray[np.float64], w: int, thresholding_method: str = "li"
     ) -> Tuple[NDArray[np.uint8], NDArray[np.float64]]:
         """
@@ -51,7 +54,7 @@ class ImageProcessing:
             Tuple[NDArray[np.bool_], NDArray[np.float64]]: A tuple containing the binarized image
             and the mean-filtered image.
         """
-        return get_preprocess_slice_with_thresholding(
+        return get_local_umbralization(
             slice_data=slice_data, w=w, thresholding_method=thresholding_method
         )
 
@@ -97,6 +100,38 @@ class ImageProcessing:
         """
 
         return get_largest_bbox(mask=mask, extra_margin=extra_margin)
+
+    @staticmethod
+    def active_contours(
+        image: NDArray[np.float64],
+        bounding_box: Tuple[int, int, int, int],
+        alpha: float = 0.015,
+        beta: float = 10,
+        gamma: float = 0.001,
+        iterations: int = 250,
+    ) -> NDArray[np.bool_]:
+        """
+        Applies the Active Contours algorithm to segment a region within the largest bounding box.
+
+        Args:
+            image (np.ndarray): Original MRI image.
+            bounding_box (Tuple[int, int, int, int]): Coordinates of the bounding box (min_row, min_col, max_row, max_col).
+            alpha (float): Snake smoothness parameter. Higher values mean smoother contours.
+            beta (float): Snake elasticity parameter.
+            gamma (float): Time step for the snake movement.
+            iterations (int): Number of iterations for the Active Contours algorithm.
+
+        Returns:
+            np.ndarray: Refined binary mask of the segmented region.
+        """
+        return apply_active_contours(
+            image=image,
+            bounding_box=bounding_box,
+            alpha=alpha,
+            beta=beta,
+            gamma=gamma,
+            iterations=iterations,
+        )
 
     @staticmethod
     def extract_noise_outside_bbox(
