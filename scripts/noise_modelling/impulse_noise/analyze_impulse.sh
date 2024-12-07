@@ -1,6 +1,6 @@
 #!/bin/bash
 
-scriptspath="scripts/MRI_Noise_Modelling/"
+scriptspath="scripts/noise_modelling/impulse_noise"
 
 # Set paths
 export INPUT_IMAGE_PATH="$scriptspath/input_mri_image.png"

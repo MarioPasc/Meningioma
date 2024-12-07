@@ -201,7 +201,7 @@ def plot_distributions(patient_ids: List[int], target_pulse: str):
             # Testing Phase: Collect noise data from all test slices
             test_noise_data = []
             for img in test_slices:
-                mask = ImageProcessing.segment_intracraneal_region(img)
+                mask = ImageProcessing.global_histogram_segmentation(img)
                 filled_mask = ImageProcessing.fill_mask(mask)
                 bbox = ImageProcessing.find_largest_bbox(filled_mask)
                 noise_values = ImageProcessing.extract_noise_outside_bbox(

@@ -150,11 +150,11 @@ if __name__ == "__main__":
         "/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_Adquisition"
     )
     output_npz_path: str = "/home/mariopasc/Python/Datasets/Meningiomas/npz"
-    save_path: str = "./scripts/MRI_Noise_Modelling/tune_wz.pdf"
+    save_path: str = "./scripts/noise_modelling/mutual_information/tune_wz.pdf"
 
-    patient: str = "P24"
-    pulse: str = "SUSC"
-    slice_index: int = -1  # Middle slice
+    patient: str = "P15"
+    pulse: str = "T1"
+    slice_index: int = 30  # Middle slice
     thresholding_method: str = "mean_filter"
 
     # Convert data to NPZ format
