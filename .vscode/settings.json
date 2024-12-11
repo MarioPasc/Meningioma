@@ -47,7 +47,7 @@
         "source.organizeImports": "explicit"
     },
     "python.analysis.autoImportCompletions": true, // Enable auto-import suggestions
-    "python.analysis.typeCheckingMode": "standard", // Strict type checking
+    "python.analysis.typeCheckingMode": "off", // Strict type checking
     "python.analysis.autoSearchPaths": true,
     "python.analysis.useLibraryCodeForTypes": true,
 }

@@ -4,7 +4,7 @@ from numpy.typing import NDArray
 
 import numpy as np
 from sklearn.cluster import DBSCAN  # type: ignore
-from scipy.stats import gaussian_kde
+from scipy.stats import gaussian_kde  # type: ignore
 
 from Meningioma.image_processing import ImageProcessing  # type: ignore
 from Meningioma.utils import Stats, npz_converter  # type: ignore
