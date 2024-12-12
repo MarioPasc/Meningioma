@@ -1,9 +1,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from gstools import vario_estimate_unstructured, TPLExponential, SRF
-from gstools.covmodel.plot import plot_variogram
+from gstools import vario_estimate_unstructured, TPLExponential, SRF # type : ignore
+from gstools.covmodel.plot import plot_variogram # type : ignore
 from typing import Tuple
-from Meningioma.utils import npz_converter
+from Meningioma.utils import npz_converter # type : ignore
 import os
 
 
@@ -24,34 +24,31 @@ def load_data(file_path: str, slice_index: int) -> np.ndarray:
         A 2D numpy array representing the selected MRI slice (magnitude data).
     """
     data = np.load(file_path)
-    # Adjust these indices as needed to match the data dimensions.
-    slice_data = np.squeeze(data["data"][0, 0:127, 0:127, slice_index])
+    # Extract the entire spatial region (all x and y coordinates)
+    slice_data = np.squeeze(data["data"][0, :, :, slice_index])
     return slice_data
 
 
-def create_phase_data(n: int, m: int, spatial_extent: float = 5.0) -> np.ndarray:
+def extract_phase_from_kspace(image: np.ndarray) -> np.ndarray:
     """
-    Create a phase field based on radial distance from the center.
-
+    Approximate k-space from an image and extract the phase data.
+    
     Parameters
     ----------
-    n : int
-        Width of the image.
-    m : int
-        Height of the image.
-    spatial_extent : float
-        Defines the coordinate range from -spatial_extent to +spatial_extent.
-
+    image : np.ndarray
+        Input MRI image data (2D numpy array).
+        
     Returns
     -------
     np.ndarray
-        Phase data as a 2D numpy array.
+        Phase data extracted from the approximated k-space.
     """
-    x = np.linspace(-spatial_extent, spatial_extent, n)
-    y = np.linspace(-spatial_extent, spatial_extent, m)
-    xx, yy = np.meshgrid(x, y)
-    phase_data = np.sqrt(xx**2 + yy**2)
-    return phase_data
+    # Compute 2D FFT and shift to center the k-space
+    k_space = np.fft.fftshift(np.fft.fft2(image))
+    # Extract phase data
+    phase = np.angle(k_space)
+    return phase
+
 
 
 def to_real_imag(
@@ -213,22 +210,22 @@ def main():
     """
     # 2. Define the file path
     filepath = os.path.join(output_npz_path, patient, f"{patient}_{pulse}.npz")
-    print(filepath)
     # 3. Load MRI Slice
     slice_data = load_data(file_path=filepath, slice_index=slice_index)
-
+    slice_data = np.squeeze(slice_data)
     # Tunable hyperparameters
     spatial_extent = 5.0  # Coordinate range for phase field
-    variogram_bins = np.linspace(0, 10, 50)  # Distance bins for variogram
+    variogram_bins = np.linspace(0, 50, 50)  # Limit to 50 pixels distance
     variogram_sampling_size = 2000  # How many pairs to sample
     variogram_sampling_seed = 19920516
     covariance_var = 1.0  # Initial variance for the fitted model
-    covariance_len_scale = 10.0  # Length scale for covariance model
+    covariance_len_scale = 20.0  # Length scale for covariance model
 
     n, m = slice_data.shape
 
-    # Create a phase field
-    phase_data = create_phase_data(n, m, spatial_extent=spatial_extent)
+    # Extract phase from approximated k-space
+    phase_data = extract_phase_from_kspace(slice_data)
+
 
     # Convert to complex data
     slice_data_real, slice_data_imag = to_real_imag(slice_data, phase_data)
@@ -246,7 +243,7 @@ def main():
         bin_center=bin_center,
         gamma=gamma,
         model_type="TPLExponential",
-        var=covariance_var,
+        var=np.var(slice_data_real),
         len_scale=covariance_len_scale,
         nugget=True,
     )
@@ -308,6 +305,7 @@ def main():
     plt.colorbar(label="Intensity")
 
     plt.tight_layout()
+    plt.savefig("./markov.svg")
     plt.show()
 
 
