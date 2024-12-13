@@ -195,8 +195,8 @@ def generate_random_fields(
 
 def main():
     # Example Input Paths and Parameters
-    base_path = "/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_Adquisition"
-    output_npz_path = "/home/mariopasc/Python/Datasets/Meningiomas/npz"
+    base_path = "/home/mario/Python/Datasets/Meningiomas/Meningioma_Adquisition"
+    output_npz_path = "/home/mario/Python/Datasets/Meningiomas/npz"
 
     slice_index = 18
     patient = "P15"
@@ -215,7 +215,7 @@ def main():
     slice_data = np.squeeze(slice_data)
     # Tunable hyperparameters
     spatial_extent = 5.0  # Coordinate range for phase field
-    variogram_bins = np.linspace(0, 50, 50)  # Limit to 50 pixels distance
+    variogram_bins = np.linspace(0, 100, 100)  # Limit to 50 pixels distance
     variogram_sampling_size = 2000  # How many pairs to sample
     variogram_sampling_seed = 19920516
     covariance_var = 1.0  # Initial variance for the fitted model
