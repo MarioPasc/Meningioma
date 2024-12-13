@@ -23,7 +23,7 @@ class ImageProcessing:
     @staticmethod
     def global_histogram_segmentation(
         image: np.ndarray, method: str = "li", threshold: float = -1
-    ):
+    ) -> Tuple[NDArray[np.bool_], float]:
         """
         Segment an MRI image to separate the background from the cranial and intracranial regions.
 

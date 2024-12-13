@@ -11,7 +11,7 @@ from typing import Tuple
 
 def get_global_umbralization(
     image: NDArray[np.float32], method: str = "li", threshold: float = 0.0
-) -> NDArray[np.bool_]:
+) -> Tuple[NDArray[np.bool_], float]:
     ...
 
     """
@@ -61,7 +61,7 @@ def get_global_umbralization(
     # Invert the mask so that 0 is background
     intracranial_mask = ~background_mask
 
-    return intracranial_mask
+    return intracranial_mask, threshold
 
 
 def get_local_umbralization(
