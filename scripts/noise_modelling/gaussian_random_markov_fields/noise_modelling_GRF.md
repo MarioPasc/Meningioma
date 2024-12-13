@@ -32,3 +32,11 @@ $$
 |N| = \sqrt{N_{\text{real}}^2 + N_{\text{imag}}^2}.
 $$
 This formulation ensures that the resulting noise behaves like a **Rician distribution**, which naturally characterizes MRI background noise. 
+
+# Notas:
+
+- Quitar el cerebro y usar solo ruido de fondo
+- Validar la estimación de la fase mediante la FFT de la imagen completa
+- Comparar resultados con una fase de la FFT total de la imagen y un parche. 
+- Comprobar las direcciones del ruido anisotrópico
+- Comprobar la generación de ruido tridimensional
