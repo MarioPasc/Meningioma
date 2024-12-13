@@ -1,9 +1,10 @@
 [build-system]
 build-backend = "setuptools.build_meta"
-requires = ["setuptools", "wheel"] # Specify build requirements
+requires = ["setuptools", "wheel"]
 
 [project]
-authors = [{name = "Mario Pascual Gonzalez", email = "mario.pg02@gmail.com"}]
+authors = [{ name = "Mario Pascual Gonzalez", email = "mario.pg02@gmail.com" }]
+requires-python = ">=3.9"
 classifiers = [
   "Programming Language :: Python :: 3",
   "License :: OSI Approved :: MIT License",
@@ -25,17 +26,20 @@ dependencies = [
 ]
 description = "A Python library that contains all the functions used to perform experiments on neuroimaging data and generate a Meningioma dataset."
 keywords = ["neuroimaging", "deep learning", "bioinformatics"]
-license = {file = "LICENSE"}
+license = { file = "LICENSE" }
 name = "Meningioma"
 readme = "README.md"
 version = "0.1.0"
+
+[project.urls]
+"Repository" = "https://github.com/MarioPasc/Meningioma"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.black]
-line-length = 88
-[tool.mypy.overrides]
+[tool.isort]
+line_length = 88
 
 [tool.mypy]
 ignore_missing_imports = true
