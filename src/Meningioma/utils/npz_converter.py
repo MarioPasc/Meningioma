@@ -48,7 +48,9 @@ def convert_to_npz(base_path: str, output_path: str, pulse: str, patient: str) -
     mask_file: str = os.path.join(patient_path, f"{pulse}_{patient}_seg.nrrd")
 
     if not os.path.exists(img_file) or not os.path.exists(mask_file):
-        print(f"Skipping: Missing files for {patient} with pulse {pulse}")
+        print(
+            f"Skipping: Missing files for {patient} with pulse {pulse}\n  -Image: {img_file}\n  -Mask: {mask_file}"
+        )
         return
 
     try:
