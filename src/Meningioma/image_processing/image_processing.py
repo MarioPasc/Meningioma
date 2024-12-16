@@ -1,3 +1,4 @@
+import stat
 from .interpolation import resize, InterpolationMethod
 from .nrrd_processing import open_nrrd, transversal_axis
 from .noise_modelling import (
@@ -11,6 +12,7 @@ from .segmentation import (
     get_local_umbralization,
     get_largest_bbox,
     get_filled_mask,
+    get_convex_hull_mask,
 )
 import numpy as np
 from numpy.typing import NDArray
@@ -75,6 +77,35 @@ class ImageProcessing:
         """
         return get_filled_mask(
             mask=mask, structure_size=structure_size, iterations=iterations
+        )
+
+    @staticmethod
+    def convex_hull_mask(
+        image: NDArray[np.float64],
+        threshold_method: str = "li",
+        min_object_size: int = 100,
+    ) -> NDArray[np.float64]:
+        """
+        Generate a convex hull mask for the brain/skull region.
+
+        Parameters
+        ----------
+        image : NDArray[np.float64]
+            Input 2D image (grayscale, normalized between 0-255).
+        threshold_method : str
+            Thresholding method for segmentation (e.g., 'li', 'otsu').
+        min_object_size : int
+            Minimum size of objects to keep after thresholding.
+
+        Returns
+        -------
+        np.ndarray
+            A binary mask (2D) with the brain/skull region inside and background outside.
+        """
+        return get_convex_hull_mask(
+            image=image,
+            threshold_method=threshold_method,
+            min_object_size=min_object_size,
         )
 
     @staticmethod

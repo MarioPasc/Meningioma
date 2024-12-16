@@ -33,10 +33,16 @@ $$
 $$
 This formulation ensures that the resulting noise behaves like a **Rician distribution**, which naturally characterizes MRI background noise. 
 
-# Notas:
+### Notas
 
 - Quitar el cerebro y usar solo ruido de fondo
 - Validar la estimación de la fase mediante la FFT de la imagen completa
-- Comparar resultados con una fase de la FFT total de la imagen y un parche. 
+- Comparar resultados con una fase de la FFT total de la imagen y un parche.
 - Comprobar las direcciones del ruido anisotrópico
 - Comprobar la generación de ruido tridimensional
+
+- Código: Debido a la adición de la máscara, hemos tenido que cambiar de grid type structured a unstructured:
+
+> In structured mode, the coordinates (x, y) map directly to pixel indices, making visualization straightforward.
+> In unstructured mode, positions are explicitly given as a list of coordinates, which may require re-mapping if you want to interpret or visualize results back on a regular > grid.
+

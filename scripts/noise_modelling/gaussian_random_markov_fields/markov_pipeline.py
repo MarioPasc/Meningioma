@@ -1,4 +1,5 @@
 from typing import Any, Tuple, Dict, List
+from xml.dom.expatbuilder import theDOMImplementation
 from numpy.typing import NDArray
 import os
 
@@ -91,6 +92,7 @@ def to_real_imag(
 def estimate_variogram_isotropic(
     data: np.ndarray,
     bins: np.ndarray,
+    mask: NDArray[np.bool_],
     sampling_size: int = 2000,
     sampling_seed: int = 19920516,
 ) -> Tuple[np.ndarray, np.ndarray]:
@@ -117,26 +119,44 @@ def estimate_variogram_isotropic(
     -------
     https://geostat-framework.readthedocs.io/projects/gstools/en/stable/api/gstools.variogram.vario_estimate.html#gstools.variogram.vario_estimate
     """
-    # Structured grid positions
-    n, m = data.shape
-    x = np.arange(n)  # Row indices as x positions
-    y = np.arange(m)  # Column indices as y positions
+    # Apply mask: Flatten and keep valid positions
+    if mask is not None:
+        valid_indices = np.argwhere(mask.flatten()).flatten()
+        valid_data = data.flatten()[valid_indices]
+        pos_x, pos_y = np.meshgrid(
+            np.arange(data.shape[0]), np.arange(data.shape[1]), indexing="ij"
+        )
+        pos_flat = np.vstack((pos_x.flatten(), pos_y.flatten()))[:, valid_indices]
+    else:
+        valid_data = data.flatten()
+        pos_x, pos_y = np.meshgrid(
+            np.arange(data.shape[0]), np.arange(data.shape[1]), indexing="ij"
+        )
+        pos_flat = np.vstack((pos_x.flatten(), pos_y.flatten()))
+
+    print(f"Valid positions: {len(valid_data)}")
+    assert len(valid_data) > sampling_size, "Sampling size exceeds valid positions."
+
+    # Adjust sampling size dynamically
+    sampling_size = min(sampling_size, len(valid_data))
 
     # Use gstools.vario_estimate
     bin_centers, gamma = gs.vario_estimate(
-        pos=(x, y),  # Structured grid axes
-        field=data,  # 2D field data
-        bin_edges=bins,  # Bin edges for distance classes
-        mesh_type="structured",  # Data is structured
-        sampling_size=sampling_size,  # Random sampling size
-        sampling_seed=sampling_seed,  # Seed for reproducibility
+        pos=pos_flat,  # Flattened positions
+        field=valid_data,  # Flattened and masked data
+        bin_edges=bins,
+        mesh_type="unstructured",  # Treat positions as unstructured
+        sampling_size=sampling_size,
+        sampling_seed=sampling_seed,
     )
+
     return bin_centers, gamma
 
 
 def estimate_variogram_anisotropic(
     data: np.ndarray,
     bins: np.ndarray,
+    mask: NDArray[np.bool_] = None,
     directions: List[np.ndarray] = None,
     angles_tol: float = np.pi / 8,
     sampling_size: int = 2000,
@@ -151,12 +171,13 @@ def estimate_variogram_anisotropic(
         2D image data (e.g., real part of complex image).
     bins : np.ndarray
         Array of bin edges for distance classes.
+    mask : NDArray[np.bool_], optional
+        Boolean mask to exclude regions.
     directions : List[np.ndarray], optional
         List of direction vectors to evaluate the variogram.
         Default: horizontal, vertical, and diagonal directions.
     angles_tol : float
         Angular tolerance for directional variograms (radians).
-        Default: np.pi / 8 (22.5 degrees).
     sampling_size : int
         Number of random pairs sampled to estimate the variogram.
     sampling_seed : int
@@ -166,12 +187,28 @@ def estimate_variogram_anisotropic(
     -------
     Dict[str, Tuple[np.ndarray, np.ndarray]]
         Dictionary containing bin centers and gamma values for each direction.
-        Keys: "Horizontal", "Vertical", "Diagonal 45°", "Diagonal 135°".
+        Keys: "Horizontal", "Vertical", "Diagonal_45", "Diagonal_135".
     """
-    # Structured grid positions
-    n, m = data.shape
-    x = np.arange(n)  # Row indices as x positions
-    y = np.arange(m)  # Column indices as y positions
+    # Flatten the data and mask to work with unstructured grids
+    if mask is not None:
+        valid_indices = np.argwhere(mask.flatten()).flatten()
+        valid_data = data.flatten()[valid_indices]
+        pos_x, pos_y = np.meshgrid(
+            np.arange(data.shape[0]), np.arange(data.shape[1]), indexing="ij"
+        )
+        pos_flat = np.vstack((pos_x.flatten(), pos_y.flatten()))[:, valid_indices]
+    else:
+        valid_data = data.flatten()
+        pos_x, pos_y = np.meshgrid(
+            np.arange(data.shape[0]), np.arange(data.shape[1]), indexing="ij"
+        )
+        pos_flat = np.vstack((pos_x.flatten(), pos_y.flatten()))
+
+    print(f"Valid positions: {len(valid_data)}")
+    assert len(valid_data) > 0, "No valid positions remain after applying mask."
+
+    # Adjust sampling size dynamically
+    sampling_size = min(sampling_size, len(valid_data))
 
     # Default directions: horizontal, vertical, diagonal (45° and 135°)
     if directions is None:
@@ -190,16 +227,16 @@ def estimate_variogram_anisotropic(
 
     # Estimate variogram for each direction
     for direction, label in zip(directions, direction_labels):
-        print(f"Fitting anisotrophic {direction} model")
+        print(f"Fitting anisotropic variogram for direction: {direction}")
         bin_centers, gamma = gs.vario_estimate(
-            pos=(x, y),  # Structured grid axes
-            field=data,  # 2D field data
+            pos=pos_flat,  # Unstructured positions
+            field=valid_data,  # Flattened and masked data
             bin_edges=bins,  # Bin edges
-            mesh_type="structured",  # Structured grid
+            mesh_type="unstructured",  # Treat positions as unstructured
             direction=[direction],  # Directional vector
             angles_tol=angles_tol,  # Angular tolerance
-            sampling_size=sampling_size,  # Sampling
-            sampling_seed=sampling_seed,  # Seed for reproducibility
+            sampling_size=sampling_size,  # Random sampling size
+            sampling_seed=sampling_seed,  # Random seed
         )
         variograms[label] = (bin_centers, gamma)
 
@@ -492,6 +529,14 @@ def main():
     filepath = os.path.join(output_npz_path, patient, f"{patient}_{pulse}.npz")
     slice_data = load_data(filepath, slice_index=slice_index)
 
+    # Compute the mask that overlays on top of the brain and skull
+    mask_inverted = ImageProcessing.convex_hull_mask(
+        image=slice_data, threshold_method="li", min_object_size=100
+    )
+    mask = (mask_inverted == 0).astype(bool)
+
+    mask = None
+
     # Tunable hyperparameters
     variogram_bins = np.linspace(0, 150, 150)
     variogram_sampling_size = 3000
@@ -510,6 +555,7 @@ def main():
     iso_bin_center, iso_gamma = estimate_variogram_isotropic(
         data=slice_data_real,
         bins=variogram_bins,
+        mask=mask,
         sampling_size=variogram_sampling_size,
         sampling_seed=variogram_sampling_seed,
     )
@@ -519,6 +565,7 @@ def main():
     anisotropic_variograms = estimate_variogram_anisotropic(
         data=slice_data_real,
         bins=variogram_bins,
+        mask=mask,
         sampling_size=variogram_sampling_size,
         sampling_seed=variogram_sampling_seed,
     )
@@ -634,7 +681,7 @@ def main():
         plt.tight_layout()
         plt.subplots_adjust(bottom=0.15)  # Add space for the legend
         plt.savefig(
-            "scripts/noise_modelling/gaussian_random_markov_fields/anisotropic_variogram_analysis.svg",
+            "scripts/noise_modelling/gaussian_random_markov_fields/anisotropic_variogram_analysis_with_brain.svg",
             format="svg",
         )
 
