@@ -1,4 +1,3 @@
-Here is a brief explanation of how each function parameter in `directional_variogram_map` influences the final directional variogram results:
 
 ```python
 def directional_variogram_map(
