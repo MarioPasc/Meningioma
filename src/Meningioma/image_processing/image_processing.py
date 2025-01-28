@@ -14,10 +14,19 @@ from .segmentation import (
     get_filled_mask,
     get_convex_hull_mask,
 )
+from .random_fields import (
+    get_estimate_isotropic_variogram,
+    get_estimate_anisotropic_variogram,
+    get_estimate_all_variograms,
+    get_fitted_models,
+    get_generate_random_fields,
+)
+from .k_space import get_phase_from_kspace, get_real_imag
 import numpy as np
 from numpy.typing import NDArray
 import cv2
-from typing import Tuple, Optional, Union, Dict, List
+from typing import Tuple, Optional, Union, Dict, List, Any
+import gstools as gs
 
 
 class ImageProcessing:
@@ -471,3 +480,207 @@ class ImageProcessing:
             )
         else:
             return centered_image
+
+    @staticmethod
+    def estimate_isotropic_variogram(
+        data: np.ndarray,
+        bins: np.ndarray,
+        mask: Optional[NDArray[np.bool_]],
+        sampling_size: int = 2000,
+        sampling_seed: int = 19920516,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Compute the isotropic variogram using gstools.vario_estimate.
+
+        Parameters
+        ----------
+        data : np.ndarray
+            2D data array (e.g., real part of an MRI slice).
+        bins : np.ndarray
+            Distance bin edges.
+        mask : np.ndarray, optional
+            Boolean mask. If provided, only use masked pixels.
+        sampling_size : int
+            Number of random pairs for vario_estimate.
+        sampling_seed : int
+            Random seed for reproducibility.
+
+        Returns
+        -------
+        (bin_centers, gamma) : Tuple[np.ndarray, np.ndarray]
+            The bin centers and semi-variances.
+        """
+        return get_estimate_isotropic_variogram(
+            data=data,
+            bins=bins,
+            mask=mask,
+            sampling_size=sampling_size,
+            sampling_seed=sampling_seed,
+        )
+
+    @staticmethod
+    def estimate_anisotropic_variogram(
+        data: np.ndarray,
+        bins: np.ndarray,
+        direction: np.ndarray,
+        mask: Optional[NDArray[np.bool_]] = None,
+        angles_tol: float = np.pi / 8,
+        sampling_size: int = 2000,
+        sampling_seed: int = 19920516,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Compute a directional variogram for a single direction vector.
+
+        Parameters
+        ----------
+        data : np.ndarray
+            2D data array (e.g., real part of an MRI slice).
+        bins : np.ndarray
+            Distance bin edges.
+        direction : np.ndarray
+            Direction vector (e.g. [1, 0]).
+        mask : np.ndarray, optional
+            Boolean mask. If provided, only use masked pixels.
+        angles_tol : float
+            Angular tolerance in radians around 'direction'.
+        sampling_size : int
+            Number of random pairs for vario_estimate.
+        sampling_seed : int
+            Random seed for reproducibility.
+
+        Returns
+        -------
+        (bin_centers, gamma) : Tuple[np.ndarray, np.ndarray]
+            The bin centers and semi-variances for the given direction.
+        """
+        return get_estimate_anisotropic_variogram(
+            data=data,
+            bins=bins,
+            direction=direction,
+            mask=mask,
+            angles_tol=angles_tol,
+            sampling_size=sampling_size,
+            sampling_seed=sampling_seed,
+        )
+
+    @staticmethod
+    def fit_covariance_models(
+        bin_center: np.ndarray,
+        gamma: np.ndarray,
+        var: float = 1.0,
+        len_scale: float = 10.0,
+    ) -> Dict[str, Tuple[gs.CovModel, Dict[str, Any]]]:
+        """
+        Fit multiple theoretical variogram models to the (bin_center, gamma) data.
+
+        Parameters
+        ----------
+        bin_center : np.ndarray
+            The distance axis values.
+        gamma : np.ndarray
+            The variogram (semi-variance) values.
+        var : float
+            Initial guess for variance parameter.
+        len_scale : float
+            Initial guess for length scale parameter.
+
+        Returns
+        -------
+        results : Dict[str, Tuple[gs.CovModel, Dict[str, Any]]]
+            Each entry has (model_instance, {'params':..., 'pcov':..., 'r2':...}).
+        """
+        return get_fitted_models(
+            bin_center=bin_center, gamma=gamma, var=var, len_scale=len_scale
+        )
+
+    @staticmethod
+    def generate_random_fields(
+        model: gs.CovModel,
+        shape: Tuple[int, int],
+        seed_real: int = 19770928,
+        seed_imag: int = 19773022,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Generate two random fields (real and imaginary) from a fitted covariance model
+        and combine them into a magnitude field.
+
+        Parameters
+        ----------
+        model : gs.CovModel
+            A gstools CovModel fitted to some variogram data.
+        shape : Tuple[int, int]
+            (n, m) shape for the output field.
+        seed_real : int
+            Random seed for the real part.
+        seed_imag : int
+            Random seed for the imaginary part.
+
+        Returns
+        -------
+        (real_part, imag_part, magnitude) : Tuple[np.ndarray, np.ndarray, np.ndarray]
+            The generated real part, imaginary part, and magnitude.
+        """
+        return get_generate_random_fields(
+            model=model, shape=shape, seed_real=seed_real, seed_imag=seed_imag
+        )
+
+    @staticmethod
+    def estimate_all_variograms(
+        data: np.ndarray,
+        mask: Optional[np.ndarray],
+        bins: np.ndarray,
+        angles_deg: List[float],
+        sampling_size: int = 2000,
+        sampling_seed: int = 19920516,
+        angles_tol: float = np.pi / 8,
+        var_guess: float = 1.0,
+        len_scale_guess: float = 10.0,
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Compute isotropic and multiple anisotropic variograms, then fit models.
+
+        Parameters
+        ----------
+        data : np.ndarray
+            2D array, e.g. real-part of the MRI slice.
+        mask : np.ndarray, optional
+            Boolean mask to exclude certain pixels.
+        bins : np.ndarray
+            The bin edges for distance.
+        angles_deg : List[float]
+            List of angles in degrees for anisotropic variograms (e.g. [0, 45, 90, 135, ...]).
+        sampling_size : int
+            Number of random pixel-pairs for vario_estimate.
+        sampling_seed : int
+            Random seed for reproducibility.
+        angles_tol : float
+            Angular tolerance around each direction vector.
+        var_guess : float
+            Initial guess for model variance.
+        len_scale_guess : float
+            Initial guess for length scale.
+
+        Returns
+        -------
+        results : Dict[str, Dict[str, Any]]
+            A dictionary with keys = "Isotropic" and each angle label.
+            Each value is another dict with:
+            {
+            "bin_centers": np.ndarray,
+            "gamma": np.ndarray,
+            "fits": Dict[str, (CovModel, fit_stats)],
+            "best_model_name": str,
+            "best_model_stats": Dict[str, Any]
+            }
+        """
+        return get_estimate_all_variograms(
+            data=data,
+            mask=mask,
+            bins=bins,
+            angles_deg=angles_deg,
+            angles_tol=angles_tol,
+            sampling_size=sampling_size,
+            sampling_seed=sampling_seed,
+            var_guess=var_guess,
+            len_scale_guess=len_scale_guess,
+        )

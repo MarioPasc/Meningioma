@@ -15,7 +15,7 @@ Therefore, it includes:
 """
 
 
-def extract_phase_from_kspace(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+def get_phase_from_kspace(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """
     Approximate k-space from an image and extract the phase data.
 
@@ -36,7 +36,7 @@ def extract_phase_from_kspace(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray
     return phase, k_space
 
 
-def to_real_imag(
+def get_real_imag(
     magnitude: np.ndarray, phase: np.ndarray
 ) -> Tuple[np.ndarray, np.ndarray]:
     """

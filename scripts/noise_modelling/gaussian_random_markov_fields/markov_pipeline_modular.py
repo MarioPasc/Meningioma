@@ -15,6 +15,7 @@ from Meningioma.image_processing import ImageProcessing  # type: ignore
 from Meningioma.utils import Stats, npz_converter  # type: ignore
 
 import scienceplots
+
 plt.style.use(["science", "ieee", "std-colors"])
 plt.rcParams["font.size"] = 10
 plt.rcParams.update({"figure.dpi": "100"})
@@ -64,7 +65,9 @@ def extract_phase_from_kspace(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray
     return phase, k_space
 
 
-def to_real_imag(magnitude: np.ndarray, phase: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+def to_real_imag(
+    magnitude: np.ndarray, phase: np.ndarray
+) -> Tuple[np.ndarray, np.ndarray]:
     """
     Convert magnitude data into synthetic complex data by applying a phase.
 
@@ -358,7 +361,9 @@ def compute_variograms(
         sampling_size=sampling_size,
         sampling_seed=sampling_seed,
     )
-    iso_fits = fit_model(iso_bin_center, iso_gamma, var=var_guess, len_scale=len_scale_guess)
+    iso_fits = fit_model(
+        iso_bin_center, iso_gamma, var=var_guess, len_scale=len_scale_guess
+    )
     # find best model
     best_iso = max(iso_fits.keys(), key=lambda m: iso_fits[m][1]["r2"])
     results["Isotropic"] = {
@@ -492,12 +497,19 @@ def plot_variogram_results(
     if output_csv is not None:
         with open(output_csv, mode="w", newline="") as csv_file:
             writer = csv.writer(csv_file)
-            writer.writerow([
-                "Variogram", "BestModel", "R2",
-                "Variance", "VarError",
-                "LenScale", "LenScaleError",
-                "Nugget", "NuggetError"
-            ])
+            writer.writerow(
+                [
+                    "Variogram",
+                    "BestModel",
+                    "R2",
+                    "Variance",
+                    "VarError",
+                    "LenScale",
+                    "LenScaleError",
+                    "Nugget",
+                    "NuggetError",
+                ]
+            )
             # We'll write a line for each best model
 
     # Create figure with 3 rows, #cols = # of variograms
@@ -525,9 +537,7 @@ def plot_variogram_results(
         # Plot each model in a different color
         color_cycle = plt.cm.tab20(np.linspace(0, 1, len(fits)))
         for (m_name, (m_instance, m_stats)), color in zip(fits.items(), color_cycle):
-            m_instance.plot(
-                x_max=dist_max, ax=ax_vario, color=color, linestyle="--"
-            )
+            m_instance.plot(x_max=dist_max, ax=ax_vario, color=color, linestyle="--")
             if col == 0:
                 # Collect handles for a global legend (only once)
                 global_legend_handles.append(
@@ -536,7 +546,9 @@ def plot_variogram_results(
 
         # Highlight best model in a thicker red line
         best_model.plot(x_max=dist_max, ax=ax_vario, color="red", linewidth=2.0)
-        ax_vario.set_title(f"{label} | Best: {best_model_name} (R²={best_stats['r2']:.3f})")
+        ax_vario.set_title(
+            f"{label} | Best: {best_model_name} (R²={best_stats['r2']:.3f})"
+        )
         ax_vario.set_xlabel("Distance")
         ax_vario.set_ylabel("Gamma")
 
@@ -581,7 +593,7 @@ def plot_variogram_results(
         handles=global_legend_handles,
         loc="lower center",
         bbox_to_anchor=(0.5, -0.01),
-        ncol=min(5, len(fits))  # or some other layout
+        ncol=min(5, len(fits)),  # or some other layout
     )
     plt.tight_layout()
     plt.subplots_adjust(bottom=0.15)
@@ -630,7 +642,7 @@ def main():
     variogram_sampling_size = 3000
     variogram_sampling_seed = 19920516
     covariance_len_scale = 100.0
-    angles_tol=np.pi/8
+    angles_tol = np.pi / 8
 
     # Extract phase from approximated k-space
     phase_data, k_space = extract_phase_from_kspace(slice_data)

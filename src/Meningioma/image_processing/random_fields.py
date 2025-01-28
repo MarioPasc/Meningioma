@@ -21,7 +21,7 @@ These functions include:
 """
 
 
-def estimate_variogram_isotropic(
+def get_estimate_isotropic_variogram(
     data: np.ndarray,
     bins: np.ndarray,
     mask: Optional[NDArray[np.bool_]],
@@ -78,7 +78,7 @@ def estimate_variogram_isotropic(
     return bin_centers, gamma
 
 
-def estimate_variogram_direction(
+def get_estimate_anisotropic_variogram(
     data: np.ndarray,
     bins: np.ndarray,
     direction: np.ndarray,
@@ -141,7 +141,7 @@ def estimate_variogram_direction(
     return bin_centers, gamma
 
 
-def fit_model(
+def get_fitted_models(
     bin_center: np.ndarray,
     gamma: np.ndarray,
     var: float = 1.0,
@@ -193,7 +193,7 @@ def fit_model(
     return results
 
 
-def generate_random_fields(
+def get_generate_random_fields(
     model: gs.CovModel,
     shape: Tuple[int, int],
     seed_real: int = 19770928,
@@ -233,7 +233,7 @@ def generate_random_fields(
     return real_part, imag_part, magnitude
 
 
-def compute_variograms(
+def get_estimate_all_variograms(
     data: np.ndarray,
     mask: Optional[np.ndarray],
     bins: np.ndarray,
@@ -284,14 +284,14 @@ def compute_variograms(
     results: Dict[str, Dict[str, Any]] = {}
 
     # --- 1) Compute isotropic variogram
-    iso_bin_center, iso_gamma = estimate_variogram_isotropic(
+    iso_bin_center, iso_gamma = get_estimate_isotropic_variogram(
         data=data,
         bins=bins,
         mask=mask,
         sampling_size=sampling_size,
         sampling_seed=sampling_seed,
     )
-    iso_fits = fit_model(
+    iso_fits = get_fitted_models(
         iso_bin_center, iso_gamma, var=var_guess, len_scale=len_scale_guess
     )
     # find best model
@@ -308,7 +308,7 @@ def compute_variograms(
     for angle_deg in tqdm(iterable=angles_deg, colour="green"):
         angle_rad = np.deg2rad(angle_deg)
         direction_vector = np.array([np.cos(angle_rad), np.sin(angle_rad)])
-        bin_center, gamma = estimate_variogram_direction(
+        bin_center, gamma = get_estimate_anisotropic_variogram(
             data=data,
             bins=bins,
             direction=direction_vector,
@@ -317,7 +317,9 @@ def compute_variograms(
             sampling_size=sampling_size,
             sampling_seed=sampling_seed,
         )
-        fits = fit_model(bin_center, gamma, var=var_guess, len_scale=len_scale_guess)
+        fits = get_fitted_models(
+            bin_center, gamma, var=var_guess, len_scale=len_scale_guess
+        )
         best_model = max(fits.keys(), key=lambda m: fits[m][1]["r2"])
 
         label = f"{angle_deg}°"
