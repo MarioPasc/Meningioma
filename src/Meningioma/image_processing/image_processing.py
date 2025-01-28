@@ -1,4 +1,3 @@
-import stat
 from .interpolation import resize, InterpolationMethod
 from .nrrd_processing import open_nrrd, transversal_axis
 from .noise_modelling import (
@@ -90,9 +89,7 @@ class ImageProcessing:
 
     @staticmethod
     def convex_hull_mask(
-        image: NDArray[np.float64],
-        threshold_method: str = "li",
-        min_object_size: int = 100,
+        image: NDArray[np.float64], threshold_method: str = "li"
     ) -> NDArray[np.float64]:
         """
         Generate a convex hull mask for the brain/skull region.
@@ -114,7 +111,6 @@ class ImageProcessing:
         return get_convex_hull_mask(
             image=image,
             threshold_method=threshold_method,
-            min_object_size=min_object_size,
         )
 
     @staticmethod
@@ -569,6 +565,21 @@ class ImageProcessing:
         gamma: np.ndarray,
         var: float = 1.0,
         len_scale: float = 10.0,
+        model_classes: Dict[str, gs.CovModel] = {
+            "Gaussian": gs.Gaussian,
+            "Exponential": gs.Exponential,
+            "Matern": gs.Matern,
+            "Stable": gs.Stable,
+            "Rational": gs.Rational,
+            "Circular": gs.Circular,
+            "Spherical": gs.Spherical,
+            "SuperSpherical": gs.SuperSpherical,
+            "JBessel": gs.JBessel,
+            "TLPGaussian": gs.TPLGaussian,
+            "TLPExponential": gs.TPLExponential,
+            "TLPSTable": gs.TPLStable,
+            "TLPSimple": gs.TPLSimple,
+        },
     ) -> Dict[str, Tuple[gs.CovModel, Dict[str, Any]]]:
         """
         Fit multiple theoretical variogram models to the (bin_center, gamma) data.
@@ -684,3 +695,43 @@ class ImageProcessing:
             var_guess=var_guess,
             len_scale_guess=len_scale_guess,
         )
+
+    @staticmethod
+    def estimate_phase_from_kspace(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Approximate k-space from an image and extract the phase data.
+
+        Parameters
+        ----------
+        image : np.ndarray
+            Input MRI image data (2D).
+
+        Returns
+        -------
+        phase : np.ndarray
+            Phase data from the FFT of the image.
+        k_space : np.ndarray
+            The 2D FFT (shifted) of the image.
+        """
+        return get_phase_from_kspace(image=image)
+
+    @staticmethod
+    def get_real_and_complex_images(
+        magnitude: np.ndarray, phase: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Convert magnitude data into synthetic complex data by applying a phase.
+
+        Parameters
+        ----------
+        magnitude : np.ndarray
+            Magnitude image data.
+        phase : np.ndarray
+            Phase data.
+
+        Returns
+        -------
+        (real_part, imag_part) : Tuple[np.ndarray, np.ndarray]
+            Real and imaginary parts of the complex data.
+        """
+        return get_real_imag(magnitude=magnitude, phase=phase)

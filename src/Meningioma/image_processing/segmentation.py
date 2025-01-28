@@ -240,7 +240,7 @@ def apply_active_contours(
 
 
 def get_convex_hull_mask(
-    image: NDArray[np.float64], threshold_method: str = "li", min_object_size: int = 100
+    image: NDArray[np.float64], threshold_method: str = "li"
 ) -> NDArray[np.float64]:
     """
     Generate a convex hull mask for the brain/skull region.

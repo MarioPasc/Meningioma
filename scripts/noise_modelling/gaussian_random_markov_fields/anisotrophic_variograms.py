@@ -1,3 +1,4 @@
+from tkinter import Image
 import numpy as np
 import matplotlib.pyplot as plt
 import gstools as gs
@@ -17,76 +18,6 @@ plt.rcParams["font.size"] = 10
 plt.rcParams.update({"figure.dpi": "100"})
 plt.rcParams["axes.spines.top"] = False
 plt.rcParams["axes.spines.right"] = False
-
-"""
-Repeated functions from the markov pipeline script
-"""
-
-def load_data(file_path: str, slice_index: int) -> np.ndarray:
-    """
-    Load the MRI data from a .npz file and extract a single slice.
-
-    Parameters
-    ----------
-    file_path : str
-        Path to the .npz file containing MRI data.
-    slice_index : int
-        The index of the slice to extract.
-
-    Returns
-    -------
-    np.ndarray
-        A 2D numpy array representing the selected MRI slice (magnitude data).
-    """
-    data = np.load(file_path)
-    # Extract the entire spatial region (all x and y coordinates)
-    slice_data = np.squeeze(data["data"][0, :, :, slice_index])
-    return slice_data
-
-def extract_phase_from_kspace(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Approximate k-space from an image and extract the phase data.
-
-    Parameters
-    ----------
-    image : np.ndarray
-        Input MRI image data (2D numpy array).
-
-    Returns
-    -------
-    np.ndarray
-        Phase data extracted from the approximated k-space.
-    """
-    # Compute 2D FFT and shift to center the k-space
-    k_space = np.fft.fftshift(np.fft.fft2(image))
-    # Extract phase data
-    phase = np.angle(k_space)
-    return phase, k_space
-
-
-def to_real_imag(
-    magnitude: np.ndarray, phase: np.ndarray
-) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Convert magnitude data into synthetic complex data by applying a phase.
-
-    Parameters
-    ----------
-    magnitude : np.ndarray
-        Magnitude image data.
-    phase : np.ndarray
-        Phase data.
-
-    Returns
-    -------
-    Tuple[np.ndarray, np.ndarray]
-        Real and imaginary parts of the complex data.
-    """
-    real_part = magnitude * np.cos(phase)
-    imag_part = magnitude * np.sin(phase)
-    return real_part, imag_part
-
-#####
 
 
 def directional_variogram_map(
@@ -155,7 +86,12 @@ def directional_variogram_map(
     bin_centers = None
 
     # Estimate variogram for each direction
-    for i, angle in tqdm(iterable=enumerate(angles), desc="Computing anisotrophic variogram for each angle ...", total=len(angles), colour="green"):
+    for i, angle in tqdm(
+        iterable=enumerate(angles),
+        desc="Computing anisotrophic variogram for each angle ...",
+        total=len(angles),
+        colour="green",
+    ):
         # Convert angle to a direction vector
         direction_vector = np.array([np.cos(angle), np.sin(angle)], dtype=np.float64)
 
@@ -205,7 +141,9 @@ def plot_variogram_polar(
     # Note: Each row i is for angles[i], each column j is for distances[j]
     # We want to pass that to pcolormesh in polar coordinates.
 
-    A, R = np.meshgrid(distances, angles)  # 'xy' indexing: A.shape, R.shape => (#angles, #distances)
+    A, R = np.meshgrid(
+        distances, angles
+    )  # 'xy' indexing: A.shape, R.shape => (#angles, #distances)
     # Here:
     #   R[i, j] = angles[i]
     #   A[i, j] = distances[j]
@@ -250,11 +188,11 @@ def plot_variogram_polar(
 
 def main():
     import os
-    
+
     # 1) Input Paths and Parameters
     # Example Input Paths and Parameters
-    base_path = "/home/mario/Python/Datasets/Meningiomas/Meningioma_Adquisition"
-    output_npz_path = "/home/mario/Python/Datasets/Meningiomas/npz"
+    base_path = "/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_Adquisition"
+    output_npz_path = "/home/mariopasc/Python/Datasets/Meningiomas/npz"
 
     slice_index = 18
     patient = "P15"
@@ -262,13 +200,13 @@ def main():
 
     # Load the data
     filepath = os.path.join(output_npz_path, patient, f"{patient}_{pulse}.npz")
-    slice_data = load_data(filepath, slice_index=slice_index)
+    slice_data = npz_converter.load_mri_slice(
+        filepath=filepath, slice_index=slice_index
+    )
 
     # Compute the mask that overlays on top of the brain and skull
-    mask_inverted = ImageProcessing.convex_hull_mask(
-        image=slice_data, threshold_method="li", min_object_size=100
-    )
-    mask = (mask_inverted == 0).astype(bool)
+    hull = ImageProcessing.convex_hull_mask(image=slice_data, threshold_method="li")
+    mask = hull > 0
 
     # Sanity check
     rotation_angle = 90
@@ -277,31 +215,35 @@ def main():
     mask = np.rot90(mask, k=k)
 
     # Tunable hyperparameters
-    variogram_bins = np.linspace(0, 150, 150) # Distances to check for correlation between pixels 
-    variogram_sampling_size = 3000 # A high enough sampling size so that the seed does not affect the experiment
-    variogram_sampling_seed = 19920516 
+    variogram_bins = np.linspace(
+        0, 60, 60
+    )  # Distances to check for correlation between pixels
+    variogram_sampling_size = 3000  # A high enough sampling size so that the seed does not affect the experiment
+    variogram_sampling_seed = 19920516
 
-    num_directions = 180 # 2pi/number of directions are the intervals of checking angels (e.g. 2pi/180 = 2 degrees ergo, compute variogram every 2 degrees)
-    angles_tol = np.pi/90 # e.g. if the angle tolerance is pi/90 (2 degrees), 
-                          # then a point pair is considered part of angle theta if its connecting vector is within ±2° of theta
+    num_directions = 180  # 2pi/number of directions are the intervals of checking angels (e.g. 2pi/180 = 2 degrees ergo, compute variogram every 2 degrees)
+    angles_tol = np.pi / 90  # e.g. if the angle tolerance is pi/90 (2 degrees),
+    # then a point pair is considered part of angle theta if its connecting vector is within ±2° of theta
 
     n, m = slice_data.shape
 
     # Extract phase from approximated k-space
-    phase_data, k_space = extract_phase_from_kspace(slice_data)
+    phase_data, k_space = ImageProcessing.estimate_phase_from_kspace(slice_data)
 
     # Convert to complex data
-    slice_data_real, _ = to_real_imag(slice_data, phase_data)
-    
+    slice_data_real, _ = ImageProcessing.get_real_and_complex_images(
+        slice_data, phase_data
+    )
+
     # 2) Compute directional variogram for angles 0 -> 2π
     angles, bin_centers, gamma_map = directional_variogram_map(
         data=slice_data_real,
         bins=variogram_bins,
         mask=mask,
-        num_directions=num_directions,      
+        num_directions=num_directions,
         sampling_size=variogram_sampling_size,
         sampling_seed=variogram_sampling_seed,
-        angles_tol=angles_tol,   
+        angles_tol=angles_tol,
     )
 
     # 3) Plot as a polar heatmap

@@ -172,10 +172,11 @@ def process_and_save_study(filepath: str, output_path: str, patient: str, pulse:
 base_path = "/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_Adquisition"
 output_npz_path = "/home/mariopasc/Python/Datasets/Meningiomas/npz"
 output_path = "/home/mariopasc/Python/Datasets/Meningiomas/ConvexHull"  # Directory to store images
-patient = "P15"
-# pulse = "SUSC"
+patient = "P9"
 
 pulses = ["T1SIN", "T2", "SUSC", "T1"]
+
+# pulses = ["T1"]
 
 os.makedirs(output_path, exist_ok=True)
 

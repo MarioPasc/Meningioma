@@ -146,6 +146,21 @@ def get_fitted_models(
     gamma: np.ndarray,
     var: float = 1.0,
     len_scale: float = 10.0,
+    model_classes: Dict[str, gs.CovModel] = {
+        "Gaussian": gs.Gaussian,
+        "Exponential": gs.Exponential,
+        "Matern": gs.Matern,
+        "Stable": gs.Stable,
+        "Rational": gs.Rational,
+        "Circular": gs.Circular,
+        "Spherical": gs.Spherical,
+        "SuperSpherical": gs.SuperSpherical,
+        "JBessel": gs.JBessel,
+        "TLPGaussian": gs.TPLGaussian,
+        "TLPExponential": gs.TPLExponential,
+        "TLPSTable": gs.TPLStable,
+        "TLPSimple": gs.TPLSimple,
+    },
 ) -> Dict[str, Tuple[gs.CovModel, Dict[str, Any]]]:
     """
     Fit multiple theoretical variogram models to the (bin_center, gamma) data.
@@ -166,21 +181,6 @@ def get_fitted_models(
     results : Dict[str, Tuple[gs.CovModel, Dict[str, Any]]]
         Each entry has (model_instance, {'params':..., 'pcov':..., 'r2':...}).
     """
-    model_classes = {
-        "Gaussian": gs.Gaussian,
-        "Exponential": gs.Exponential,
-        "Matern": gs.Matern,
-        "Stable": gs.Stable,
-        "Rational": gs.Rational,
-        "Circular": gs.Circular,
-        "Spherical": gs.Spherical,
-        "SuperSpherical": gs.SuperSpherical,
-        "JBessel": gs.JBessel,
-        "TLPGaussian": gs.TPLGaussian,
-        "TLPExponential": gs.TPLExponential,
-        "TLPSTable": gs.TPLStable,
-        "TLPSimple": gs.TPLSimple,
-    }
 
     results: Dict[str, Tuple[gs.CovModel, Dict[str, Any]]] = {}
     for name, ModelClass in model_classes.items():
