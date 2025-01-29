@@ -191,10 +191,10 @@ def main():
 
     # 1) Input Paths and Parameters
     # Example Input Paths and Parameters
-    base_path = "/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_Adquisition"
-    output_npz_path = "/home/mariopasc/Python/Datasets/Meningiomas/npz"
+    base_path = "/home/mario/Python/Datasets/Meningiomas/Meningioma_Adquisition"
+    output_npz_path = "/home/mario/Python/Datasets/Meningiomas/npz"
 
-    slice_index = 18
+    slice_index = 84
     patient = "P15"
     pulse = "T1"
 
@@ -209,20 +209,20 @@ def main():
     mask = hull > 0
 
     # Sanity check
-    rotation_angle = 90
+    rotation_angle = 0
     k = rotation_angle // 90  # Calculate k based on the angle
     slice_data = np.rot90(slice_data, k=k)
     mask = np.rot90(mask, k=k)
 
     # Tunable hyperparameters
     variogram_bins = np.linspace(
-        0, 60, 60
+        0, 30, 60
     )  # Distances to check for correlation between pixels
     variogram_sampling_size = 3000  # A high enough sampling size so that the seed does not affect the experiment
     variogram_sampling_seed = 19920516
 
-    num_directions = 180  # 2pi/number of directions are the intervals of checking angels (e.g. 2pi/180 = 2 degrees ergo, compute variogram every 2 degrees)
-    angles_tol = np.pi / 90  # e.g. if the angle tolerance is pi/90 (2 degrees),
+    num_directions = 360  # 2pi/number of directions are the intervals of checking angels (e.g. 2pi/180 = 2 degrees ergo, compute variogram every 2 degrees)
+    angles_tol = np.pi / 180  # e.g. if the angle tolerance is pi/90 (2 degrees),
     # then a point pair is considered part of angle theta if its connecting vector is within ±2° of theta
 
     n, m = slice_data.shape

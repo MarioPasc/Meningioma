@@ -66,9 +66,9 @@ def plot_mask_images(
     #   We'll show the image in grayscale, then overlay the mask in e.g. red with alpha
     axes[2].imshow(image, cmap="gray", origin="lower")
     axes[2].imshow(mask, cmap="Reds", origin="lower", alpha=alpha)
-    # Mean/Std for outside the mask: mask==True => outside or inside depends on your definition.
-    # If your mask indicates the region to EXCLUDE, then we compute stats on those pixels:
-    masked_values = image[mask]
+    # The mask had the pixels to exclude (brain and skull) set to 255 (True)
+    # We want the stats of the background pixels, so we invert the mask.
+    masked_values = image[~mask]
     mean_mask = masked_values.mean() if len(masked_values) > 0 else 0
     std_mask = masked_values.std() if len(masked_values) > 1 else 0
     axes[2].set_title(
@@ -238,7 +238,7 @@ def main():
     base_path = "/home/mario/Python/Datasets/Meningiomas/Meningioma_Adquisition"
     output_npz_path = "/home/mario/Python/Datasets/Meningiomas/npz"
 
-    slice_index = 18
+    slice_index = 84
     patient = "P15"
     pulse = "T1"
 
@@ -249,22 +249,22 @@ def main():
     )
 
     # Compute the mask that overlays on top of the brain and skull
-    mask_inverted = ImageProcessing.convex_hull_mask(
-        image=slice_data, threshold_method="li", min_object_size=100
+    hull = ImageProcessing.convex_hull_mask(
+        image=slice_data, threshold_method="li"
     )
-    mask = (mask_inverted == 0).astype(bool)
+    mask = hull > 0
 
     # Sanity check
-    rotation_angle = 90
+    rotation_angle = 0
     k = rotation_angle // 90  # Calculate k based on the angle
     slice_data = np.rot90(slice_data, k=k)
     mask = np.rot90(mask, k=k)
 
     # Tunable hyperparameters
-    variogram_bins = np.linspace(0, 150, 150)
-    variogram_sampling_size = 3000
+    variogram_bins = np.linspace(0, 20, 20)
+    variogram_sampling_size = 5000
     variogram_sampling_seed = 19920516
-    covariance_len_scale = 100.0
+    covariance_len_scale = 10.0
     angles_tol = np.pi / 8
 
     # Extract phase from approximated k-space
@@ -289,7 +289,7 @@ def main():
 
     # 4) Compute isotropic + anisotropic variograms
     #    E.g. angles every 45 degrees
-    angles_list = [0, 45, 90, 135, 180]
+    angles_list = [0, 45, 90, 135]
     results_dict = ImageProcessing.estimate_all_variograms(
         data=slice_data_real,
         mask=mask,
