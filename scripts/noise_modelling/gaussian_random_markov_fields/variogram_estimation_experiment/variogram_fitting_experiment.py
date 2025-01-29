@@ -243,19 +243,22 @@ def main():
         datefmt="%H:%M:%S",
     )
 
-    root_folder = "/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_Adquisition"
-    output_json = "/home/mariopasc/Python/Results/Meningioma/noise_modelling/variogram_experiment_results.json"
-    angles_deg = [0, 45, 90, 135]
-    bins = np.linspace(0, 150, 151)  # e.g. 150 bins up to distance 150
-
+    root_folder: str = "/data" # in-contained path for the dataset
+    output_json: str = "/out/variogram_experiment_results.json" # in-contained path for the results file
+    angles_deg: List[int] = [0, 45, 90, 135]
+    bins: np.array = np.linspace(0, 150, 151)  # e.g. 150 bins up to distance 150
+    sampling_size: int =3000
+    sampling_seed: int =19920516
+    angles_tol: float =np.pi / 8
+    
     run_experiment_to_json(
         root_folder=root_folder,
         angles_deg=angles_deg,
         bins=bins,
         output_json=output_json,
-        sampling_size=3000,
-        sampling_seed=19920516,
-        angles_tol=np.pi / 8,
+        sampling_size=sampling_size,
+        sampling_seed=sampling_seed,
+        angles_tol=angles_tol,
     )
 
 
