@@ -31,7 +31,7 @@ Once the covariance model is established, **Gaussian Random Fields** are generat
 $$
 |N| = \sqrt{N_{\text{real}}^2 + N_{\text{imag}}^2}.
 $$
-This formulation ensures that the resulting noise behaves like a **Rician distribution**, which naturally characterizes MRI background noise. 
+This formulation ensures that the resulting noise behaves like a **Rician distribution**, which naturally characterizes MRI background noise.
 
 ### Notas
 

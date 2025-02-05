@@ -235,8 +235,8 @@ def main():
     5) Plot results
     """
     # --- Example data (replace with your actual paths)
-    base_path = "/home/mario/Python/Datasets/Meningiomas/Meningioma_Adquisition"
-    output_npz_path = "/home/mario/Python/Datasets/Meningiomas/npz"
+    base_path = "/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_Adquisition"
+    output_npz_path = "/home/mariopasc/Python/Datasets/Meningiomas/npz"
 
     slice_index = 84
     patient = "P15"
@@ -252,17 +252,19 @@ def main():
     hull = ImageProcessing.convex_hull_mask(image=slice_data, threshold_method="li")
     mask = hull > 0
 
+    """
     # Sanity check
     rotation_angle = 0
     k = rotation_angle // 90  # Calculate k based on the angle
     slice_data = np.rot90(slice_data, k=k)
     mask = np.rot90(mask, k=k)
+    """
 
     # Tunable hyperparameters
-    variogram_bins = np.linspace(0, 20, 20)
+    variogram_bins = np.linspace(0, 20, 30)
     variogram_sampling_size = 5000
     variogram_sampling_seed = 19920516
-    covariance_len_scale = 10.0
+    covariance_len_scale = 2.5
     angles_tol = np.pi / 8
 
     # Extract phase from approximated k-space

@@ -19,3 +19,6 @@ RUN pip install --no-cache-dir .
 
 # Run the "variogram_fitting_experiment.py" script
 ENTRYPOINT ["python", "scripts/noise_modelling/gaussian_random_markov_fields/variogram_estimation_experiment/variogram_fitting_experiment.py"]
+
+# Build with:
+# docker build --no-cache -t mpascualg/variogram_fitting:latest -f ./scripts/noise_modelling/gaussian_random_markov_fields/variogram_estimation_experiment/Dockerfile .

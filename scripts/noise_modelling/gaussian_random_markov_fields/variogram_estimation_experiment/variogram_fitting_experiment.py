@@ -36,7 +36,9 @@ def discover_nrrd_files(root_folder: str) -> List[Tuple[str, str, str, str]]:
     found_files = []
     for dirpath, dirnames, filenames in os.walk(root_folder):
         for f in filenames:
-            if f.endswith(".nrrd"):
+            if f.endswith(".nrrd") and not f.endswith(
+                "_seg.nrrd"
+            ):  # Ensure _seg.nrrd files are ignored
                 rel_path = os.path.relpath(os.path.join(dirpath, f), root_folder)
                 parts = rel_path.split(os.sep)
                 # Expecting something like [ 'RM', 'T1', 'P5', 'T1_P5.nrrd' ]
@@ -139,7 +141,7 @@ def run_experiment_to_json(
         # of the brain. Therefore, we invert the mask with ~mask.
         masked_values = slice_2d[~mask]
         var_guess = float(np.var(masked_values)) if len(masked_values) > 1 else 1.0
-        len_scale_guess = 20.0
+        len_scale_guess = 1.5
 
         # Ensure the subdir key is in the dictionary
         # If subdir is not recognized (not in {SUSC, T1, T1SIN, T2}), we create it
@@ -240,7 +242,7 @@ def run_experiment_to_json(
     logging.info("=== Experiment completed successfully ===")
 
 
-def main():
+def main() -> None:
     """
     Example main function that sets up logging, defines angles, bins, etc.,
     then runs the experiment and dumps to a JSON file.
@@ -256,9 +258,9 @@ def main():
         "/out/variogram_experiment_results.json"  # in-contained path for the results file
     )
     angles_deg: List[int] = [0, 45, 90, 135]
-    bins: np.array = np.linspace(0, 150, 151)  # e.g. 150 bins up to distance 150
-    sampling_size: int = 3000
-    sampling_seed: int = 19920516
+    bins: np.ndarray = np.linspace(0, 20, 30)
+    sampling_size: int = 5000
+    sampling_seed: int = 3012022
     angles_tol: float = np.pi / 8
 
     run_experiment_to_json(
