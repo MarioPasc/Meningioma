@@ -31,19 +31,20 @@ def discover_nrrd_files(root_folder: str) -> List[Tuple[str, str, str, str]]:
     Recursively search `root_folder` for .nrrd files with structure:
         root_folder/RM/{SUSC|T1|T1SIN|T2}/P{patient_id}/{pulse}_P{patient_id}.nrrd
 
-    Returns (pulse_name, patient_id, full_file_path, subdir).
+    Returns:
+        List of tuples: (pulse_name, patient_id, full_file_path, subdir).
     """
     found_files = []
     for dirpath, dirnames, filenames in os.walk(root_folder):
         for f in filenames:
             if f.endswith(".nrrd") and not f.endswith(
                 "_seg.nrrd"
-            ):  # Ensure _seg.nrrd files are ignored
+            ):  # Ignore segmentation files
                 rel_path = os.path.relpath(os.path.join(dirpath, f), root_folder)
                 parts = rel_path.split(os.sep)
                 # Expecting something like [ 'RM', 'T1', 'P5', 'T1_P5.nrrd' ]
                 if len(parts) >= 4 and parts[0] == "RM":
-                    subdir = parts[1]  # e.g. "SUSC", "T1", ...
+                    subdir = parts[1]  # e.g. "SUSC", "T1", etc.
                     patient_folder = parts[2]  # e.g. "P5"
                     patient_id = patient_folder.replace("P", "")
                     # We call pulse = subdir for simplicity
@@ -64,7 +65,9 @@ def run_experiment_to_json(
 ) -> None:
     """
     Main experiment driver. Builds a nested dictionary and dumps it to JSON.
-    Added verbose logging so the user knows what's happening at every stage.
+    For each nrrd file, if any step fails an exception is caught so that the
+    experiment continues with the next file. In the event of a failure, all
+    parameters for that file are set to NaN.
     """
     # --- Start-of-run logs for clarity ---
     logging.info("=== Starting run_experiment_to_json ===")
@@ -110,131 +113,159 @@ def run_experiment_to_json(
     for pulse, patient_id, file_path, subdir in tqdm(
         file_tuples, desc="Processing NRRD files"
     ):
-        logging.info(
-            f"--- Processing: Pulse={pulse}, Patient={patient_id}, File={file_path}"
-        )
-        # 1) Load 3D data
-        logging.info("Loading 3D NRRD data...")
-        img_3d = ImageProcessing.open_nrrd_file(file_path, return_header=False)
+        try:
+            logging.info(
+                f"--- Processing: Pulse={pulse}, Patient={patient_id}, File={file_path}"
+            )
 
-        # 2) Extract transversal slice
-        logging.info("Extracting transversal slice...")
-        t_axis = ImageProcessing.get_transversal_axis(file_path)
-        slice_2d = ImageProcessing.extract_transversal_slice(
-            img_3d, t_axis, slice_index=-1
-        )
+            # 1) Load 3D data
+            logging.info("Loading 3D NRRD data...")
+            img_3d = ImageProcessing.open_nrrd_file(file_path, return_header=False)
 
-        # 3) Create a mask
-        logging.info("Creating convex hull mask of the slice...")
-        hull = ImageProcessing.convex_hull_mask(image=slice_2d, threshold_method="li")
-        mask = hull > 0
+            # 2) Extract transversal slice
+            logging.info("Extracting transversal slice...")
+            t_axis = ImageProcessing.get_transversal_axis(file_path)
+            slice_2d = ImageProcessing.extract_transversal_slice(
+                img_3d, t_axis, slice_index=-1
+            )
 
-        # 4) Heuristic: variance guess
-        logging.info("Computing variance guess from masked region...")
+            # 3) Create a mask
+            logging.info("Creating convex hull mask of the slice...")
+            hull = ImageProcessing.convex_hull_mask(
+                image=slice_2d, threshold_method="li"
+            )
+            mask = hull > 0
 
-        # When fitting a theoretical covariance/variogram model, we estimate parameters like:
-        #     var (Variance): The sill or overall variance of the modelled field.
-        #     len_scale (Length Scale): A characteristic distance over which correlations drop off significantly.
+            # 4) Heuristic: variance guess
+            logging.info("Computing variance guess from masked region...")
+            # Invert mask: use values outside the brain region for variance estimation.
+            masked_values = slice_2d[~mask]
+            var_guess = float(np.var(masked_values)) if len(masked_values) > 1 else 1.0
+            len_scale_guess = 1.5
 
-        # The True values of the mask are the values inside the brain region
-        # to compute the variance and len scale guess, we want to use the values outside
-        # of the brain. Therefore, we invert the mask with ~mask.
-        masked_values = slice_2d[~mask]
-        var_guess = float(np.var(masked_values)) if len(masked_values) > 1 else 1.0
-        len_scale_guess = 1.5
+            # Ensure the subdir key exists in the dictionary
+            if subdir not in experiment_dict["Variogram_Experiment"]:
+                experiment_dict["Variogram_Experiment"][subdir] = {}
+            if patient_id not in experiment_dict["Variogram_Experiment"][subdir]:
+                experiment_dict["Variogram_Experiment"][subdir][patient_id] = {}
 
-        # Ensure the subdir key is in the dictionary
-        # If subdir is not recognized (not in {SUSC, T1, T1SIN, T2}), we create it
-        if subdir not in experiment_dict["Variogram_Experiment"]:
-            experiment_dict["Variogram_Experiment"][subdir] = {}
-        if patient_id not in experiment_dict["Variogram_Experiment"][subdir]:
-            experiment_dict["Variogram_Experiment"][subdir][patient_id] = {}
+            patient_dict = experiment_dict["Variogram_Experiment"][subdir][patient_id]
 
-        patient_dict = experiment_dict["Variogram_Experiment"][subdir][patient_id]
-
-        # --- 5) Isotropic
-        logging.info("Estimating isotropic variogram...")
-        iso_bin, iso_gamma = ImageProcessing.estimate_isotropic_variogram(
-            data=slice_2d,
-            bins=bins,
-            mask=mask,
-            sampling_size=sampling_size,
-            sampling_seed=sampling_seed,
-        )
-        logging.info("Fitting covariance models to isotropic variogram...")
-        iso_fits = ImageProcessing.fit_covariance_models(
-            bin_center=iso_bin,
-            gamma=iso_gamma,
-            var=var_guess,
-            len_scale=len_scale_guess,
-            model_classes=MODEL_CLASSES,
-        )
-
-        iso_key = "Isotropic"
-        patient_dict[iso_key] = {
-            "bin_centers": iso_bin.tolist(),
-            "gamma": iso_gamma.tolist(),
-            "models": {},
-        }
-        logging.info(f"Saving isotropic results under '{iso_key}'...")
-
-        for model_name, (model_obj, fit_data) in iso_fits.items():
-            pcov_array = fit_data["pcov"]
-            pcov_list = pcov_array.tolist() if pcov_array is not None else None
-            params_dict = dict(fit_data["params"])  # ensure plain dict
-            r2_val = float(fit_data["r2"])
-            patient_dict[iso_key]["models"][model_name] = {
-                "params": params_dict,
-                "pcov": pcov_list,
-                "r2": r2_val,
-            }
-
-        # --- 6) Anisotropic for each angle
-        logging.info(f"Estimating anisotropic variograms for angles = {angles_deg}...")
-        for angle in angles_deg:
-            logging.info(f"Computing anisotropic variogram at {angle} degrees...")
-            angle_rad = np.deg2rad(angle)
-            direction = np.array([np.cos(angle_rad), np.sin(angle_rad)])
-            bin_a, gamma_a = ImageProcessing.estimate_anisotropic_variogram(
+            # --- 5) Isotropic variogram estimation and fitting
+            logging.info("Estimating isotropic variogram...")
+            iso_bin, iso_gamma = ImageProcessing.estimate_isotropic_variogram(
                 data=slice_2d,
                 bins=bins,
-                direction=direction,
                 mask=mask,
-                angles_tol=angles_tol,
                 sampling_size=sampling_size,
                 sampling_seed=sampling_seed,
             )
-            logging.info(
-                f"Fitting covariance models to anisotropic variogram @ {angle} deg..."
-            )
-            aniso_fits = ImageProcessing.fit_covariance_models(
-                bin_center=bin_a,
-                gamma=gamma_a,
+            logging.info("Fitting covariance models to isotropic variogram...")
+            iso_fits = ImageProcessing.fit_covariance_models(
+                bin_center=iso_bin,
+                gamma=iso_gamma,
                 var=var_guess,
                 len_scale=len_scale_guess,
                 model_classes=MODEL_CLASSES,
             )
 
-            vario_key = f"Anisotropic_{angle}_degree"
-            patient_dict[vario_key] = {
-                "bin_centers": bin_a.tolist(),
-                "gamma": gamma_a.tolist(),
+            iso_key = "Isotropic"
+            patient_dict[iso_key] = {
+                "bin_centers": iso_bin.tolist(),
+                "gamma": iso_gamma.tolist(),
                 "models": {},
             }
-            logging.info(f"Saving anisotropic results under '{vario_key}'...")
-
-            for model_name, (model_obj, fit_data) in aniso_fits.items():
+            logging.info(f"Saving isotropic results under '{iso_key}'...")
+            for model_name, (model_obj, fit_data) in iso_fits.items():
                 pcov_array = fit_data["pcov"]
                 pcov_list = pcov_array.tolist() if pcov_array is not None else None
-                params_dict = dict(fit_data["params"])
+                params_dict = dict(fit_data["params"])  # ensure plain dict
                 r2_val = float(fit_data["r2"])
-                patient_dict[vario_key]["models"][model_name] = {
+                patient_dict[iso_key]["models"][model_name] = {
                     "params": params_dict,
                     "pcov": pcov_list,
                     "r2": r2_val,
                 }
 
-    # Final write-out
+            # --- 6) Anisotropic variogram estimation and fitting for each angle
+            logging.info(
+                f"Estimating anisotropic variograms for angles = {angles_deg}..."
+            )
+            for angle in angles_deg:
+                logging.info(f"Computing anisotropic variogram at {angle} degrees...")
+                angle_rad = np.deg2rad(angle)
+                direction = np.array([np.cos(angle_rad), np.sin(angle_rad)])
+                bin_a, gamma_a = ImageProcessing.estimate_anisotropic_variogram(
+                    data=slice_2d,
+                    bins=bins,
+                    direction=direction,
+                    mask=mask,
+                    angles_tol=angles_tol,
+                    sampling_size=sampling_size,
+                    sampling_seed=sampling_seed,
+                )
+                logging.info(
+                    f"Fitting covariance models to anisotropic variogram @ {angle} deg..."
+                )
+                aniso_fits = ImageProcessing.fit_covariance_models(
+                    bin_center=bin_a,
+                    gamma=gamma_a,
+                    var=var_guess,
+                    len_scale=len_scale_guess,
+                    model_classes=MODEL_CLASSES,
+                )
+
+                vario_key = f"Anisotropic_{angle}_degree"
+                patient_dict[vario_key] = {
+                    "bin_centers": bin_a.tolist(),
+                    "gamma": gamma_a.tolist(),
+                    "models": {},
+                }
+                logging.info(f"Saving anisotropic results under '{vario_key}'...")
+                for model_name, (model_obj, fit_data) in aniso_fits.items():
+                    pcov_array = fit_data["pcov"]
+                    pcov_list = pcov_array.tolist() if pcov_array is not None else None
+                    params_dict = dict(fit_data["params"])
+                    r2_val = float(fit_data["r2"])
+                    patient_dict[vario_key]["models"][model_name] = {
+                        "params": params_dict,
+                        "pcov": pcov_list,
+                        "r2": r2_val,
+                    }
+
+        except Exception as exc:
+            # Log the exception details and mark the file as failed.
+            logging.exception(f"Failed processing file {file_path}. Error: {exc}")
+            # Ensure the subdir key exists in the main dictionary
+            if subdir not in experiment_dict["Variogram_Experiment"]:
+                experiment_dict["Variogram_Experiment"][subdir] = {}
+            experiment_dict["Variogram_Experiment"][subdir][patient_id] = {}
+            patient_dict = experiment_dict["Variogram_Experiment"][subdir][patient_id]
+            nan_val = float("nan")
+            # Set the isotropic results to NaN.
+            patient_dict["Isotropic"] = {
+                "bin_centers": nan_val,
+                "gamma": nan_val,
+                "models": {
+                    model: {"params": nan_val, "pcov": nan_val, "r2": nan_val}
+                    for model in MODEL_CLASSES.keys()
+                },
+            }
+            # Set the anisotropic results for each angle to NaN.
+            for angle in angles_deg:
+                key = f"Anisotropic_{angle}_degree"
+                patient_dict[key] = {
+                    "bin_centers": nan_val,
+                    "gamma": nan_val,
+                    "models": {
+                        model: {"params": nan_val, "pcov": nan_val, "r2": nan_val}
+                        for model in MODEL_CLASSES.keys()
+                    },
+                }
+            # Continue to the next file without stopping the experiment.
+            continue
+
+    # Final write-out of the experiment results to the JSON file.
     logging.info(f"Writing experiment results to JSON => {output_json}")
     with open(output_json, "w") as jf:
         json.dump(experiment_dict, jf, indent=2)
@@ -245,7 +276,7 @@ def run_experiment_to_json(
 def main() -> None:
     """
     Example main function that sets up logging, defines angles, bins, etc.,
-    then runs the experiment and dumps to a JSON file.
+    then runs the experiment and dumps the results to a JSON file.
     """
     logging.basicConfig(
         level=logging.INFO,
@@ -255,7 +286,7 @@ def main() -> None:
 
     root_folder: str = "/data"  # in-contained path for the dataset
     output_json: str = (
-        "/out/variogram_experiment_results.json"  # in-contained path for the results file
+        "/out/variogram_experiment_results.json"  # path for the results file
     )
     angles_deg: List[int] = [0, 45, 90, 135]
     bins: np.ndarray = np.linspace(0, 20, 30)

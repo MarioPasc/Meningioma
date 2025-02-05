@@ -334,15 +334,17 @@ def generate_random_fields(
 
 def main():
     # Define output folder for saved images
-    output_folder = "./images/experiment_images"
+    output_folder = (
+        "scripts/noise_modelling/gaussian_random_markov_fields/images/experiment_images"
+    )
     os.makedirs(output_folder, exist_ok=True)
 
     # Example Input Paths and Parameters
     base_path = "/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_Adquisition"
     output_npz_path = "/home/mariopasc/Python/Datasets/Meningiomas/npz"
 
-    slice_index = 84
-    patient = "P15"
+    slice_index = 106
+    patient = "P46"
     pulse = "T1"
 
     # Load the data (magnitude MRI slice)
