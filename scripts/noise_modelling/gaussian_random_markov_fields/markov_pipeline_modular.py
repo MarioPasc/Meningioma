@@ -249,9 +249,7 @@ def main():
     )
 
     # Compute the mask that overlays on top of the brain and skull
-    hull = ImageProcessing.convex_hull_mask(
-        image=slice_data, threshold_method="li"
-    )
+    hull = ImageProcessing.convex_hull_mask(image=slice_data, threshold_method="li")
     mask = hull > 0
 
     # Sanity check

@@ -129,11 +129,11 @@ def run_experiment_to_json(
 
         # 4) Heuristic: variance guess
         logging.info("Computing variance guess from masked region...")
-        
+
         # When fitting a theoretical covariance/variogram model, we estimate parameters like:
         #     var (Variance): The sill or overall variance of the modelled field.
         #     len_scale (Length Scale): A characteristic distance over which correlations drop off significantly.
-        
+
         # The True values of the mask are the values inside the brain region
         # to compute the variance and len scale guess, we want to use the values outside
         # of the brain. Therefore, we invert the mask with ~mask.
@@ -251,14 +251,16 @@ def main():
         datefmt="%H:%M:%S",
     )
 
-    root_folder: str = "/data" # in-contained path for the dataset
-    output_json: str = "/out/variogram_experiment_results.json" # in-contained path for the results file
+    root_folder: str = "/data"  # in-contained path for the dataset
+    output_json: str = (
+        "/out/variogram_experiment_results.json"  # in-contained path for the results file
+    )
     angles_deg: List[int] = [0, 45, 90, 135]
     bins: np.array = np.linspace(0, 150, 151)  # e.g. 150 bins up to distance 150
     sampling_size: int = 3000
     sampling_seed: int = 19920516
     angles_tol: float = np.pi / 8
-    
+
     run_experiment_to_json(
         root_folder=root_folder,
         angles_deg=angles_deg,
