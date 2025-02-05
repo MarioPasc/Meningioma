@@ -251,8 +251,10 @@ def main():
         datefmt="%H:%M:%S",
     )
 
-    root_folder: str = "/data" # in-contained path for the dataset
-    output_json: str = "/out/variogram_experiment_results.json" # in-contained path for the results file
+    root_folder: str = "/data"
+    output_json: str = "/out/variogram_experiment_results.json"
+    root_folder_docker: str = "/data" # in-contained path for the dataset
+    output_json_docker: str = "/out/variogram_experiment_results.json" # in-contained path for the results file
     angles_deg: List[int] = [0, 45, 90, 135]
     bins: np.array = np.linspace(0, 150, 151)  # e.g. 150 bins up to distance 150
     sampling_size: int = 3000
