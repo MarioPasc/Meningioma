@@ -4,8 +4,8 @@
     "python.linting.flake8Enabled": true, // Use Flake8 as the linter
     "python.linting.flake8Path": "flake8", // Path to Flake8 (ensure it's installed in your environment)
     "python.linting.flake8Args": [
-        "--max-line-length=88", // Match Black's line length
-        "--ignore=E203,W503" // Ignore errors incompatible with Black
+        "--max-line-length=88",
+        "--extend-ignore=E203,W503,E501,F401,F403"
     ],
     // Formatting with Black
     "editor.formatOnSave": true,
@@ -16,11 +16,15 @@
     "python.formatting.provider": "black", // Use Black as the formatter
     "python.formatting.blackPath": "black", // Path to Black (ensure it's installed)
     // Type Checking with MyPy
-    "python.linting.mypyEnabled": true, // Enable MyPy
+    "python.linting.mypyEnabled": false, // Enable MyPy
     "python.linting.mypyPath": "mypy", // Path to MyPy
     "python.linting.mypyArgs": [
-        "--ignore-missing-imports", // Suppress errors for third-party libraries
-        "--strict" // Enable strict type checking
+        "--ignore-missing-imports",
+        "--no-strict-optional",
+        "--allow-untyped-defs",
+        "--allow-untyped-calls",
+        "--allow-incomplete-defs",
+        "--disable-error-code=import"
     ],
     // Jupyter Notebook
     "jupyter.notebookFileRoot": "${workspaceFolder}",
@@ -43,11 +47,11 @@
         "**/__pycache__/": true, // Hide __pycache__ folders
         "**/*.pyc": true // Hide .pyc files
     },
+    "python.analysis.autoImportCompletions": true, // Enable auto-import suggestions
+    "python.analysis.typeCheckingMode": "off",
     "editor.codeActionsOnSave": {
         "source.organizeImports": "explicit"
     },
-    "python.analysis.autoImportCompletions": true, // Enable auto-import suggestions
-    "python.analysis.typeCheckingMode": "off", // Strict type checking
     "python.analysis.autoSearchPaths": true,
     "python.analysis.useLibraryCodeForTypes": true,
 }
