@@ -266,15 +266,25 @@ def get_convex_hull_mask(
     mask, _ = get_global_umbralization(image=img_norm, method=threshold_method)
     thresh = (mask * 255).astype(np.uint8)
 
-    # Find contours and compute convex hulls
+    # Find contours
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    hull_list = [cv2.convexHull(contour) for contour in contours]
+
+    if not contours:
+        return np.zeros_like(
+            image, dtype=np.uint8
+        )  # Return empty mask if no contours found
+
+    # Find the largest contour by area
+    largest_contour = max(contours, key=cv2.contourArea)
+
+    # Compute the convex hull of the largest contour
+    largest_hull = cv2.convexHull(largest_contour)
 
     # Create a filled hull mask
-    filled_hull_mask = np.zeros_like(image, dtype=np.uint8)
-    cv2.drawContours(filled_hull_mask, hull_list, -1, 255, thickness=cv2.FILLED)
+    hull_mask = np.zeros_like(image, dtype=np.uint8)
+    cv2.drawContours(hull_mask, [largest_hull], -1, 255, thickness=cv2.FILLED)
 
     # Apply morphological closing and hole filling
-    binary_mask = get_filled_mask(filled_hull_mask > 0, structure_size=7, iterations=3)
+    binary_mask = get_filled_mask(hull_mask > 0, structure_size=7, iterations=3)
 
-    return binary_mask * 255  # Convert to uint8 binary mask
+    return binary_mask.astype(np.uint8) * 255  # Convert to uint8 binary mask

@@ -25,7 +25,7 @@ import numpy as np
 from numpy.typing import NDArray
 import cv2
 from typing import Tuple, Optional, Union, Dict, List, Any
-import gstools as gs
+import gstools as gs  # type: ignore
 
 
 class ImageProcessing:
