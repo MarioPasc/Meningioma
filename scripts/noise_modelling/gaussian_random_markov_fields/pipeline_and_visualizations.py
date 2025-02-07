@@ -335,75 +335,102 @@ def plot_noise_distributions(
     print(f"Noise distributions saved to {output_path}")
 
 
-def plot_mask_and_distribution(
-    image: np.ndarray, mask: np.ndarray, output_path: str
-) -> None:
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.stats import rice, rayleigh, ncx2
+
+def plot_mask_and_distribution(image: np.ndarray, mask: np.ndarray, output_path: str) -> None:
     """
     Create a two-panel figure:
-      - Left: The original image with the overlayed mask (displayed in red with alpha=0.6).
-      - Right: Two fitted distribution curves:
-            (i) Rice distribution fitted to the entire (non-masked) image.
-           (ii) Rayleigh distribution fitted to the background (pixels outside the mask).
-    The legends include the fitted parameters in LaTeX format with line breaks.
-
+      - Left panel: The original image with the overlayed mask (displayed in red with alpha=0.6).
+      - Right panel: Empirical PMFs (from normalized histograms) and the corresponding fitted discrete PMFs.
+          * Rice distribution fitted to the entire (non-masked) image.
+          * Rayleigh and non-central chi-square (NC χ²) distributions fitted to the background (pixels outside the mask).
+    
+    The fitted parameters are displayed in the legends.
+    
     Parameters:
         image: The original image (2D array).
         mask: Boolean mask (2D array).
         output_path: Path where to save the figure.
     """
-    # --- Subplot 1: Original image with overlayed mask ---
+    # --- Left Panel: Display image with mask overlay ---
     fig, axs = plt.subplots(1, 2, figsize=(14, 6))
-
-    # Display the original image.
+    
+    # Show the image in grayscale.
     axs[0].imshow(image, cmap="gray", origin="lower")
     axs[0].set_title("Original Image with Mask")
     axs[0].set_xlabel("X")
     axs[0].set_ylabel("Y")
-    # Overlay the mask in red. Here we create an array that is 1 where mask is True.
+    # Create an overlay from the mask (red color).
     mask_overlay = np.where(mask, 1, np.nan)
     axs[0].imshow(mask_overlay, cmap="Reds_r", alpha=0.6, origin="lower")
-
-    # --- Subplot 2: Distribution fits ---
-    # For the Rice distribution, use all pixel values.
-    rice_vals = image.flatten()
+    
+    # --- Right Panel: Empirical and Fitted PMFs ---
+    # Extract values.
+    rice_vals = image.flatten()  # All pixels for the Rice distribution.
+    background_vals = image[~mask].flatten()  # Background pixels for Rayleigh and NC χ².
+    
+    # Fit distributions.
+    # Rice distribution fit (returns: shape parameter 'b', location, and scale).
     b, loc_rice, scale_rice = rice.fit(rice_vals)
-    # For the Rayleigh distribution, use only background pixels (outside the mask).
-    background_vals = image[~mask].flatten()
+    # Rayleigh distribution fit (returns: location and scale).
     loc_rayleigh, scale_rayleigh = rayleigh.fit(background_vals)
-
-    # Create an x axis.
-    x = np.linspace(0, np.max(rice_vals), 1000)
-    rice_pdf = rice.pdf(x, b, loc_rice, scale_rice)
-    rayleigh_pdf = rayleigh.pdf(x, loc_rayleigh, scale_rayleigh)
-
-    # Plot the distributions.
-    axs[1].plot(
-        x,
-        rice_pdf,
-        color="blue",
-        label=rf"Rice: $b={b:.5f},\ loc={loc_rice:.2f}$\\$\mathrm{{scale}}={scale_rice:.2f}$",
-    )
-    axs[1].plot(
-        x,
-        rayleigh_pdf,
-        color="red",
-        label=rf"Rayleigh: $loc={loc_rayleigh:.2f}$\\$\mathrm{{scale}}={scale_rayleigh:.2f}$",
-    )
-    axs[1].set_title("Fitted Distributions")
-    axs[1].set_xlabel("Pixel Intensity")
-    axs[1].set_ylabel("Probability Density")
-    axs[1].legend()
-
-    for ax in axs:
-        ax.spines["right"].set_visible(False)
-        ax.spines["top"].set_visible(False)
-        ax.get_xaxis().tick_bottom()
-        ax.get_yaxis().tick_left()
-
+    # NC χ² distribution fit (returns: degrees of freedom, noncentrality, location, and scale).
+    df_ncx2, nc_ncx2, loc_ncx2, scale_ncx2 = ncx2.fit(background_vals)
+    
+    # Create histogram bins assuming the image intensities are quantized.
+    # For the Rice distribution (all pixel values).
+    bins_rice = np.arange(np.min(rice_vals), np.max(rice_vals) + 2) - 0.5  # bins for integer values
+    hist_rice, bin_edges_rice = np.histogram(rice_vals, bins=bins_rice, density=False)
+    pmf_rice = hist_rice / hist_rice.sum()  # Normalize to get a PMF.
+    bin_centers_rice = (bin_edges_rice[:-1] + bin_edges_rice[1:]) / 2
+    
+    # For background pixels (Rayleigh and NC χ²).
+    bins_bkg = np.arange(np.min(background_vals), np.max(background_vals) + 2) - 0.5
+    hist_bkg, bin_edges_bkg = np.histogram(background_vals, bins=bins_bkg, density=False)
+    pmf_bkg = hist_bkg / hist_bkg.sum()
+    bin_centers_bkg = (bin_edges_bkg[:-1] + bin_edges_bkg[1:]) / 2
+    
+    # Compute theoretical PMFs by differencing the CDF at the bin edges.
+    theo_pmf_rice = rice.cdf(bin_edges_rice[1:], b, loc_rice, scale_rice) - \
+                    rice.cdf(bin_edges_rice[:-1], b, loc_rice, scale_rice)
+    theo_pmf_rayleigh = rayleigh.cdf(bin_edges_bkg[1:], loc_rayleigh, scale_rayleigh) - \
+                        rayleigh.cdf(bin_edges_bkg[:-1], loc_rayleigh, scale_rayleigh)
+    theo_pmf_ncx2 = ncx2.cdf(bin_edges_bkg[1:], df_ncx2, nc_ncx2, loc_ncx2, scale_ncx2) - \
+                    ncx2.cdf(bin_edges_bkg[:-1], df_ncx2, nc_ncx2, loc_ncx2, scale_ncx2)
+    
+    # Plot empirical PMF and theoretical PMF for each distribution.
+    ax = axs[1]
+    # Rice distribution.
+    ax.plot(bin_centers_rice, theo_pmf_rice, color="blue", marker="o",
+            label=rf"Rice fit: $b={b:.5f},\ loc={loc_rice:.2f}$\\$\mathrm{{scale}}={scale_rice:.2f}$")
+    # Rayleigh distribution.
+    ax.plot(bin_centers_bkg, theo_pmf_rayleigh, color="red", marker="o",
+            label=rf"Rayleigh fit: $loc={loc_rayleigh:.2f}$\\$\mathrm{{scale}}={scale_rayleigh:.2f}$")
+    # NC χ² distribution.
+    ax.plot(bin_centers_bkg, theo_pmf_ncx2, color="green", marker="o",
+            label=rf"NC-$\chi^2$ fit: $loc={loc_ncx2:.2f}$, $\mathrm{{scale}}={scale_ncx2:.2f}$\\$\lambda={df_ncx2:.2f}$, $NC={nc_ncx2:.2f}$")
+    
+    # PMF
+    ax.bar(bin_centers_rice, pmf_rice, width=1, alpha=0.3, color="blue", label="Empirical Image PMF")
+    ax.bar(bin_centers_bkg, pmf_bkg, width=1, alpha=0.3, color="red", label="Empirical Background Pixels PMF")
+    
+    ax.set_title("Empirical and Fitted PMFs")
+    ax.set_xlabel("Pixel Intensity")
+    ax.set_ylabel("Probability Mass")
+    ax.legend()
+    
+    # Improve appearance by removing top and right spines.
+    for axis in axs:
+        axis.spines["right"].set_visible(False)
+        axis.spines["top"].set_visible(False)
+        axis.xaxis.tick_bottom()
+        axis.yaxis.tick_left()
+    
     plt.tight_layout()
-    plt.savefig(output_path, bbox_inches="tight")
-    plt.close(fig)
-    print(f"Mask and distribution visualization saved to {output_path}")
+    plt.savefig(output_path)
+    plt.close()
 
 
 def plot_mask_and_pdf_comparison(

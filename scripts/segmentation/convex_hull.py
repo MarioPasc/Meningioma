@@ -169,9 +169,9 @@ def process_and_save_study(filepath: str, output_path: str, patient: str, pulse:
 
 
 # Example Input Paths
-base_path = "/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_Adquisition"
-output_npz_path = "/home/mariopasc/Python/Datasets/Meningiomas/npz"
-output_path = "/home/mariopasc/Python/Datasets/Meningiomas/ConvexHull"  # Directory to store images
+base_path = "/home/mario/Python/Datasets/Meningiomas/Meningioma_Adquisition"
+output_npz_path = "/home/mario/Python/Datasets/Meningiomas/npz"
+output_path = "/home/mario/Python/Datasets/Meningiomas/ConvexHull"  # Directory to store images
 patient = "P50"
 
 pulses = ["T1SIN", "T2", "SUSC", "T1"]
