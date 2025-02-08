@@ -6,18 +6,17 @@ import numpy as np
 import pandas as pd
 import csv
 import gstools as gs  # type: ignore
-from gstools.covmodel.plot import plot_variogram  # type: ignore
 
 from Meningioma.image_processing import ImageProcessing  # type: ignore
-from Meningioma.utils import Stats, npz_converter  # type: ignore
+from Meningioma.utils import Stats
+
+from scipy.stats import rice, rayleigh, ncx2
+from scipy.interpolate import interp1d
 
 import matplotlib.pyplot as plt
 from cycler import cycler
 import scienceplots  # type: ignore
 import pyvista as pv  # type: ignore
-
-# Import the required distributions from scipy.stats
-from scipy.stats import rice, rayleigh
 
 plt.style.use(["science", "ieee", "std-colors"])
 plt.rcParams["font.size"] = 10
@@ -251,7 +250,7 @@ def plot_noise_distributions(
     # Flatten the arrays.
     real_vals = noise_real.flatten()
     imag_vals = noise_imag.flatten()
-    rayleigh_vals = noise_final.flatten()
+    final_noise_vals = noise_final.flatten()
 
     # Get KDE estimates.
     kde_real, x_real = ImageProcessing.kde(
@@ -261,25 +260,26 @@ def plot_noise_distributions(
         imag_vals, h=h, num_points=1000, return_x_values=True
     )
     kde_rayleigh, x_rayleigh = ImageProcessing.kde(
-        rayleigh_vals, h=h, num_points=1000, return_x_values=True
+        final_noise_vals, h=h, num_points=1000, return_x_values=True
     )
 
     # Compute sample statistics.
     mean_real, std_real = np.mean(real_vals), np.std(real_vals)
     mean_imag, std_imag = np.mean(imag_vals), np.std(imag_vals)
-    mean_rayleigh, std_rayleigh = np.mean(rayleigh_vals), np.std(rayleigh_vals)
+    mean_rayleigh, std_rayleigh = np.mean(final_noise_vals), np.std(final_noise_vals)
 
-    # Estimate parameters for the Rayleigh distribution using scipy.stats.
+    # Estimate parameters for the Rayleigh and NC-chi2 distribution using scipy.stats.
     # The fit method returns (loc, scale)
-    loc_r, scale_r = rayleigh.fit(rayleigh_vals)
+    loc_r, scale_r = rayleigh.fit(final_noise_vals)
+    df_ncx2, nc_ncx2, loc_ncx2, scale_ncx2 = ncx2.fit(final_noise_vals)
+
     scipy_bias = scale_r * np.sqrt(np.pi / 2)
 
-    # Theoretical Rayleigh PDF.
-    def rayleigh_pdf(r, loc, scale):
-        return (r - loc) / scale**2 * np.exp(-((r - loc) ** 2) / (2 * scale**2))
+    # Generate the PDFs
+    x_theoretical = np.linspace(0, np.max(final_noise_vals), 1000)
 
-    x_theoretical = np.linspace(0, np.max(rayleigh_vals), 1000)
-    y_theoretical = rayleigh_pdf(x_theoretical, loc_r, scale_r)
+    rayleigh_pdf = rayleigh.pdf(x_theoretical, loc_r, scale_r)
+    ncx2_pdf = ncx2.pdf(x_theoretical, df_ncx2, nc_ncx2, loc_ncx2, scale_ncx2)
 
     # Create figure with two subplots.
     fig, axs = plt.subplots(1, 2, sharey=True, figsize=(10, 6))
@@ -307,15 +307,21 @@ def plot_noise_distributions(
     axs[1].plot(
         x_rayleigh,
         kde_rayleigh,
-        label=rf"Rayleigh: $\mu={mean_rayleigh:.2f},\ \sigma={std_rayleigh:.2f}$\\"
-        rf"$\hat{{\sigma}}={scale_r:.2f}$, Bias={scipy_bias:.2f}",
+        label=rf"Parzen-Rosenblatt Kernel Density Estimation",
         color="green",
     )
     axs[1].plot(
         x_theoretical,
-        y_theoretical,
-        label="Theoretical Rayleigh",
+        rayleigh_pdf,
+        label=rf"Theoretical Rayleigh $loc={loc_r:.2f}$, $\mathrm{{scale}}={scale_r:.2f}$",
         color="red",
+        linestyle="--",
+    )
+    axs[1].plot(
+        x_theoretical,
+        rayleigh_pdf,
+        label=rf"NC-$\chi^2$ fit: $loc={loc_ncx2:.2f}$, $\mathrm{{scale}}={scale_ncx2:.2f}$\\$\lambda={df_ncx2:.2f}$, $Non-Centrality={nc_ncx2:.2f}$",
+        color="green",
         linestyle="--",
     )
     axs[1].set_title("Rayleigh Distribution from Generated Noise")
@@ -335,20 +341,18 @@ def plot_noise_distributions(
     print(f"Noise distributions saved to {output_path}")
 
 
-import numpy as np
-import matplotlib.pyplot as plt
-from scipy.stats import rice, rayleigh, ncx2
-
-def plot_mask_and_distribution(image: np.ndarray, mask: np.ndarray, output_path: str) -> None:
+def plot_mask_and_distribution(
+    image: np.ndarray, mask: np.ndarray, output_path: str
+) -> None:
     """
     Create a two-panel figure:
       - Left panel: The original image with the overlayed mask (displayed in red with alpha=0.6).
       - Right panel: Empirical PMFs (from normalized histograms) and the corresponding fitted discrete PMFs.
           * Rice distribution fitted to the entire (non-masked) image.
           * Rayleigh and non-central chi-square (NC χ²) distributions fitted to the background (pixels outside the mask).
-    
+
     The fitted parameters are displayed in the legends.
-    
+
     Parameters:
         image: The original image (2D array).
         mask: Boolean mask (2D array).
@@ -356,7 +360,7 @@ def plot_mask_and_distribution(image: np.ndarray, mask: np.ndarray, output_path:
     """
     # --- Left Panel: Display image with mask overlay ---
     fig, axs = plt.subplots(1, 2, figsize=(14, 6))
-    
+
     # Show the image in grayscale.
     axs[0].imshow(image, cmap="gray", origin="lower")
     axs[0].set_title("Original Image with Mask")
@@ -365,12 +369,14 @@ def plot_mask_and_distribution(image: np.ndarray, mask: np.ndarray, output_path:
     # Create an overlay from the mask (red color).
     mask_overlay = np.where(mask, 1, np.nan)
     axs[0].imshow(mask_overlay, cmap="Reds_r", alpha=0.6, origin="lower")
-    
+
     # --- Right Panel: Empirical and Fitted PMFs ---
     # Extract values.
     rice_vals = image.flatten()  # All pixels for the Rice distribution.
-    background_vals = image[~mask].flatten()  # Background pixels for Rayleigh and NC χ².
-    
+    background_vals = image[
+        ~mask
+    ].flatten()  # Background pixels for Rayleigh and NC χ².
+
     # Fit distributions.
     # Rice distribution fit (returns: shape parameter 'b', location, and scale).
     b, loc_rice, scale_rice = rice.fit(rice_vals)
@@ -378,56 +384,92 @@ def plot_mask_and_distribution(image: np.ndarray, mask: np.ndarray, output_path:
     loc_rayleigh, scale_rayleigh = rayleigh.fit(background_vals)
     # NC χ² distribution fit (returns: degrees of freedom, noncentrality, location, and scale).
     df_ncx2, nc_ncx2, loc_ncx2, scale_ncx2 = ncx2.fit(background_vals)
-    
+
     # Create histogram bins assuming the image intensities are quantized.
     # For the Rice distribution (all pixel values).
-    bins_rice = np.arange(np.min(rice_vals), np.max(rice_vals) + 2) - 0.5  # bins for integer values
+    bins_rice = (
+        np.arange(np.min(rice_vals), np.max(rice_vals) + 2) - 0.5
+    )  # bins for integer values
     hist_rice, bin_edges_rice = np.histogram(rice_vals, bins=bins_rice, density=False)
     pmf_rice = hist_rice / hist_rice.sum()  # Normalize to get a PMF.
     bin_centers_rice = (bin_edges_rice[:-1] + bin_edges_rice[1:]) / 2
-    
+
     # For background pixels (Rayleigh and NC χ²).
     bins_bkg = np.arange(np.min(background_vals), np.max(background_vals) + 2) - 0.5
-    hist_bkg, bin_edges_bkg = np.histogram(background_vals, bins=bins_bkg, density=False)
+    hist_bkg, bin_edges_bkg = np.histogram(
+        background_vals, bins=bins_bkg, density=False
+    )
     pmf_bkg = hist_bkg / hist_bkg.sum()
     bin_centers_bkg = (bin_edges_bkg[:-1] + bin_edges_bkg[1:]) / 2
-    
+
     # Compute theoretical PMFs by differencing the CDF at the bin edges.
-    theo_pmf_rice = rice.cdf(bin_edges_rice[1:], b, loc_rice, scale_rice) - \
-                    rice.cdf(bin_edges_rice[:-1], b, loc_rice, scale_rice)
-    theo_pmf_rayleigh = rayleigh.cdf(bin_edges_bkg[1:], loc_rayleigh, scale_rayleigh) - \
-                        rayleigh.cdf(bin_edges_bkg[:-1], loc_rayleigh, scale_rayleigh)
-    theo_pmf_ncx2 = ncx2.cdf(bin_edges_bkg[1:], df_ncx2, nc_ncx2, loc_ncx2, scale_ncx2) - \
-                    ncx2.cdf(bin_edges_bkg[:-1], df_ncx2, nc_ncx2, loc_ncx2, scale_ncx2)
-    
+    theo_pmf_rice = rice.cdf(bin_edges_rice[1:], b, loc_rice, scale_rice) - rice.cdf(
+        bin_edges_rice[:-1], b, loc_rice, scale_rice
+    )
+    theo_pmf_rayleigh = rayleigh.cdf(
+        bin_edges_bkg[1:], loc_rayleigh, scale_rayleigh
+    ) - rayleigh.cdf(bin_edges_bkg[:-1], loc_rayleigh, scale_rayleigh)
+    theo_pmf_ncx2 = ncx2.cdf(
+        bin_edges_bkg[1:], df_ncx2, nc_ncx2, loc_ncx2, scale_ncx2
+    ) - ncx2.cdf(bin_edges_bkg[:-1], df_ncx2, nc_ncx2, loc_ncx2, scale_ncx2)
+
     # Plot empirical PMF and theoretical PMF for each distribution.
     ax = axs[1]
     # Rice distribution.
-    ax.plot(bin_centers_rice, theo_pmf_rice, color="blue", marker="o",
-            label=rf"Rice fit: $b={b:.5f},\ loc={loc_rice:.2f}$\\$\mathrm{{scale}}={scale_rice:.2f}$")
+    ax.plot(
+        bin_centers_rice,
+        theo_pmf_rice,
+        color="blue",
+        marker="o",
+        label=rf"Rice fit: $b={b:.5f},\ loc={loc_rice:.2f}$\\$\mathrm{{scale}}={scale_rice:.2f}$",
+    )
     # Rayleigh distribution.
-    ax.plot(bin_centers_bkg, theo_pmf_rayleigh, color="red", marker="o",
-            label=rf"Rayleigh fit: $loc={loc_rayleigh:.2f}$\\$\mathrm{{scale}}={scale_rayleigh:.2f}$")
+    ax.plot(
+        bin_centers_bkg,
+        theo_pmf_rayleigh,
+        color="red",
+        marker="o",
+        label=rf"Rayleigh fit: $loc={loc_rayleigh:.2f}$\\$\mathrm{{scale}}={scale_rayleigh:.2f}$",
+    )
     # NC χ² distribution.
-    ax.plot(bin_centers_bkg, theo_pmf_ncx2, color="green", marker="o",
-            label=rf"NC-$\chi^2$ fit: $loc={loc_ncx2:.2f}$, $\mathrm{{scale}}={scale_ncx2:.2f}$\\$\lambda={df_ncx2:.2f}$, $NC={nc_ncx2:.2f}$")
-    
+    ax.plot(
+        bin_centers_bkg,
+        theo_pmf_ncx2,
+        color="green",
+        marker="o",
+        label=rf"NC-$\chi^2$ fit: $loc={loc_ncx2:.2f}$, $\mathrm{{scale}}={scale_ncx2:.2f}$\\$\lambda={df_ncx2:.2f}$, $A={nc_ncx2:.2f}$",
+    )
+
     # PMF
-    ax.bar(bin_centers_rice, pmf_rice, width=1, alpha=0.3, color="blue", label="Empirical Image PMF")
-    ax.bar(bin_centers_bkg, pmf_bkg, width=1, alpha=0.3, color="red", label="Empirical Background Pixels PMF")
-    
+    ax.bar(
+        bin_centers_rice,
+        pmf_rice,
+        width=1,
+        alpha=0.3,
+        color="blue",
+        label="Empirical Image PMF",
+    )
+    ax.bar(
+        bin_centers_bkg,
+        pmf_bkg,
+        width=1,
+        alpha=0.3,
+        color="red",
+        label="Empirical Background Pixels PMF",
+    )
+
     ax.set_title("Empirical and Fitted PMFs")
     ax.set_xlabel("Pixel Intensity")
     ax.set_ylabel("Probability Mass")
     ax.legend()
-    
+
     # Improve appearance by removing top and right spines.
     for axis in axs:
         axis.spines["right"].set_visible(False)
         axis.spines["top"].set_visible(False)
         axis.xaxis.tick_bottom()
         axis.yaxis.tick_left()
-    
+
     plt.tight_layout()
     plt.savefig(output_path)
     plt.close()
@@ -482,8 +524,6 @@ def plot_mask_and_pdf_comparison(
         generated_noise, h=h, num_points=1000, return_x_values=True
     )
     # Re-interpolate both onto x_emp.
-    from scipy.interpolate import interp1d
-
     f_orig = interp1d(x_orig, kde_orig, bounds_error=False, fill_value="extrapolate")
     f_gen = interp1d(x_gen, kde_gen, bounds_error=False, fill_value="extrapolate")
     kde_orig_emp = f_orig(x_emp)
@@ -575,8 +615,6 @@ def compute_js_divergence(
     """
     Compute the Jensen–Shannon divergence between two PDFs by first discretizing them.
     """
-    from Meningioma.utils import Stats
-
     p1 = Stats.approximate_pmf_from_pdf(pdf1, x_vals, epsilon)
     p2 = Stats.approximate_pmf_from_pdf(pdf2, x_vals, epsilon)
     m = 0.5 * (p1 + p2)
