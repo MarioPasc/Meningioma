@@ -2,8 +2,8 @@ from typing import Any, Tuple, Dict, List, Optional
 from numpy.typing import NDArray
 
 import numpy as np
-import gstools as gs
-from tqdm import tqdm
+import gstools as gs  # type: ignore
+from tqdm import tqdm  # type: ignore
 
 
 """

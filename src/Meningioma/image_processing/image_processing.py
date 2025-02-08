@@ -12,6 +12,7 @@ from .segmentation import (
     get_largest_bbox,
     get_filled_mask,
     get_convex_hull_mask,
+    get_3d_volume_segmentation,
 )
 from .random_fields import (
     get_estimate_isotropic_variogram,
@@ -111,6 +112,59 @@ class ImageProcessing:
         return get_convex_hull_mask(
             image=image,
             threshold_method=threshold_method,
+        )
+
+    @staticmethod
+    def segment_3d_volume(
+        filepath: str,
+        threshold_method: str = "li",
+        structure_size_2d: int = 7,
+        iterations_2d: int = 3,
+        structure_size_3d: int = 3,
+        iterations_3d: int = 1,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Implements the same segmentation pipeline as debug_segmentation_steps, but returns
+        only the final (volume, mask) without displaying intermediate stages.
+
+        Steps:
+        1) Load volume from NPZ (assumed shape = (H, W, S) after squeeze).
+        2) Global min-max normalization to [0, 255].
+        3) For each slice:
+            - Threshold (largest contour -> convex hull) + 2D morphological closing.
+        4) (Optional) 3D morphological closing for inter-slice consistency.
+        5) Largest 3D connected component is kept.
+        6) Return the original volume (float32) and final mask (boolean).
+
+        Parameters
+        ----------
+        filepath : str
+            Path to the NPZ file. The volume is assumed in npz_data["data"][0], shape (H, W, S).
+        threshold_method : str, optional
+            Threshold method, e.g. "otsu" or "li". By default "otsu".
+        structure_size_2d : int, optional
+            Size of the kernel for 2D morphological closing. Default 7.
+        iterations_2d : int, optional
+            Number of iterations for 2D morphological closing. Default 3.
+        structure_size_3d : int, optional
+            Size of the kernel for 3D morphological closing. Default 3.
+        iterations_3d : int, optional
+            Number of iterations for the 3D morphological closing. Default 1.
+
+        Returns
+        -------
+        volume : np.ndarray
+            The loaded original volume (float32), shape (H, W, S).
+        mask : np.ndarray
+            A 3D boolean array (same shape as volume) with the segmented region = True.
+        """
+        return get_3d_volume_segmentation(
+            filepath=filepath,
+            threshold_method=threshold_method,
+            structure_size_2d=structure_size_2d,
+            iterations_2d=iterations_2d,
+            structure_size_3d=structure_size_3d,
+            iterations_3d=iterations_3d,
         )
 
     @staticmethod

@@ -8,10 +8,10 @@ import csv
 import gstools as gs  # type: ignore
 
 from Meningioma.image_processing import ImageProcessing  # type: ignore
-from Meningioma.utils import Stats
+from Meningioma.utils import Stats  # type: ignore
 
-from scipy.stats import rice, rayleigh, ncx2
-from scipy.interpolate import interp1d
+from scipy.stats import rice, rayleigh, ncx2  # type: ignore
+from scipy.interpolate import interp1d  # type: ignore
 
 import matplotlib.pyplot as plt
 from cycler import cycler
@@ -928,7 +928,6 @@ def main():
     x = np.arange(10)
     y = np.arange(10)
     z = np.arange(10)
-    model3d = gs.Gaussian(dim=3, len_scale=[16, 8, 4], angles=(0.8, 0.4, 0.2))
     srf3d = gs.SRF(model3d)
     field3d = srf3d((x, y, z), mesh_type="structured")
     vtk_path = os.path.join(output_folder, "3d_field.vtk")
