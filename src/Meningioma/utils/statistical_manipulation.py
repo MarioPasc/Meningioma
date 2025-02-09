@@ -239,14 +239,14 @@ class Stats:
         if dist.lower() == "norm":
             mu, sigma = norm.fit(data)
             pdf_fit = norm.pdf(x_common, loc=mu, scale=sigma)
-            param_str = f"μ={mu:.2f}, σ={sigma:.2f}"
+            param_str = f"$\mu$={mu:.2f}, $\sigma$={sigma:.2f}"
             param_series = pd.Series({"mu": mu, "sigma": sigma})
         elif dist.lower() == "rayleigh":
             loc, scale = rayleigh.fit(data)
             pdf_fit = rayleigh.pdf(x_common, loc=loc, scale=scale)
             # Report sigma as sqrt(scale) if desired.
             sigma_est = np.sqrt(scale)
-            param_str = f"loc={loc:.2f}, σ̂={sigma_est:.2f}"
+            param_str = f"loc={loc:.2f}, $\sigma$={sigma_est:.2f}"
             param_series = pd.Series({"loc": loc, "scale": scale, "sigma": sigma_est})
         elif dist.lower() == "rice":
             # rice.fit returns: shape parameter b, location, and scale.
@@ -259,7 +259,7 @@ class Stats:
             df, nc, loc, scale = ncx2.fit(data)
             pdf_fit = ncx2.pdf(x_common, df, nc, loc=loc, scale=scale)
             sigma_est = np.sqrt(scale)
-            param_str = f"L={df:.2f}, NC={nc:.2f}, σ={sigma_est:.2f}"
+            param_str = f"L={df:.2f}, NC={nc:.2f}, $\sigma$={sigma_est:.2f}"
             param_series = pd.Series(
                 {"df": df, "nc": nc, "loc": loc, "scale": scale, "sigma": sigma_est}
             )
