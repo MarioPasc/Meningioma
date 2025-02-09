@@ -62,7 +62,55 @@ class Metrics:
         )
 
     @staticmethod
-    def compute_jensen_shannon_divergence(
+    def compute_jensen_shannon_divergence_pdfs(
+        pdf1: np.ndarray, pdf2: np.ndarray, x_values: np.ndarray, epsilon: float = 1e-10
+    ) -> float:
+        """
+        Compute the Jensen-Shannon divergence between an empirical noise distribution
+        and a KDE-estimated distribution, adding epsilon to avoid division by zero.
+
+        Parameters:
+        - noise_values (np.ndarray): Original noise values outside the bounding box.
+        - reference_pdf (np.ndarray): Discrete KDE-estimated PDF values evaluated at x_values.
+        - x_values (np.ndarray): The x-values over which the PDFs are evaluated.
+        - epsilon (float): Small value to prevent division by zero.
+
+        Returns:
+        - float: Jensen-Shannon divergence divergence between the empirical and KDE distributions.
+
+        Notes:
+        - More info on Jensen-Shannon Divergence: https://en.wikipedia.org/wiki/Jensen%E2%80%93Shannon_divergence
+        - More info on Mixture Distributions: https://en.wikipedia.org/wiki/Mixture_distribution
+        """
+        # Add epsilon to avoid division by zero and log(0).
+
+        mixture_distribution = 0.5 * (pdf1 + pdf2)
+
+        # Compute the Kullback-Leibler divergence for each PDF distribution with the mixture
+
+        # KL(P ∥ M): Compares the distribution P (reference_prob_masses) to M (the mixture_distribution).
+        # KL(Q ∥ M): Compares the distribution Q (noise_prob_masses) to M (the mixture_distribution).
+
+        kl_1 = Metrics.compute_kullback_leibler_divergence(
+            noise_values=pdf1,  # Original reference distribution
+            reference_pdf=mixture_distribution,  # Mixture distribution
+            x_values=x_values,
+            epsilon=epsilon,
+            only_kb_divergence=True,
+        )
+
+        kl_2 = Metrics.compute_kullback_leibler_divergence(
+            noise_values=pdf2,  # Original noise distribution
+            reference_pdf=mixture_distribution,  # Mixture distribution
+            x_values=x_values,
+            epsilon=epsilon,
+            only_kb_divergence=True,
+        )
+
+        return 0.5 * (kl_1 + kl_2)
+
+    @staticmethod
+    def compute_jensen_shannon_divergence_pdf_pmf(
         noise_values: np.ndarray,
         reference_pdf: np.ndarray,
         x_values: np.ndarray,

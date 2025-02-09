@@ -10,102 +10,7 @@ from scipy.stats import rice, rayleigh, ncx2, norm  # type: ignore
 from scipy.interpolate import interp1d  # type: ignore
 
 # Import the convex hull function from your package.
-from Meningioma import ImageProcessing  # type: ignore
-
-# ========================================================= HELPER FUNCTIONS =================================================================================
-
-
-def compute_js_divergence(
-    pdf1: np.ndarray, pdf2: np.ndarray, x_vals: np.ndarray, epsilon: float = 1e-10
-) -> float:
-    """
-    Compute the Jensen–Shannon divergence between two PMFs.
-    Assumes pdf1 and pdf2 are already discrete probability mass functions defined at x_vals.
-    """
-    # Add epsilon to avoid division by zero and log(0).
-    p1 = pdf1 + epsilon
-    p2 = pdf2 + epsilon
-    p1 /= p1.sum()
-    p2 /= p2.sum()
-    m = 0.5 * (p1 + p2)
-    kl1 = np.sum(p1 * np.log(p1 / m))
-    kl2 = np.sum(p2 * np.log(p2 / m))
-    return 0.5 * (kl1 + kl2)
-
-
-def compute_pdf(data: np.ndarray, h: float, dist: str = "norm") -> tuple:
-    """
-    Estimate the probability density function (PDF) for a 1D data array by computing:
-      - A Parzen–Rosenblatt KDE (using ImageProcessing.kde)
-      - A theoretical PDF fitted to the data using one of several distributions.
-
-    Parameters:
-        data: 1D numpy array of noise values.
-        h: Bandwidth for the KDE estimation.
-        dist: A string specifying the distribution to fit. One of:
-              "norm"     → Gaussian (normal) distribution.
-              "rayleigh" → Rayleigh distribution.
-              "rice"     → Rice distribution.
-              "ncx2"     → Non-central chi-squared distribution.
-
-    Returns:
-        A tuple with:
-          - x_common: Common x-axis values (numpy array).
-          - kde_est: The KDE-estimated PDF (numpy array).
-          - pdf_fit: The theoretical PDF evaluated on x_common (numpy array).
-          - param_str: A string summarizing the fitted parameters.
-          - param_series: A pandas Series with the fitted parameter values.
-    """
-    data = data.flatten()
-    x_min = data.min()
-    x_max = data.max()
-    x_common = np.linspace(x_min, x_max, 1000)
-
-    # Compute KDE using the custom function.
-    kde_vals, x_kde = ImageProcessing.kde(
-        data, h=h, num_points=1000, return_x_values=True
-    )
-    f_interp = interp1d(x_kde, kde_vals, bounds_error=False, fill_value=0)
-    kde_est = f_interp(x_common)
-
-    # Fit the theoretical distribution and compute the PDF.
-    if dist.lower() == "norm":
-        mu, sigma = norm.fit(data)
-        pdf_fit = norm.pdf(x_common, loc=mu, scale=sigma)
-        param_str = f"μ={mu:.2f}, σ={sigma:.2f}"
-        param_series = pd.Series({"mu": mu, "sigma": sigma})
-    elif dist.lower() == "rayleigh":
-        loc, scale = rayleigh.fit(data)
-        pdf_fit = rayleigh.pdf(x_common, loc=loc, scale=scale)
-        # Report sigma as sqrt(scale) if desired.
-        sigma_est = np.sqrt(scale)
-        param_str = f"loc={loc:.2f}, σ̂={sigma_est:.2f}"
-        param_series = pd.Series({"loc": loc, "scale": scale, "sigma": sigma_est})
-    elif dist.lower() == "rice":
-        # rice.fit returns: shape parameter b, location, and scale.
-        b, loc, scale = rice.fit(data)
-        pdf_fit = rice.pdf(x_common, b, loc=loc, scale=scale)
-        param_str = f"b={b:.5f}, loc={loc:.2f}, scale={scale:.2f}"
-        param_series = pd.Series({"b": b, "loc": loc, "scale": scale})
-    elif dist.lower() == "ncx2":
-        # ncx2.fit returns: degrees of freedom, noncentrality, location, and scale.
-        df, nc, loc, scale = ncx2.fit(data)
-        pdf_fit = ncx2.pdf(x_common, df, nc, loc=loc, scale=scale)
-        sigma_est = np.sqrt(scale)
-        param_str = f"L={df:.2f}, NC={nc:.2f}, σ={sigma_est:.2f}"
-        param_series = pd.Series(
-            {"df": df, "nc": nc, "loc": loc, "scale": scale, "sigma": sigma_est}
-        )
-    else:
-        raise ValueError(
-            f"Distribution '{dist}' not recognized. Choose among 'norm', 'rayleigh', 'rice', 'ncx2'."
-        )
-
-    return x_common, kde_est, pdf_fit, param_str, param_series
-
-
-# ========================================================= HELPER FUNCTIONS =================================================================================
-
+from Meningioma import ImageProcessing, BlindNoiseEstimation, Metrics, Stats  # type: ignore
 
 # ========================================================== VISUALIZATIONS ==================================================================================
 
@@ -171,7 +76,7 @@ def plot_fitted_variograms_3x3(
                 bin_center, gamma, "o", markersize=4, color="black", label="Estimated"
             )
             # For this variogram, fit the covariance models and select the best.
-            models_dir = fit_model_3d(
+            models_dir = BlindNoiseEstimation.fit_model_3d(
                 bin_center, gamma, var=var_guess, len_scale=len_scale_guess
             )
             if models_dir:
@@ -257,7 +162,7 @@ def plot_variograms_individually(
         fig, ax = plt.subplots(figsize=(8, 8))
         ax.plot(bin_center, gamma, "o", markersize=4, color="black", label="Estimated")
         # Compute the best-fitting model for this variogram.
-        models = fit_model_3d(
+        models = BlindNoiseEstimation.fit_model_3d(
             bin_center, gamma, var=var_guess, len_scale=len_scale_guess
         )
         if models:
@@ -523,14 +428,16 @@ def plot_mask_and_pdf_comparison(
     emp_pdf_gen = hist_gen / hist_gen.sum()
 
     # --- Compute Jensen–Shannon Divergence between empirical PDFs ---
-    js_empirical = compute_js_divergence(emp_pdf_orig, emp_pdf_gen, bin_centers)
-    js_rayleigh = compute_js_divergence(
+    js_empirical = Metrics.compute_jensen_shannon_divergence_pdfs(
+        emp_pdf_orig, emp_pdf_gen, bin_centers
+    )
+    js_rayleigh = Metrics.compute_jensen_shannon_divergence_pdfs(
         pdf_rayleigh_orig, pdf_rayleigh_gen, bin_centers
     )
 
     # --- Compute KDE estimates via Parzen–Rosenblatt method ---
-    x_orig, kde_est_orig, _, _, _ = compute_pdf(original_bg, h=h, dist="norm")
-    x_gen, kde_est_gen, _, _, _ = compute_pdf(generated_noise, h=h, dist="norm")
+    x_orig, kde_est_orig, _, _, _ = Stats.compute_pdf(original_bg, h=h, dist="norm")
+    x_gen, kde_est_gen, _, _, _ = Stats.compute_pdf(generated_noise, h=h, dist="norm")
 
     # --- Create 3-panel figure ---
     fig, axs = plt.subplots(1, 3, figsize=(20, 6))
@@ -641,385 +548,6 @@ def plot_mask_and_pdf_comparison(
 
 
 # =============================================================================
-# 1. Variogram Estimation Functions (Using Only Background Voxels)
-# =============================================================================
-def estimate_variogram_isotropic_3d(
-    data: np.ndarray,
-    bins: np.ndarray,
-    mask: Optional[np.ndarray],
-    estimator: str = "matheron",
-    sampling_size: int = 2000,
-    sampling_seed: int = 19920516,
-) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Estimate the isotropic variogram from 3D data using gstools.vario_estimate.
-    Only voxels where the mask is False (i.e. background) are used.
-
-    Parameters
-    ----------
-    data : np.ndarray
-        3D volume data.
-    bins : np.ndarray
-        1D array defining the bin edges.
-    mask : Optional[np.ndarray]
-        3D boolean exclusion mask.
-    sampling_size : int, optional
-        Number of voxel pairs to sample.
-    sampling_seed : int, optional
-        Seed for random sampling.
-
-    Returns
-    -------
-    bin_centers : np.ndarray
-        Centers of the distance bins.
-    gamma : np.ndarray
-        Estimated variogram values.
-    """
-    # Only use pixels outside the mask (background).
-    if mask is not None:
-        valid_indices = np.flatnonzero(np.logical_not(mask.flatten()))
-    else:
-        valid_indices = np.arange(data.size)
-    valid_data = data.flatten()[valid_indices]
-
-    # Create a grid of coordinates.
-    x = np.arange(data.shape[0])
-    y = np.arange(data.shape[1])
-    z = np.arange(data.shape[2])
-    pos_x, pos_y, pos_z = np.meshgrid(x, y, z, indexing="ij")
-    pos_all = np.vstack((pos_x.flatten(), pos_y.flatten(), pos_z.flatten()))
-    pos_valid = pos_all[:, valid_indices]
-
-    if valid_data.size < sampling_size:
-        sampling_size = valid_data.size
-
-    print(f"Valid voxel positions: {valid_data.size}")
-
-    bin_centers, gamma = gs.vario_estimate(
-        pos=pos_valid,
-        field=valid_data,
-        bin_edges=bins,
-        mesh_type="unstructured",
-        estimator=estimator,
-        sampling_size=sampling_size,
-        sampling_seed=sampling_seed,
-    )
-    return bin_centers, gamma
-
-
-def estimate_variogram_anisotropic_3d(
-    data: np.ndarray,
-    bins: np.ndarray,
-    mask: Optional[np.ndarray] = None,
-    directions: Optional[List[np.ndarray]] = None,
-    direction_labels: Optional[List[str]] = None,
-    estimator: str = "matheron",
-    angles_tol: float = np.pi / 8,
-    sampling_size: int = 2000,
-    sampling_seed: int = 19920516,
-) -> Dict[str, Tuple[np.ndarray, np.ndarray]]:
-    """
-    Estimate directional variograms from 3D data using gstools.vario_estimate.
-    Only background voxels (mask False) are used.
-
-    Parameters
-    ----------
-    data : np.ndarray
-        3D volume data.
-    bins : np.ndarray
-        1D array defining the bin edges.
-    mask : Optional[np.ndarray]
-        3D boolean exclusion mask.
-    directions : Optional[List[np.ndarray]], optional
-        List of 3D direction vectors. If None, a default set of 7 directions is used.
-        (Note: To obtain eight directions, provide a custom list.)
-    direction_labels : Optional[List[str]], optional
-        List of labels corresponding to each direction. If None and directions is provided,
-        the default labels are generated as "Direction 1", "Direction 2", etc.
-    angles_tol : float, optional
-        Tolerance for directional variogram (in radians).
-    sampling_size : int, optional
-        Number of voxel pairs to sample.
-    sampling_seed : int, optional
-        Seed for random sampling.
-
-    Returns
-    -------
-    variograms : Dict[str, Tuple[np.ndarray, np.ndarray]]
-        Mapping of direction labels to (bin_centers, variogram values).
-    """
-    # Only use pixels outside the mask.
-    if mask is not None:
-        valid_indices = np.flatnonzero(np.logical_not(mask.flatten()))
-    else:
-        valid_indices = np.arange(data.size)
-    valid_data = data.flatten()[valid_indices]
-
-    x = np.arange(data.shape[0])
-    y = np.arange(data.shape[1])
-    z = np.arange(data.shape[2])
-    pos_x, pos_y, pos_z = np.meshgrid(x, y, z, indexing="ij")
-    pos_all = np.vstack((pos_x.flatten(), pos_y.flatten(), pos_z.flatten()))
-    pos_valid = pos_all[:, valid_indices]
-
-    print(f"Valid voxel positions: {valid_data.size}")
-    if valid_data.size == 0:
-        raise ValueError("No valid voxel positions remain after applying mask.")
-    sampling_size = min(sampling_size, valid_data.size)
-
-    # Use provided directions if given; otherwise, use a default list of 8 directions.
-    if directions is None:
-        directions = [
-            np.array([1, 0, 0]),
-            np.array([-1, 0, 0]),
-            np.array([0, 1, 0]),
-            np.array([0, 0, 1]),
-            np.array([1, 1, 0]),
-            np.array([1, 0, 1]),
-            np.array([0, 1, 1]),
-            np.array([1, 1, 1]),
-        ]
-        direction_labels = [
-            r"X-axis $[1,0,0]$",
-            r"Opposite X-axis $[-1,0,0]$",
-            r"Y-axis $[0,1,0]$",
-            r"Z-axis $[0,0,1]$",
-            r"Diagonal\_XY $[1,1,0]$",
-            r"Diagonal\_XZ $[1,0,1]$",
-            r"Diagonal\_YZ $[0,1,1]$",
-            r"Diagonal\_XYZ $[1,1,1]$",
-        ]
-    else:
-        if direction_labels is None:
-            direction_labels = [f"Direction {i+1}" for i in range(len(directions))]
-
-    variograms: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
-    for direction, label in zip(directions, direction_labels):
-        print(f"Estimating anisotropic variogram for direction: {label}")
-        bin_centers, gamma = gs.vario_estimate(
-            pos=pos_valid,
-            field=valid_data,
-            bin_edges=bins,
-            mesh_type="unstructured",
-            estimator=estimator,
-            direction=[direction],
-            angles_tol=angles_tol,
-            sampling_size=sampling_size,
-            sampling_seed=sampling_seed,
-        )
-        variograms[label] = (bin_centers, gamma)
-    return variograms
-
-
-# =============================================================================
-# 2. Covariance Model Fitting Function (3D)
-# =============================================================================
-def fit_model_3d(
-    bin_center: np.ndarray,
-    gamma: np.ndarray,
-    var: float = 1.0,
-    len_scale: float = 10.0,
-) -> Dict[str, Tuple[gs.CovModel, Dict[str, Any]]]:
-    """
-    Fit several theoretical variogram models to the estimated 3D variogram.
-    (Some models may not converge; this is reported in the console.)
-
-    Parameters
-    ----------
-    bin_center : np.ndarray
-        Centers of the distance bins.
-    gamma : np.ndarray
-        Estimated variogram values.
-    var : float, optional
-        Initial variance guess.
-    len_scale : float, optional
-        Initial guess for the correlation length scale.
-
-    Returns
-    -------
-    results : Dict[str, Tuple[gs.CovModel, Dict[str, Any]]]
-        Mapping of model names to (fitted model, fit parameters including r^2).
-    """
-    models = {
-        "Gaussian": gs.Gaussian,
-        "Exponential": gs.Exponential,
-        "Matern": gs.Matern,
-        "Stable": gs.Stable,
-        "Rational": gs.Rational,
-        "Circular": gs.Circular,
-        "Spherical": gs.Spherical,
-        "SuperSpherical": gs.SuperSpherical,
-        "JBessel": gs.JBessel,
-        "TLPGaussian": gs.TPLGaussian,
-        "TLPSTable": gs.TPLStable,
-        "TLPSimple": gs.TPLSimple,
-    }
-    print("Fitting 3D covariance models")
-    results: Dict[str, Tuple[gs.CovModel, Dict[str, Any]]] = {}
-    for model_name, model_class in models.items():
-        try:
-            model = model_class(dim=3, var=var, len_scale=len_scale)
-            params, pcov, r2 = model.fit_variogram(bin_center, gamma, return_r2=True)
-            results[model_name] = (model, {"params": params, "pcov": pcov, "r2": r2})
-            print(f"Model {model_name} fitted with r^2 = {r2:.3f}")
-        except Exception as e:
-            print(f"Model {model_name} failed to fit: {e}")
-    return results
-
-
-# =============================================================================
-# 3. Gaussian Random Fields generation
-# =============================================================================
-
-
-def gaussian_random_fields_noise_2d(
-    model: gs.CovModel,
-    shape: Tuple[int, int],
-    independent: bool = True,
-    seed_real: int = 19770928,
-    seed_imag: int = 19773022,
-    seed_3d: int = 19770928,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Generate synthetic Gaussian random field noise for a 2D image.
-
-    Two modes are available:
-
-      1. **independent=True** (default):
-         Two independent 2D Gaussian random fields (representing the real and imaginary parts)
-         are generated using gs.SRF with a "structured" mesh. The final noise is computed as:
-
-             noise = sqrt(real_field^2 + imag_field^2)
-
-         The use of two independent seeds ensures that the two fields are generated independently.
-
-      2. **independent=False**:
-         A single 3D Gaussian random field is generated over a volume of shape (n, m, 2)
-         using gs.SRF with a "structured" mesh. The two slices along the third dimension are then
-         extracted as the real and imaginary parts and combined via the modulus operation:
-
-             noise = sqrt(slice_0^2 + slice_1^2)
-
-         In this case the two channels are correlated as they come from one 3D realization.
-
-    **Mesh Type Considerations:**
-    When using gs.SRF, the `mesh_type` parameter determines how the input coordinate tuple is interpreted.
-    With `"structured"`, the provided arrays (or ranges) define the grid along each axis, which is ideal
-    for regularly spaced images or volumes. For irregular grids one might use `"unstructured"`.
-
-    Parameters
-    ----------
-    model : gs.CovModel
-        The best-fit covariance model to be used for generating the noise.
-    shape : Tuple[int, int]
-        A tuple (n, m) defining the size of the 2D image.
-    independent : bool, optional
-        If True (default), generate two independent 2D fields (using separate seeds).
-        If False, generate one 3D field of shape (n, m, 2) and extract two slices.
-    seed_real : int, optional
-        Random seed for the real part (used if independent is True).
-    seed_imag : int, optional
-        Random seed for the imaginary part (used if independent is True).
-    seed_3d : int, optional
-        Random seed for the 3D field (used if independent is False).
-
-    Returns
-    -------
-    Tuple[np.ndarray, np.ndarray, np.ndarray]
-        A tuple (real_field, imag_field, combined_field) where each array has shape (n, m).
-        The combined field is computed as sqrt(real_field**2 + imag_field**2).
-    """
-    n, m = shape
-
-    if independent:
-        # Generate independent fields for real and imaginary parts using a structured mesh.
-        x = np.arange(n)
-        y = np.arange(m)
-        z = np.arange(1)
-        # Generate real part.
-        srf_real = gs.SRF(model, seed=seed_real)
-        real_field = srf_real((x, y, z), mesh_type="structured")
-        # Generate imaginary part.
-        srf_imag = gs.SRF(model, seed=seed_imag)
-        imag_field = srf_imag((x, y, z), mesh_type="structured")
-
-    else:
-        # Generate a single 3D volume of noise with two slices along the third dimension.
-        x = np.arange(n)
-        y = np.arange(m)
-        z = np.arange(2)  # Two slices.
-        srf_3d = gs.SRF(model, seed=seed_3d)
-        # Use a structured mesh since the grid is regularly spaced.
-        volume_3d = srf_3d((x, y, z), mesh_type="structured")
-        # Extract the two slices.
-        real_field = volume_3d[:, :, 0]
-        imag_field = volume_3d[:, :, 1]
-
-    # Combine the two fields via the modulus operation.
-    combined_field = (np.sqrt(real_field**2 + imag_field**2)) / (np.sqrt(2))
-    return real_field, imag_field, combined_field
-
-
-def gaussian_random_fields_noise_3d(
-    model: gs.CovModel,
-    shape: Tuple[int, int, int],
-    seed_real: int = 19770928,
-    seed_imag: int = 19773022,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Generate independent 3D Gaussian random field volumes representing the real and
-    imaginary parts of noise and combine them using the modulus operation.
-
-    In this function, two independent 3D fields are simulated over a structured grid
-    defined by `shape` = (nx, ny, nz) using two separate seeds. The final noise volume
-    is computed as:
-
-        combined = sqrt(real_field**2 + imag_field**2) / sqrt(2)
-
-    The division by sqrt(2) normalizes the noise (consistent with the 2D version).
-
-    Parameters
-    ----------
-    model : gs.CovModel
-        The best-fit covariance model to use for noise generation.
-    shape : Tuple[int, int, int]
-        Desired shape of the noise volume as (nx, ny, nz).
-    seed_real : int, optional
-        Random seed for generating the real part of the noise (default 19770928).
-    seed_imag : int, optional
-        Random seed for generating the imaginary part of the noise (default 19773022).
-
-    Returns
-    -------
-    Tuple[np.ndarray, np.ndarray, np.ndarray]
-        A tuple (real_volume, imag_volume, combined_volume), where each array has shape `shape`.
-        The combined_volume is computed as the modulus (Euclidean norm) of the two volumes.
-    """
-    nx, ny, nz = shape
-    # Define coordinate arrays for a structured grid.
-    x = np.arange(nx)
-    y = np.arange(ny)
-    z = np.arange(nz)
-
-    # Generate the real noise volume.
-    srf_real = gs.SRF(model, seed=seed_real)
-    real_volume = srf_real((x, y, z), mesh_type="structured")
-
-    # Generate the imaginary noise volume.
-    srf_imag = gs.SRF(model, seed=seed_imag)
-    imag_volume = srf_imag((x, y, z), mesh_type="structured")
-
-    # Normalize signal amplitude
-    real_volume = real_volume / np.sqrt(2)
-    imag_volume = imag_volume / np.sqrt(2)
-
-    # Combine the two volumes by taking the Euclidean norm and normalize by √2.
-    combined_volume = np.sqrt(real_volume**2 + imag_volume**2)
-
-    return real_volume, imag_volume, combined_volume
-
-
-# =============================================================================
 # Call in the Main Pipeline
 # =============================================================================
 if __name__ == "__main__":
@@ -1066,7 +594,7 @@ if __name__ == "__main__":
     shape = (512, 512)
 
     # Isotropic variogram estimation and model fitting.
-    iso_bin_center, iso_gamma = estimate_variogram_isotropic_3d(
+    iso_bin_center, iso_gamma = BlindNoiseEstimation.estimate_variogram_isotropic_3d(
         data=volume,
         bins=variogram_bins,
         mask=mask,
@@ -1074,7 +602,7 @@ if __name__ == "__main__":
         sampling_size=variogram_sampling_size,
         sampling_seed=variogram_sampling_seed,
     )
-    iso_models = fit_model_3d(
+    iso_models = BlindNoiseEstimation.fit_model_3d(
         bin_center=iso_bin_center,
         gamma=iso_gamma,
         len_scale=len_scale_guess,
@@ -1102,7 +630,7 @@ if __name__ == "__main__":
         r"Diagonal\_YZ $[0,1,1]$",
         r"Diagonal\_XYZ $[1,1,1]$",
     ]
-    anisotropic_variograms = estimate_variogram_anisotropic_3d(
+    anisotropic_variograms = BlindNoiseEstimation.estimate_variogram_anisotropic_3d(
         data=volume,
         bins=variogram_bins,
         mask=mask,
@@ -1152,7 +680,7 @@ if __name__ == "__main__":
     # Compute anisotropic covariance models from the anisotropic variograms.
     anisotropic_models: Dict[str, Dict[str, Tuple[gs.CovModel, Dict[str, Any]]]] = {}
     for direction_label, (bin_centers, gamma) in anisotropic_variograms.items():
-        anisotropic_models[direction_label] = fit_model_3d(
+        anisotropic_models[direction_label] = BlindNoiseEstimation.fit_model_3d(
             bin_center=bin_centers,
             gamma=gamma,
             len_scale=len_scale_guess,
@@ -1188,7 +716,7 @@ if __name__ == "__main__":
     # Independently-generated GRF
     print("Generating independent noise slices ...")
     real_field_independent, imaginary_field_independent, final_noise_independent = (
-        gaussian_random_fields_noise_2d(
+        BlindNoiseEstimation.gaussian_random_fields_noise_2d(
             model=best_model,
             shape=shape,
             independent=True,
@@ -1200,7 +728,7 @@ if __name__ == "__main__":
     # Dependent GRF (coming from the same noise volume)
     print("Generating same-volume noise slices ...")
     real_field_dependent, imaginary_field_dependent, final_noise_dependent = (
-        gaussian_random_fields_noise_2d(
+        BlindNoiseEstimation.gaussian_random_fields_noise_2d(
             model=best_model,
             shape=shape,
             independent=False,
@@ -1260,9 +788,11 @@ if __name__ == "__main__":
     if generate_3d_noise:
         print("Generating 3D Noise")
         shape_3d = (volume.shape[0], volume.shape[1], volume.shape[2])
-        real_vol, imag_vol, combined_vol = gaussian_random_fields_noise_3d(
-            model=best_model,
-            shape=shape_3d,
-            seed_real=1122022,
-            seed_imag=23102003,
+        real_vol, imag_vol, combined_vol = (
+            BlindNoiseEstimation.gaussian_random_fields_noise_3d(
+                model=best_model,
+                shape=shape_3d,
+                seed_real=1122022,
+                seed_imag=23102003,
+            )
         )
