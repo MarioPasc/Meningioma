@@ -198,7 +198,9 @@ class Stats:
             raise RuntimeError(f"Error during mutual information computation: {e}")
 
     @staticmethod
-    def compute_pdf(data: np.ndarray, h: float, dist: str = "norm") -> tuple:
+    def compute_pdf(
+        data: np.ndarray, h: float, dist: str = "norm", num_points: int = 1000
+    ) -> tuple:
         """
         Estimate the probability density function (PDF) for a 1D data array by computing:
         - A Parzen–Rosenblatt KDE (using ImageProcessing.kde)
@@ -224,11 +226,11 @@ class Stats:
         data = data.flatten()
         x_min = data.min()
         x_max = data.max()
-        x_common = np.linspace(x_min, x_max, 1000)
+        x_common = np.linspace(x_min, x_max, num_points)
 
         # Compute KDE using the custom function.
         kde_vals, x_kde = ImageProcessing.kde(
-            data, h=h, num_points=1000, return_x_values=True
+            data, h=h, num_points=num_points, return_x_values=True
         )
         f_interp = interp1d(x_kde, kde_vals, bounds_error=False, fill_value=0)
         kde_est = f_interp(x_common)
