@@ -1,13 +1,11 @@
 import os
-from typing import Tuple, Dict, Any, List, Optional
+from typing import Tuple, Dict, Any
 
 import numpy as np
 import matplotlib.pyplot as plt
 import gstools as gs  # type: ignore
-import pandas as pd
+from scipy.stats import rayleigh, norm  # type: ignore
 
-from scipy.stats import rice, rayleigh, ncx2, norm  # type: ignore
-from scipy.interpolate import interp1d  # type: ignore
 
 # Import the convex hull function from your package.
 from Meningioma import ImageProcessing, BlindNoiseEstimation, Metrics, Stats  # type: ignore
@@ -552,7 +550,7 @@ def plot_mask_and_pdf_comparison(
 # =============================================================================
 if __name__ == "__main__":
     output_folder = (
-        "scripts/noise_modelling/gaussian_random_markov_fields/images/experiment_images"
+        "/home/mariopasc/Python/Results/Meningioma/noise_modelling/experiment_images"
     )
     os.makedirs(output_folder, exist_ok=True)
 
