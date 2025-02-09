@@ -14,7 +14,7 @@ from Meningioma import (  # type: ignore
     Metrics,
 )
 
-import scienceplots
+import scienceplots  # type: ignore
 
 plt.style.use(["science", "ieee", "std-colors"])
 plt.rcParams["font.size"] = 10
@@ -40,13 +40,13 @@ os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
 # Output figures for each test
 OUTPUT_FIGURE_VOLUME: str = os.path.join(
-    OUTPUT_FOLDER, f"{PATIENT}_{PULSE}_volume_noise.png"
+    OUTPUT_FOLDER, f"{PATIENT}_{PULSE}_volume_noise.svg"
 )
 OUTPUT_FIGURE_SLICE: str = os.path.join(
-    OUTPUT_FOLDER, f"{PATIENT}_{PULSE}_slice_noise.png"
+    OUTPUT_FOLDER, f"{PATIENT}_{PULSE}_slice_noise.svg"
 )
 OUTPUT_FIGURE_COMPARISON: str = os.path.join(
-    OUTPUT_FOLDER, f"{PATIENT}_{PULSE}_noise_comparison.png"
+    OUTPUT_FOLDER, f"{PATIENT}_{PULSE}_noise_comparison.svg"
 )
 
 # Variogram estimation parameters (full-volume processing)
@@ -74,7 +74,6 @@ def generate_visualizations(
     volume: np.ndarray,
     mask: np.ndarray,
     combined_noise: np.ndarray,
-    noise_slice_2d_list: List[np.ndarray],
     slice_indices: List[int],
     output_figure: str,
     title_suffix: str,
@@ -332,7 +331,6 @@ def main() -> None:
         volume=volume,
         mask=mask,
         combined_noise=combined_noise_volume,
-        noise_slice_2d_list=[],  # not used here
         slice_indices=SLICE_INDICES,
         output_figure=OUTPUT_FIGURE_VOLUME,
         title_suffix="(Volume Noise)",
@@ -348,7 +346,6 @@ def main() -> None:
         volume=volume,
         mask=mask,
         combined_noise=noise_array_2d,
-        noise_slice_2d_list=[],  # not used directly here
         slice_indices=SLICE_INDICES,
         output_figure=OUTPUT_FIGURE_SLICE,
         title_suffix="(Slice Noise)",

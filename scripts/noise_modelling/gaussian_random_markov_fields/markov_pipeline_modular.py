@@ -6,15 +6,15 @@ import csv
 
 import numpy as np
 import matplotlib.pyplot as plt
-import gstools as gs
+import gstools as gs  # type: ignore
 from gstools.covmodel.plot import plot_variogram  # type : ignore
-from tqdm import tqdm
+from tqdm import tqdm  # type: ignore
 
 # If these are your local modules:
 from Meningioma.image_processing import ImageProcessing  # type: ignore
 from Meningioma.utils import Stats, npz_converter  # type: ignore
 
-import scienceplots
+import scienceplots  # type: ignore
 
 plt.style.use(["science", "ieee", "std-colors"])
 plt.rcParams["font.size"] = 10
@@ -156,7 +156,7 @@ def plot_variogram_results(
         ax_vario.plot(bin_centers, gamma, "o", color="black", label="Data")
 
         # Plot each model in a different color
-        color_cycle = plt.cm.tab20(np.linspace(0, 1, len(fits)))
+        color_cycle = plt.cm.tab20(np.linspace(0, 1, len(fits)))  # type: ignore
         for (m_name, (m_instance, m_stats)), color in zip(fits.items(), color_cycle):
             m_instance.plot(x_max=dist_max, ax=ax_vario, color=color, linestyle="--")
             if col == 0:
