@@ -229,7 +229,7 @@ def main():
         for seed in SEEDS:
             # Generate a 3D noise volume using best_model
             logging.info(f"[{pulse}, seed={seed}] Generating 3D noise volume...")
-
+            logging.info(f"Volume shape: {volume_data.shape}")
             if USE_VOXELS:
                 real_vol, imag_vol, final_vol = (
                     BlindNoiseEstimation.gaussian_random_fields_noise_3d(
@@ -255,6 +255,9 @@ def main():
             # Some stats on the generated final noise
             gen_mean = float(final_vol.mean())
             gen_std = float(final_vol.std())
+            logging.info(f"Generated shape: {final_vol.shape}")
+            logging.info(f"Generated mean: {gen_mean}")
+            logging.info(f"Generated std: {gen_std}")
 
             # -------------------------------------------------------------
             # Save results to NPZ: we store x,y,z arrays + a 4D data array
