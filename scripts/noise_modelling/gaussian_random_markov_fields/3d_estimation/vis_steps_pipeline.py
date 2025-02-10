@@ -49,6 +49,7 @@ OUTPUT_FIGURE_COMPARISON_VOXELS = os.path.join(
 OUTPUT_FIGURE_COMPARISON = os.path.join(run_folder, "noise_comparison_3x4.svg")
 OUTPUT_FIGURE_RAYLEIGH = os.path.join(run_folder, "rayleigh_comparison.svg")
 NOISE_VOLUME_NPZ = os.path.join(run_folder, "noise_volume.npz")
+NOISE_VOLUME_VOXELS_NPZ = os.path.join(run_folder, "noise_volume_voxels.npz")
 PER_SLICE_NOISE_NPZ = os.path.join(run_folder, "per_slice_noise.npz")
 SEGMENTATION_NPZ = os.path.join(run_folder, "segmentation.npz")
 RUN_PARAMETERS_YAML = os.path.join(run_folder, "run_parameters.yaml")
@@ -723,7 +724,6 @@ def plot_mask_and_pdf_comparison(
 
 
 def get_volume_noise(model, volume_shape, npz_filepath, voxel_size=None):
-    logging.info("Getting full-volume noise...")
     if os.path.exists(npz_filepath):
         logging.info(f"Loading noise volume from {npz_filepath}")
         data = np.load(npz_filepath)
@@ -1011,7 +1011,7 @@ def main() -> None:
     noise_volume_voxels = get_volume_noise(
         model=best_model,
         volume_shape=volume.shape,
-        npz_filepath=NOISE_VOLUME_NPZ,
+        npz_filepath=NOISE_VOLUME_VOXELS_NPZ,
         voxel_size=voxel_sizes,  # pass the voxel sizes for coarse-graining
     )
 
