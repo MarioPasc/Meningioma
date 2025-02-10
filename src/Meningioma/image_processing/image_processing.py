@@ -108,7 +108,7 @@ class ImageProcessing:
 
     @staticmethod
     def segment_3d_volume(
-        filepath: str,
+        volume_nrrd: np.ndarray,
         threshold_method: str = "li",
         structure_size_2d: int = 7,
         iterations_2d: int = 3,
@@ -151,7 +151,7 @@ class ImageProcessing:
             A 3D boolean array (same shape as volume) with the segmented region = True.
         """
         return get_3d_volume_segmentation(
-            filepath=filepath,
+            volume_nrrd=volume_nrrd,
             threshold_method=threshold_method,
             structure_size_2d=structure_size_2d,
             iterations_2d=iterations_2d,

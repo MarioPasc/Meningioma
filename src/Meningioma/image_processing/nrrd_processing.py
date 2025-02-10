@@ -1,6 +1,6 @@
 import nrrd  # type: ignore
 import numpy as np
-from typing import Union, Tuple, Optional
+from typing import Union, Tuple
 import os
 from numpy.typing import NDArray
 

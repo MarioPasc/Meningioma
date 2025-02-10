@@ -107,23 +107,30 @@ def get_gaussian_random_fields_noise_2d(
     return real_field, imag_field, combined_field
 
 
+import numpy as np
+import gstools as gs
+from typing import Tuple, Optional
+
+
 def get_gaussian_random_fields_noise_3d(
     model: gs.CovModel,
     shape: Tuple[int, int, int],
     seed_real: int = 19770928,
     seed_imag: int = 19773022,
+    voxel_size: Optional[Tuple[float, float, float]] = None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Generate independent 3D Gaussian random field volumes representing the real and
     imaginary parts of noise and combine them using the modulus operation.
 
-    In this function, two independent 3D fields are simulated over a structured grid
-    defined by `shape` = (nx, ny, nz) using two separate seeds. The final noise volume
+    Two independent 3D fields are simulated over a structured grid defined by
+    `shape` = (nx, ny, nz) using two separate seeds. The final noise volume
     is computed as:
 
         combined = sqrt(real_field**2 + imag_field**2) / sqrt(2)
 
-    The division by sqrt(2) normalizes the noise (consistent with the 2D version).
+    If `voxel_size` is provided, the function will use upscaling with
+    coarse graining to take voxel volume into account.
 
     Parameters
     ----------
@@ -135,30 +142,44 @@ def get_gaussian_random_fields_noise_3d(
         Random seed for generating the real part of the noise (default 19770928).
     seed_imag : int, optional
         Random seed for generating the imaginary part of the noise (default 19773022).
+    voxel_size : Optional[Tuple[float, float, float]], optional
+        If provided, must be (dx, dy, dz). Each SRF call will use
+        upscaling='coarse_graining' and set point_volumes = dx*dy*dz.
 
     Returns
     -------
     Tuple[np.ndarray, np.ndarray, np.ndarray]
-        A tuple (real_volume, imag_volume, combined_volume), where each array has shape `shape`.
-        The combined_volume is computed as the modulus (Euclidean norm) of the two volumes.
+        A tuple (real_volume, imag_volume, combined_volume), where each array
+        has shape `shape`. The combined_volume is computed as the modulus
+        (Euclidean norm) of the two volumes.
     """
-    
-    # TODO: Comprobar cómo conseguir el tamaño de vóxeles a partir de los metadatos
-    # TODO: Comprobar a generar volumenes de ruido con (z,x,y)
-    
+
     nx, ny, nz = shape
     # Define coordinate arrays for a structured grid.
     x = np.arange(nx)
     y = np.arange(ny)
     z = np.arange(nz)
 
-    # Generate the real noise volume.
-    srf_real = gs.SRF(model, seed=seed_real)
-    real_volume = srf_real((x, y, z), mesh_type="structured")
+    # If voxel_size is specified, compute the volume and use coarse_graining.
+    if voxel_size is not None:
+        dx, dy, dz = voxel_size
+        voxel_volume = dx * dy * dz
+        srf_real = gs.SRF(model, seed=seed_real, upscaling="coarse_graining")
+        real_volume = srf_real(
+            (x, y, z), mesh_type="structured", point_volumes=voxel_volume
+        )
 
-    # Generate the imaginary noise volume.
-    srf_imag = gs.SRF(model, seed=seed_imag)
-    imag_volume = srf_imag((x, y, z), mesh_type="structured")
+        srf_imag = gs.SRF(model, seed=seed_imag, upscaling="coarse_graining")
+        imag_volume = srf_imag(
+            (x, y, z), mesh_type="structured", point_volumes=voxel_volume
+        )
+    else:
+        # Default behavior if no voxel_size is specified
+        srf_real = gs.SRF(model, seed=seed_real, upscaling="no_scaling")
+        real_volume = srf_real((x, y, z), mesh_type="structured")
+
+        srf_imag = gs.SRF(model, seed=seed_imag, upscaling="no_scaling")
+        imag_volume = srf_imag((x, y, z), mesh_type="structured")
 
     # Combine the two volumes by taking the Euclidean norm and normalize by √2.
     combined_volume = np.sqrt(real_volume**2 + imag_volume**2) / np.sqrt(2)

@@ -4,20 +4,19 @@ import sys
 import time
 from datetime import datetime
 import logging
-import yaml
-from typing import Tuple, Dict, Any, List
+import yaml  # type: ignore
+from typing import Tuple, Dict, Any, List, Optional
 
 import numpy as np
 import matplotlib.pyplot as plt
 import gstools as gs  # type: ignore
-from gstools.random import MasterRNG # type: ignore
-from scipy.stats import rayleigh, norm  # type: ignore
-
 from Meningioma import ImageProcessing, BlindNoiseEstimation, Metrics, Stats  # type: ignore
 
 # -----------------------------------------------------------------------------
 # Set up plotting style and logging
 # -----------------------------------------------------------------------------
+import scienceplots  # type: ignore
+
 plt.style.use(["science", "ieee", "std-colors"])
 plt.rcParams["font.size"] = 10
 plt.rcParams.update({"figure.dpi": "100"})
@@ -33,7 +32,7 @@ logging.basicConfig(
 # -----------------------------------------------------------------------------
 # Create run folder with date/time stamp for all outputs
 # -----------------------------------------------------------------------------
-BASE_OUTPUT_FOLDER = "/home/mario/Python/Results/Meningioma/noise_modelling/experiment_images"
+BASE_OUTPUT_FOLDER = "/home/mariopascual/Projects/MENINGIOMA/Results"
 run_folder = os.path.join(BASE_OUTPUT_FOLDER, datetime.now().strftime("%Y%m%d_%H%M%S"))
 os.makedirs(run_folder, exist_ok=True)
 logging.info(f"Created run folder: {run_folder}")
@@ -42,7 +41,11 @@ logging.info(f"Created run folder: {run_folder}")
 # Output file paths (inside run folder)
 # -----------------------------------------------------------------------------
 OUTPUT_FIGURE_VOLUME = os.path.join(run_folder, "volume_noise.svg")
+OUTPUT_FIGURE_VOLUME_VOXELS = os.path.join(run_folder, "volume_noise_voxels.svg")
 OUTPUT_FIGURE_SLICE = os.path.join(run_folder, "slice_noise.svg")
+OUTPUT_FIGURE_COMPARISON_VOXELS = os.path.join(
+    run_folder, "noise_comparison_3x4_voxels.svg"
+)
 OUTPUT_FIGURE_COMPARISON = os.path.join(run_folder, "noise_comparison_3x4.svg")
 OUTPUT_FIGURE_RAYLEIGH = os.path.join(run_folder, "rayleigh_comparison.svg")
 NOISE_VOLUME_NPZ = os.path.join(run_folder, "noise_volume.npz")
@@ -58,10 +61,14 @@ PULSE = "T1"
 SEED = "42"  # a single seed for this test
 SLICE_INDICES: List[int] = [32, 72, 112, 152]  # slices to visualize
 
+GENERATE_PER_SLICE_NOISE: bool = False
+
 # Input NPZ folder and file (adjust as needed)
-BASE_NPZ_PATH: str = "/home/mario/Python/Datasets/Meningiomas/Meningioma_Adquisition"
+BASE_NRRD_PATH: str = "/media/hddb/mario/data/Meningioma_Adquisition"
 # In our pipeline, the segmentation file is located as follows:
-filepath = os.path.join(BASE_NPZ_PATH, PATIENT, f"{PATIENT}_{PULSE}.npz")
+FILEPATH_NRRD = os.path.join(
+    BASE_NRRD_PATH, "RM", PULSE, PATIENT, f"{PULSE}_{PATIENT}.nrrd"
+)
 
 # Slices to ignore at beginning and end.
 X = 20
@@ -71,7 +78,7 @@ variogram_bins = np.linspace(0, 100, 100)
 variogram_sampling_size = 3000
 variogram_sampling_seed = 42
 estimator = "cressie"
-# initial length scale guess 
+# initial length scale guess
 len_scale_guess = 10
 
 # Seeds for noise generation.
@@ -82,9 +89,45 @@ seed_3d = 11011969
 # Parzen–Rosenblatt bandwidth.
 H: float = 0.5
 
+
+def compute_voxel_sizes(nrrd_file_path: str) -> Optional[List[Optional[float]]]:
+    """
+    Read an NRRD file and extract the voxel sizes from its 'space directions'.
+    Returns a list of 3 floats (or None if missing/invalid).
+    """
+    _, header = ImageProcessing.open_nrrd_file(
+        nrrd_path=nrrd_file_path, return_header=True
+    )
+    if "space directions" in header:
+        space_directions = header["space directions"]
+        voxel_sizes = []
+        for direction in space_directions:
+            if direction is not None:
+                voxel_size = float(np.linalg.norm(direction))
+            else:
+                voxel_size = None
+            voxel_sizes.append(voxel_size)
+        return voxel_sizes
+    else:
+        print("Warning: 'space directions' not found in the header.")
+        return None
+
+
+def make_serializable(obj):
+    if isinstance(obj, dict):
+        return {k: make_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [make_serializable(v) for v in obj]
+    elif isinstance(obj, np.generic):
+        return obj.item()
+    else:
+        return obj
+
+
 # -----------------------------------------------------------------------------
 # VISUALIZATION FUNCTIONS (with logging added)
 # -----------------------------------------------------------------------------
+
 
 def generate_visualizations(
     volume: np.ndarray,
@@ -227,6 +270,7 @@ def generate_visualizations(
     plt.savefig(output_figure, bbox_inches="tight")
     logging.info(f"Visualization saved to {output_figure}")
 
+
 def visualize_noise_comparison(noise_volume, noise_slice, rep_slice: int, H=0.5):
     """
     Creates a 3x4 figure comparing noise from volume vs. per-slice generation.
@@ -303,6 +347,7 @@ def visualize_noise_comparison(noise_volume, noise_slice, rep_slice: int, H=0.5)
     plt.tight_layout()
     return fig
 
+
 def plot_fitted_variograms_3x3(
     iso_bin_center: np.ndarray,
     iso_gamma: np.ndarray,
@@ -328,20 +373,30 @@ def plot_fitted_variograms_3x3(
 
     fig, axs = plt.subplots(3, 3, figsize=(14, 14))
     axs = axs.flatten()
-    color_cycle = plt.cm.viridis(np.linspace(0, 1, 10))
+    color_cycle = plt.cm.viridis(np.linspace(0, 1, 10))  # type: ignore
 
     for pos, direction in zip(anisotropic_positions, anisotropic_order):
         ax = axs[pos]
         if direction in anisotropic_variograms:
             bin_center, gamma = anisotropic_variograms[direction]
-            ax.plot(bin_center, gamma, "o", markersize=4, color="black", label="Estimated")
+            ax.plot(
+                bin_center, gamma, "o", markersize=4, color="black", label="Estimated"
+            )
             logging.info(f"Fitting model for anisotropic variogram: {direction}")
-            models_dir = BlindNoiseEstimation.fit_model_3d(bin_center, gamma, var=var_guess, len_scale=len_scale_guess)
+            models_dir = BlindNoiseEstimation.fit_model_3d(
+                bin_center, gamma, var=var_guess, len_scale=len_scale_guess
+            )
             if models_dir:
                 best_key = max(models_dir, key=lambda k: models_dir[k][1]["r2"])
                 best_model, best_fit_params = models_dir[best_key]
                 label_text = f"{best_key}\n$r^2$ = {best_fit_params['r2']:.2f}"
-                best_model.plot(x_max=variogram_bins[-1], ax=ax, color=color_cycle[0], linestyle="--", label=label_text)
+                best_model.plot(
+                    x_max=variogram_bins[-1],
+                    ax=ax,
+                    color=color_cycle[0],
+                    linestyle="--",
+                    label=label_text,
+                )
                 ax.set_title(direction)
             else:
                 ax.set_title(f"{direction}\nNo model fitted")
@@ -350,12 +405,20 @@ def plot_fitted_variograms_3x3(
         ax.set_xlabel("Distance")
         ax.set_ylabel(r"$\gamma$")
     ax_center = axs[4]
-    ax_center.plot(iso_bin_center, iso_gamma, "o", markersize=4, color="black", label="Estimated")
+    ax_center.plot(
+        iso_bin_center, iso_gamma, "o", markersize=4, color="black", label="Estimated"
+    )
     if iso_models:
         best_iso_key = max(iso_models, key=lambda k: iso_models[k][1]["r2"])
         best_iso_model, best_iso_params = iso_models[best_iso_key]
         label_text = f"{best_iso_key}\n$r^2$ = {best_iso_params['r2']:.2f}"
-        best_iso_model.plot(x_max=variogram_bins[-1], ax=ax_center, color=color_cycle[0], linestyle="--", label=label_text)
+        best_iso_model.plot(
+            x_max=variogram_bins[-1],
+            ax=ax_center,
+            color=color_cycle[0],
+            linestyle="--",
+            label=label_text,
+        )
         ax_center.set_title(r"Isotropic $[0,0,0]$")
     else:
         ax_center.set_title(r"Isotropic $[0,0,0]$" + "\nNo model fitted")
@@ -376,17 +439,25 @@ def plot_variograms_individually(
     output_folder: str,
 ) -> None:
     logging.info("Plotting individual variograms...")
-    color_cycle = plt.cm.viridis(np.linspace(0, 1, 10))
+    color_cycle = plt.cm.viridis(np.linspace(0, 1, 10))  # type: ignore
     for name, (bin_center, gamma) in all_variograms.items():
         logging.info(f"Plotting variogram for {name}...")
         fig, ax = plt.subplots(figsize=(8, 8))
         ax.plot(bin_center, gamma, "o", markersize=4, color="black", label="Estimated")
-        models = BlindNoiseEstimation.fit_model_3d(bin_center, gamma, var=var_guess, len_scale=len_scale_guess)
+        models = BlindNoiseEstimation.fit_model_3d(
+            bin_center, gamma, var=var_guess, len_scale=len_scale_guess
+        )
         if models:
             best_key = max(models, key=lambda k: models[k][1]["r2"])
             best_model, best_fit_params = models[best_key]
             label_text = f"{best_key}\n$r^2$ = {best_fit_params['r2']:.2f}"
-            best_model.plot(x_max=variogram_bins[-1], ax=ax, color=color_cycle[0], linestyle="--", label=label_text)
+            best_model.plot(
+                x_max=variogram_bins[-1],
+                ax=ax,
+                color=color_cycle[0],
+                linestyle="--",
+                label=label_text,
+            )
             ax.legend(fontsize="small")
         ax.set_xlabel("Distance")
         ax.set_ylabel(r"$\gamma$")
@@ -424,17 +495,21 @@ def plot_noise_distributions(
     # Final noise.
     final_vals = noise_final.flatten()
     bins_final = np.arange(np.min(final_vals), np.max(final_vals) + 2) - 0.5
-    hist_final, bin_edges_final = np.histogram(final_vals, bins=bins_final, density=False)
+    hist_final, bin_edges_final = np.histogram(
+        final_vals, bins=bins_final, density=False
+    )
     emp_hist_final = hist_final / hist_final.sum()
     bin_centers_final = (bins_final[:-1] + bins_final[1:]) / 2
 
-    mu_real, sigma_real = norm.fit(real_vals)
-    mu_imag, sigma_imag = norm.fit(imag_vals)
-    theo_pdf_gauss_real = norm.pdf(bin_centers_real, loc=mu_real, scale=sigma_real)
-    theo_pdf_gauss_imag = norm.pdf(bin_centers_imag, loc=mu_imag, scale=sigma_imag)
-
-    loc_r, scale_r = rayleigh.fit(final_vals)
-    theo_pdf_rayleigh = rayleigh.pdf(bin_centers_final, loc=loc_r, scale=scale_r)
+    x_real, _, theo_pdf_gauss_real, str_real, _ = Stats.compute_pdf(
+        real_vals, h=h, dist="norm"
+    )
+    x_imag, _, theo_pdf_gauss_imag, str_imag, _ = Stats.compute_pdf(
+        imag_vals, h=h, dist="norm"
+    )
+    x_rayleigh, _, theo_pdf_rayleigh, str_rayleigh, _ = Stats.compute_pdf(
+        imag_vals, h=h, dist="rayleigh"
+    )
 
     fig, axs = plt.subplots(2, 3, figsize=(18, 10))
     axs[0, 0].imshow(noise_real, cmap="gray", aspect="auto")
@@ -453,24 +528,63 @@ def plot_noise_distributions(
     axs[0, 2].set_ylabel("Y")
 
     ax = axs[1, 0]
-    ax.bar(bin_centers_real, emp_hist_real, width=1, alpha=0.3, color="#DDAA33", label="Empirical Histogram")
-    ax.plot(bin_centers_real, theo_pdf_gauss_real, linestyle="--", color="blue", label=rf"Gaussian PDF: $\mu={mu_real:.2f},\ \sigma={sigma_real:.2f}$")
+    ax.bar(
+        bin_centers_real,
+        emp_hist_real,
+        width=1,
+        alpha=0.3,
+        color="#DDAA33",
+        label="Empirical Histogram",
+    )
+    ax.plot(
+        x_real,
+        theo_pdf_gauss_real,
+        linestyle="--",
+        color="blue",
+        label=rf"Gaussian PDF: {str_real}",
+    )
     ax.set_title("Real Noise Distribution")
     ax.set_xlabel("Value")
     ax.set_ylabel("Probability Density")
     ax.legend(loc="best")
 
     ax = axs[1, 1]
-    ax.bar(bin_centers_imag, emp_hist_imag, width=1, alpha=0.3, color="#DDAA33", label="Empirical Histogram")
-    ax.plot(bin_centers_imag, theo_pdf_gauss_imag, linestyle="--", color="blue", label=rf"Gaussian PDF: $\mu={mu_imag:.2f},\ \sigma={sigma_imag:.2f}$")
+    ax.bar(
+        bin_centers_imag,
+        emp_hist_imag,
+        width=1,
+        alpha=0.3,
+        color="#DDAA33",
+        label="Empirical Histogram",
+    )
+    ax.plot(
+        x_imag,
+        theo_pdf_gauss_imag,
+        linestyle="--",
+        color="blue",
+        label=rf"Gaussian PDF: {str_imag}",
+    )
     ax.set_title("Imaginary Noise Distribution")
     ax.set_xlabel("Value")
     ax.set_ylabel("Probability Density")
     ax.legend(loc="best")
 
     ax = axs[1, 2]
-    ax.bar(bin_centers_final, emp_hist_final, width=1, alpha=0.3, color="#DDAA33", label="Empirical Histogram")
-    ax.plot(bin_centers_final, theo_pdf_rayleigh, linestyle="--", color="red", label=rf"Rayleigh PDF: $\sigma={np.sqrt(scale_r):.2f}$")
+    ax.bar(
+        bin_centers_final,
+        emp_hist_final,
+        width=1,
+        alpha=0.3,
+        color="#DDAA33",
+        label="Empirical Histogram",
+    )
+    ax.plot(
+        x_rayleigh,
+        theo_pdf_rayleigh,
+        linestyle="--",
+        color="red",
+        label=rf"Rayleigh PDF: {str_rayleigh}",
+    )
     ax.set_title("Final Noise Distribution")
     ax.set_xlabel("Value")
     ax.set_ylabel("Probability Density")
@@ -504,16 +618,24 @@ def plot_mask_and_pdf_comparison(
     bins_common = np.arange(min_val, max_val + 2) - 0.5
     bin_centers = (bins_common[:-1] + bins_common[1:]) / 2
 
-    x_orig, kde_est_orig, pdf_rayleigh_orig, str_rayleigh_orig, _ = Stats.compute_pdf(original_bg, h=h, dist="rayleigh")
-    x_gen, kde_est_gen, pdf_rayleigh_gen, str_rayleigh_gen, _ = Stats.compute_pdf(generated_noise, h=h, dist="rayleigh")
+    x_orig, kde_est_orig, pdf_rayleigh_orig, str_rayleigh_orig, _ = Stats.compute_pdf(
+        original_bg, h=h, dist="rayleigh"
+    )
+    x_gen, kde_est_gen, pdf_rayleigh_gen, str_rayleigh_gen, _ = Stats.compute_pdf(
+        generated_noise, h=h, dist="rayleigh"
+    )
 
     hist_orig, _ = np.histogram(original_bg, bins=bins_common, density=False)
     emp_pdf_orig = hist_orig / hist_orig.sum()
     hist_gen, _ = np.histogram(generated_noise, bins=bins_common, density=False)
     emp_pdf_gen = hist_gen / hist_gen.sum()
 
-    js_empirical = Metrics.compute_jensen_shannon_divergence_pdfs(emp_pdf_orig, emp_pdf_gen, bin_centers)
-    js_rayleigh = Metrics.compute_jensen_shannon_divergence_pdfs(pdf_rayleigh_orig, pdf_rayleigh_gen, bin_centers)
+    js_empirical = Metrics.compute_jensen_shannon_divergence_pdfs(
+        emp_pdf_orig, emp_pdf_gen, bin_centers
+    )
+    js_rayleigh = Metrics.compute_jensen_shannon_divergence_pdfs(
+        pdf_rayleigh_orig, pdf_rayleigh_gen, bin_centers
+    )
 
     fig, axs = plt.subplots(1, 3, figsize=(20, 6))
     axs[0].imshow(image, cmap="gray", origin="lower")
@@ -524,8 +646,20 @@ def plot_mask_and_pdf_comparison(
     axs[0].set_ylabel("Y")
 
     ax2 = axs[1]
-    ax2.plot(x_orig, pdf_rayleigh_orig, linestyle="--", color="red", label=rf"Rayleigh PDF (Original): {str_rayleigh_orig}")
-    ax2.plot(x_gen, pdf_rayleigh_gen, linestyle="--", color="blue", label=rf"Rayleigh PDF (Generated): {str_rayleigh_gen}")
+    ax2.plot(
+        x_orig,
+        pdf_rayleigh_orig,
+        linestyle="--",
+        color="red",
+        label=rf"Rayleigh PDF (Original): {str_rayleigh_orig}",
+    )
+    ax2.plot(
+        x_gen,
+        pdf_rayleigh_gen,
+        linestyle="--",
+        color="blue",
+        label=rf"Rayleigh PDF (Generated): {str_rayleigh_gen}",
+    )
     ax2.plot(x_orig, kde_est_orig, color="black", linewidth=2, label="KDE (Original)")
     ax2.plot(x_gen, kde_est_gen, color="purple", linewidth=2, label="KDE (Generated)")
     ax2.set_title("Theoretical PDFs (Rayleigh) + KDE")
@@ -535,15 +669,38 @@ def plot_mask_and_pdf_comparison(
 
     ax3 = axs[2]
     width = (bins_common[1] - bins_common[0]) * 0.9
-    ax3.bar(bin_centers, emp_pdf_orig, width=width, alpha=0.4, color="red", label="Empirical (Original)")
-    ax3.bar(bin_centers, emp_pdf_gen, width=width, alpha=0.4, color="blue", label="Empirical (Generated)")
+    ax3.bar(
+        bin_centers,
+        emp_pdf_orig,
+        width=width,
+        alpha=0.4,
+        color="red",
+        label="Empirical (Original)",
+    )
+    ax3.bar(
+        bin_centers,
+        emp_pdf_gen,
+        width=width,
+        alpha=0.4,
+        color="blue",
+        label="Empirical (Generated)",
+    )
     ax3.set_title("Empirical PDFs (Normalized Histograms)")
     ax3.set_xlabel("Value")
     ax3.set_ylabel("Probability Density")
     ax3.legend(loc="best")
     textstr = f"JS divergence:\nRayleigh PDFs: {js_rayleigh:.4f}\nEmpirical: {js_empirical:.4f}"
     props = dict(boxstyle="round", facecolor="wheat", alpha=0.5)
-    ax3.text(0.95, 0.05, textstr, transform=ax3.transAxes, fontsize=10, verticalalignment="bottom", horizontalalignment="right", bbox=props)
+    ax3.text(
+        0.95,
+        0.05,
+        textstr,
+        transform=ax3.transAxes,
+        fontsize=10,
+        verticalalignment="bottom",
+        horizontalalignment="right",
+        bbox=props,
+    )
 
     for ax in axs:
         ax.spines["right"].set_visible(False)
@@ -564,7 +721,8 @@ def plot_mask_and_pdf_comparison(
 # Noise Generation Functions (with logging)
 # -----------------------------------------------------------------------------
 
-def get_volume_noise(model, volume_shape, npz_filepath):
+
+def get_volume_noise(model, volume_shape, npz_filepath, voxel_size=None):
     logging.info("Getting full-volume noise...")
     if os.path.exists(npz_filepath):
         logging.info(f"Loading noise volume from {npz_filepath}")
@@ -575,7 +733,18 @@ def get_volume_noise(model, volume_shape, npz_filepath):
         noise_volume = np.stack((real_vol, imag_vol, final_vol), axis=-1)
     else:
         logging.info("Generating full-volume noise using 3D generator...")
-        real_vol, imag_vol, final_vol = BlindNoiseEstimation.gaussian_random_fields_noise_3d(model=model, shape=volume_shape)
+        if voxel_size is not None:
+            real_vol, imag_vol, final_vol = (
+                BlindNoiseEstimation.gaussian_random_fields_noise_3d(
+                    model=model, shape=volume_shape, voxel_size=voxel_size
+                )
+            )
+        else:
+            real_vol, imag_vol, final_vol = (
+                BlindNoiseEstimation.gaussian_random_fields_noise_3d(
+                    model=model, shape=volume_shape
+                )
+            )
         noise_volume = np.stack((real_vol, imag_vol, final_vol), axis=-1)
         np.savez(npz_filepath, real=real_vol, imaginary=imag_vol, final=final_vol)
         logging.info(f"Saved noise volume to {npz_filepath}")
@@ -583,7 +752,7 @@ def get_volume_noise(model, volume_shape, npz_filepath):
 
 
 def generate_slice_noise(model, volume_shape, npz_filepath):
-    seed_run = MasterRNG(SEED)
+
     logging.info("Getting full-volume noise...")
     if os.path.exists(npz_filepath):
         logging.info(f"Loading noise volume from {npz_filepath}")
@@ -598,33 +767,64 @@ def generate_slice_noise(model, volume_shape, npz_filepath):
         noise_slices = np.zeros((nx, ny, nz, 3), dtype=np.float32)
         for z in range(nz):
             logging.info(f"Generating noise for slice {z}...")
-            real_field, imag_field, combined_field = BlindNoiseEstimation.gaussian_random_fields_noise_2d(
-                model=model,
-                shape=(nx, ny),
-                independent=True,
-                seed_real=seed_run(),
-                seed_imag=seed_run(),
-                seed_3d=11011969,
+            real_field, imag_field, combined_field = (
+                BlindNoiseEstimation.gaussian_random_fields_noise_2d(
+                    model=model,
+                    shape=(nx, ny),
+                    independent=True,
+                    seed_real=100 + z,
+                    seed_imag=500 + z,
+                    seed_3d=11011969,
+                )
             )
             noise_slices[:, :, z, 0] = np.squeeze(real_field)
             noise_slices[:, :, z, 1] = np.squeeze(imag_field)
             noise_slices[:, :, z, 2] = np.squeeze(combined_field)
-        np.savez(PER_SLICE_NOISE_NPZ, real=noise_slices[:,:,:,0], imaginary=noise_slices[:,:,:,1], final=noise_slices[:,:,:,2])
+        np.savez(
+            PER_SLICE_NOISE_NPZ,
+            real=noise_slices[:, :, :, 0],
+            imaginary=noise_slices[:, :, :, 1],
+            final=noise_slices[:, :, :, 2],
+        )
         logging.info(f"Saved per-slice noise volume to {PER_SLICE_NOISE_NPZ}")
     return noise_slices
+
 
 # -----------------------------------------------------------------------------
 # Main Pipeline
 # -----------------------------------------------------------------------------
 
+
 def main() -> None:
     start_time = time.time()
     logging.info("Starting main pipeline...")
 
-    # --- Segmentation and saving volume & mask ---
-    logging.info(f"Loading volume from: {filepath}")
+    logging.info(f"Loading volume from NRRD: {FILEPATH_NRRD}")
     try:
-        volume, mask = ImageProcessing.segment_3d_volume(filepath, threshold_method="li")
+        volume_nrrd, _ = ImageProcessing.open_nrrd_file(
+            nrrd_path=FILEPATH_NRRD, return_header=True
+        )
+    except Exception as e:
+        logging.error(f"Error reading NRRD file: {e}")
+        sys.exit(1)
+
+    voxel_sizes_list = compute_voxel_sizes(FILEPATH_NRRD)
+    if voxel_sizes_list and all(v is not None for v in voxel_sizes_list):
+        # Convert to tuple[float,float,float]
+        voxel_sizes = tuple(float(v) for v in voxel_sizes_list)  # type: ignore
+        logging.info(f"Extracted voxel sizes (mm): {voxel_sizes}")
+    else:
+        voxel_sizes = None
+        logging.warning(
+            "Voxel sizes not found or invalid. Will generate noise without coarse-graining."
+        )
+
+    # --- Segmentation and saving volume & mask ---
+    logging.info(f"Loading volume from: {FILEPATH_NRRD}")
+    try:
+        volume, mask = ImageProcessing.segment_3d_volume(
+            volume_nrrd, threshold_method="li"
+        )
     except Exception as e:
         logging.error(f"Error during segmentation: {e}")
         sys.exit(1)
@@ -758,17 +958,19 @@ def main() -> None:
     logging.info("Best model found:")
     logging.info(f"Variogram type: {best_variogram_type}")
     logging.info(f"Best r^2: {best_r2}")
-    logging.info(f"Fitted parameters: {best_model_info['params']}")
+    logging.info(f"Fitted parameters: {best_model_info['params']}")  # type: ignore
 
     # --- Generate noise fields ---
     logging.info("Generating independent noise slices (2D, independent GRF)...")
-    real_field_independent, imaginary_field_independent, final_noise_independent = BlindNoiseEstimation.gaussian_random_fields_noise_2d(
-        model=best_model,
-        shape=(volume.shape[0], volume.shape[1]),
-        independent=True,
-        seed_real=seed_real,
-        seed_imag=seed_imag,
-        seed_3d=seed_3d,
+    real_field_independent, imaginary_field_independent, final_noise_independent = (
+        BlindNoiseEstimation.gaussian_random_fields_noise_2d(
+            model=best_model,
+            shape=(volume.shape[0], volume.shape[1]),
+            independent=True,
+            seed_real=seed_real,
+            seed_imag=seed_imag,
+            seed_3d=seed_3d,
+        )
     )
 
     logging.info("Plotting noise distributions for independent noise...")
@@ -776,41 +978,101 @@ def main() -> None:
         real_field_independent,
         imaginary_field_independent,
         final_noise_independent,
-        os.path.join(run_folder, f"noise_distributions_independent_real{seed_real}_imag{seed_imag}.svg"),
+        os.path.join(
+            run_folder,
+            f"noise_distributions_independent_real{seed_real}_imag{seed_imag}.svg",
+        ),
         h=0.5,
     )
 
     logging.info("Plotting mask and PDF comparison for independent noise...")
-    slice_idx = 112
+    slice_idx = SLICE_INDICES[2]
     image_slice = volume[:, :, slice_idx]
     mask_slice = mask[:, :, slice_idx]
     plot_mask_and_pdf_comparison(
         image=image_slice,
         mask=mask_slice,
         noise_final=final_noise_independent,
-        output_path=os.path.join(run_folder, f"final_noise_comparison_independent_real{seed_real}_imag{seed_imag}.svg"),
+        output_path=os.path.join(
+            run_folder,
+            f"final_noise_comparison_independent_real{seed_real}_imag{seed_imag}.svg",
+        ),
     )
 
     # --- Generate full-volume and per-slice noise ---
     logging.info("Generating full-volume noise...")
-    noise_volume = get_volume_noise(best_model, volume.shape, NOISE_VOLUME_NPZ)
-    logging.info("Generating per-slice noise...")
-    noise_slice = generate_slice_noise(best_model, volume.shape, PER_SLICE_NOISE_NPZ)
+    noise_volume = get_volume_noise(
+        model=best_model,
+        volume_shape=volume.shape,
+        npz_filepath=NOISE_VOLUME_NPZ,
+        voxel_size=None,
+    )
+    logging.info("Generating full-volume noise using voxel sizes...")
+    noise_volume_voxels = get_volume_noise(
+        model=best_model,
+        volume_shape=volume.shape,
+        npz_filepath=NOISE_VOLUME_NPZ,
+        voxel_size=voxel_sizes,  # pass the voxel sizes for coarse-graining
+    )
 
     logging.info("Creating visualization for volume-generated noise...")
-    generate_visualizations(volume, mask, noise_volume, SLICE_INDICES, OUTPUT_FIGURE_VOLUME, "(Volume Noise)")
+    generate_visualizations(
+        volume,
+        mask,
+        noise_volume,
+        SLICE_INDICES,
+        OUTPUT_FIGURE_VOLUME,
+        "(Volume Noise)",
+    )
 
-    logging.info("Creating visualization for per-slice generated noise...")
-    noise_array_2d = np.zeros_like(volume, dtype=np.float32)
-    for slice_idx in SLICE_INDICES:
-        noise_array_2d[:, :, slice_idx] = noise_slice[:, :, slice_idx, 0]
-    generate_visualizations(volume, mask, noise_array_2d, SLICE_INDICES, OUTPUT_FIGURE_SLICE, "(Slice Noise)")
+    logging.info("Creating visualization for volume-generated noise with voxels...")
+    generate_visualizations(
+        volume,
+        mask,
+        noise_volume_voxels,
+        SLICE_INDICES,
+        OUTPUT_FIGURE_VOLUME_VOXELS,
+        "(Volume Noise using Voxel Size)",
+    )
 
-    logging.info("Creating 3x4 comparison visualization...")
+    logging.info(
+        "Creating 3x4 comparison visualization of volume with and without voxels..."
+    )
     rep_slice = SLICE_INDICES[2]
-    fig_comp = visualize_noise_comparison(noise_volume, noise_slice, rep_slice, H=H)
-    plt.savefig(OUTPUT_FIGURE_COMPARISON, bbox_inches="tight")
-    logging.info(f"Saved 3x4 comparison visualization to {OUTPUT_FIGURE_COMPARISON}")
+    fig_comp = visualize_noise_comparison(
+        noise_volume, noise_volume_voxels, rep_slice, H=H
+    )
+    plt.savefig(OUTPUT_FIGURE_COMPARISON_VOXELS, bbox_inches="tight")
+    logging.info(
+        f"Saved 3x4 comparison visualization to {OUTPUT_FIGURE_COMPARISON_VOXELS}"
+    )
+
+    if GENERATE_PER_SLICE_NOISE:
+        logging.info("Generating per-slice noise...")
+        noise_slice = generate_slice_noise(
+            best_model, volume.shape, PER_SLICE_NOISE_NPZ
+        )
+        logging.info("Creating visualization for per-slice generated noise...")
+        noise_array_2d = np.zeros_like(volume, dtype=np.float32)
+        for slice_idx in SLICE_INDICES:
+            noise_array_2d[:, :, slice_idx] = noise_slice[:, :, slice_idx, 0]
+        generate_visualizations(
+            volume,
+            mask,
+            noise_array_2d,
+            SLICE_INDICES,
+            OUTPUT_FIGURE_SLICE,
+            "(Slice Noise)",
+        )
+        logging.info(
+            "Creating 3x4 comparison visualization of volume against slice-generated..."
+        )
+        rep_slice = SLICE_INDICES[2]
+        fig_comp = visualize_noise_comparison(noise_volume, noise_slice, rep_slice, H=H)
+        plt.savefig(OUTPUT_FIGURE_COMPARISON, bbox_inches="tight")
+        logging.info(
+            f"Saved 3x4 comparison visualization to {OUTPUT_FIGURE_COMPARISON}"
+        )
 
     total_time = time.time() - start_time
     logging.info(f"Pipeline execution time: {total_time:.2f} seconds")
@@ -821,7 +1083,7 @@ def main() -> None:
         "pulse": PULSE,
         "seed": SEED,
         "slice_indices": SLICE_INDICES,
-        "input_filepath": filepath,
+        "input_filepath": FILEPATH_NRRD,
         "volume_shape_after_ignore": volume.shape,
         "mask_shape_after_ignore": mask.shape,
         "inside_mask": {"mean": float(inside_mean), "std": float(inside_std)},
@@ -833,7 +1095,7 @@ def main() -> None:
             "estimator": estimator,
             "len_scale_guess": len_scale_guess,
         },
-        "best_covariance_model": best_model_info["params"],
+        "best_covariance_model": run_parameters["best_covariance_model"],  # type: ignore
         "seeds": {"seed_real": seed_real, "seed_imag": seed_imag, "seed_3d": seed_3d},
         "output_files": {
             "noise_volume_npz": NOISE_VOLUME_NPZ,
@@ -846,6 +1108,11 @@ def main() -> None:
         },
         "execution_time_sec": total_time,
     }
+
+    # Convert numpy types to native Python types
+    run_parameters["best_covariance_model"] = make_serializable(
+        run_parameters["best_covariance_model"]
+    )
 
     with open(RUN_PARAMETERS_YAML, "w") as f:
         yaml.dump(run_parameters, f)

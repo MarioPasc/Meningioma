@@ -331,7 +331,7 @@ def _threshold_slice(slice_img: np.ndarray, method: str = "otsu") -> np.ndarray:
 
 
 def get_3d_volume_segmentation(
-    filepath: str,
+    volume_nrrd: np.ndarray,
     threshold_method: str = "otsu",
     structure_size_2d: int = 7,
     iterations_2d: int = 3,
@@ -374,11 +374,7 @@ def get_3d_volume_segmentation(
         A 3D boolean array (same shape as volume) with the segmented region = True.
     """
     # 1) Load volume
-    npz_data = np.load(filepath)
-    volume = np.squeeze(
-        npz_data["data"][0]
-    )  # shape: (H, W, S) or (S, H, W) depending on dataset
-    volume = volume.astype(np.float32, copy=False)
+    volume = volume_nrrd.astype(np.float32, copy=False)
 
     # Check we have 3D data
     if volume.ndim != 3:
