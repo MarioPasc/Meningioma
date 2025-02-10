@@ -411,13 +411,9 @@ def plot_mask_and_pdf_comparison(
     bins_common = np.arange(min_val, max_val + 2) - 0.5
     bin_centers = (bins_common[:-1] + bins_common[1:]) / 2
 
-    # --- Fit theoretical distributions using Rayleigh ---
-    loc_orig, scale_orig = rayleigh.fit(original_bg)
-    loc_gen, scale_gen = rayleigh.fit(generated_noise)
-
-    # --- Compute theoretical PDFs directly ---
-    pdf_rayleigh_orig = rayleigh.pdf(bin_centers, loc=loc_orig, scale=scale_orig)
-    pdf_rayleigh_gen = rayleigh.pdf(bin_centers, loc=loc_gen, scale=scale_gen)
+    # --- Compute KDE estimates via Parzen–Rosenblatt method ---
+    x_orig, kde_est_orig, pdf_rayleigh_orig, str_rayleigh_orig, _ = Stats.compute_pdf(original_bg, h=h, dist="rayleigh")
+    x_gen, kde_est_gen, pdf_rayleigh_gen, str_rayleigh_gen, _ = Stats.compute_pdf(generated_noise, h=h, dist="rayleigh")
 
     # --- Compute empirical PDFs ---
     hist_orig, _ = np.histogram(original_bg, bins=bins_common, density=False)
@@ -433,10 +429,6 @@ def plot_mask_and_pdf_comparison(
         pdf_rayleigh_orig, pdf_rayleigh_gen, bin_centers
     )
 
-    # --- Compute KDE estimates via Parzen–Rosenblatt method ---
-    x_orig, kde_est_orig, _, _, _ = Stats.compute_pdf(original_bg, h=h, dist="norm")
-    x_gen, kde_est_gen, _, _, _ = Stats.compute_pdf(generated_noise, h=h, dist="norm")
-
     # --- Create 3-panel figure ---
     fig, axs = plt.subplots(1, 3, figsize=(20, 6))
 
@@ -451,18 +443,18 @@ def plot_mask_and_pdf_comparison(
     # Subplot 2: Theoretical PDF and KDE comparisons.
     ax2 = axs[1]
     ax2.plot(
-        bin_centers,
+        x_orig,
         pdf_rayleigh_orig,
         linestyle="--",
         color="red",
-        label=rf"Rayleigh PDF (Original): $\mathrm{{loc}}={loc_orig:.2f},\ \sigma={scale_orig:.2f}$",
+        label=rf"Rayleigh PDF (Original): {str_rayleigh_orig}",
     )
     ax2.plot(
-        bin_centers,
+        x_gen,
         pdf_rayleigh_gen,
         linestyle="--",
         color="blue",
-        label=rf"Rayleigh PDF (Generated): $\mathrm{{loc}}={loc_gen:.2f},\ \sigma={scale_gen:.2f}$",
+        label=rf"Rayleigh PDF (Generated): {str_rayleigh_gen}",
     )
     ax2.plot(
         x_orig,
@@ -550,21 +542,28 @@ def plot_mask_and_pdf_comparison(
 # =============================================================================
 if __name__ == "__main__":
     output_folder = (
-        "/home/mariopasc/Python/Results/Meningioma/noise_modelling/experiment_images"
+        "/home/mario/Python/Results/Meningioma/noise_modelling/experiment_images"
     )
     os.makedirs(output_folder, exist_ok=True)
 
-    base_path = "/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_Adquisition"
-    output_npz_path = "/home/mariopasc/Python/Datasets/Meningiomas/npz"
+    base_path = "/home/mario/Python/Datasets/Meningiomas/Meningioma_Adquisition"
+    output_npz_path = "/home/mario/Python/Datasets/Meningiomas/npz"
 
     patient = "P50"
     pulse = "T1"
     filepath = os.path.join(output_npz_path, patient, f"{patient}_{pulse}.npz")
+    X = 20 # Slices to ignore at the beginning and at the end
 
     # Load volume and compute the exclusion mask.
     volume, mask = ImageProcessing.segment_3d_volume(filepath, threshold_method="li")
     print("Data shape:", volume.shape)
     print("Original Mask field shape:", mask.shape)
+
+    volume = volume[:, :, X:-X]
+    mask = mask[:, :, X:-X]
+
+    print(f"Data shape (ignoring {2*X} slices):", volume.shape)
+    print(f"Original Mask field shape (ignoring {2*X} slices):", mask.shape)
 
     # Print statistics inside and outside the mask.
     inside_pixels = volume[mask]
@@ -590,7 +589,18 @@ if __name__ == "__main__":
     variogram_sampling_seed = 19920516
     estimator = "cressie"
     shape = (512, 512)
-
+    
+    # Seeds
+    """
+    seed_real = 12012002
+    seed_imag = 23102003
+    seed_3d = 11011969
+    """
+    
+    seed_real = 123
+    seed_imag = 42
+    seed_3d = 33
+    
     # Isotropic variogram estimation and model fitting.
     iso_bin_center, iso_gamma = BlindNoiseEstimation.estimate_variogram_isotropic_3d(
         data=volume,
@@ -718,9 +728,9 @@ if __name__ == "__main__":
             model=best_model,
             shape=shape,
             independent=True,
-            seed_real=1122022,
-            seed_imag=23102003,
-            seed_3d=11021969,
+            seed_real=seed_real,
+            seed_imag=seed_imag,
+            seed_3d=seed_3d,
         )
     )
     # Dependent GRF (coming from the same noise volume)
@@ -730,9 +740,9 @@ if __name__ == "__main__":
             model=best_model,
             shape=shape,
             independent=False,
-            seed_real=1122022,
-            seed_imag=23102003,
-            seed_3d=11021969,
+            seed_real=seed_real,
+            seed_imag=seed_imag,
+            seed_3d=seed_3d,
         )
     )
 
@@ -743,7 +753,7 @@ if __name__ == "__main__":
         real_field_independent,
         imaginary_field_independent,
         final_noise_independent,
-        os.path.join(output_folder, "noise_distributions_independent.svg"),
+        os.path.join(output_folder, f"noise_distributions_independent_real{seed_real}_imag{seed_imag}.svg"),
         h=0.5,
     )
     # Dependent GRF (coming from the same noise volume)
@@ -776,7 +786,7 @@ if __name__ == "__main__":
         mask=mask,
         noise_final=final_noise_independent,
         output_path=os.path.join(
-            output_folder, "final_noise_comparison_independent.svg"
+            output_folder, f"final_noise_comparison_independent_real{seed_real}_imag{seed_imag}.svg"
         ),
     )
 
@@ -790,7 +800,7 @@ if __name__ == "__main__":
             BlindNoiseEstimation.gaussian_random_fields_noise_3d(
                 model=best_model,
                 shape=shape_3d,
-                seed_real=1122022,
-                seed_imag=23102003,
+                seed_real=seed_real,
+                seed_imag=seed_imag,
             )
         )

@@ -50,6 +50,13 @@ SUMMARY_JSON_FILE: str = os.path.join(
     patient_folder, f"{PATIENT}_best_model_summary.json"
 )
 
+# % of slices to ignore. 
+# The total slices ignored at the end and beginning of the study
+# will be equal to this fraction. 
+# e.g. fraction=0.1, total_slices=100, then we ignore 5 at the beginning
+# and 5 at the end, so that 5+5=fraction*total_slices
+FRACTION: float = 0.1
+
 # Variogram estimation parameters
 VARIOGRAM_BINS = np.linspace(0, 100, 100)
 VARIOGRAM_SAMPLING_SIZE = 3000
@@ -158,6 +165,24 @@ def run_variogram_fitting_pipeline(
             )
             pulse_seg_time = time.time() - t0
             logging.info("Volume segmentation completed.")
+            
+            # Get the total number of slices (assumed to be the third dimension).
+            total_slices = volume.shape[2]
+
+            # Calculate the total number of slices to ignore.
+            total_ignore = int(round(FRACTION * total_slices))
+
+            # Split the ignored slices equally (or as equally as possible) between the beginning and the end.
+            ignore_begin = total_ignore // 2
+            ignore_end = total_ignore - ignore_begin
+
+            # Slice the volume and mask accordingly.
+            volume = volume[:, :, ignore_begin: total_slices - ignore_end]
+            mask = mask[:, :, ignore_begin: total_slices - ignore_end]
+
+            print(f"New volume shape (ignored {total_ignore} slices):", volume.shape)
+            print(f"New mask shape (ignored {total_ignore} slices):", mask.shape)
+            
             assert (
                 volume.shape == mask.shape
             ), f"Volume and mask shapes differ for pulse {pulse}"

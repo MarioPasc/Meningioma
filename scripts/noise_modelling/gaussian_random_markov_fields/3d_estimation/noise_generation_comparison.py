@@ -23,9 +23,9 @@ SEED = "42"  # a single seed for this test
 SLICE_INDICES: List[int] = [32, 72, 112, 152]  # slices to visualize
 
 # Base paths (update these paths as needed)
-BASE_NPZ_PATH: str = "/home/mariopasc/Python/Datasets/Meningiomas/npz"
+BASE_NPZ_PATH: str = "/home/mario/Python/Datasets/Meningiomas/npz"
 OUTPUT_FOLDER: str = (
-    "/home/mariopasc/Python/Results/Meningioma/noise_modelling/debug_visualizations"
+    "/home/mario/Python/Results/Meningioma/noise_modelling/debug_visualizations"
 )
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
@@ -46,6 +46,13 @@ NOISE_VOLUME_NPZ = os.path.join(OUTPUT_FOLDER, f"{PATIENT}_{PULSE}_noise_volume.
 PER_SLICE_NOISE_NPZ = os.path.join(
     OUTPUT_FOLDER, f"{PATIENT}_{PULSE}_per_slice_noise.npz"
 )
+
+# % of slices to ignore. 
+# The total slices ignored at the end and beginning of the study
+# will be equal to this fraction. 
+# e.g. fraction=0.1, total_slices=100, then we ignore 5 at the beginning
+# and 5 at the end, so that 5+5=fraction*total_slices
+FRACTION: float = 0.2
 
 # Variogram estimation parameters
 VARIOGRAM_BINS = np.linspace(0, 100, 100)
@@ -364,9 +371,30 @@ def main() -> None:
         volume, mask = ImageProcessing.segment_3d_volume(
             npz_filepath, threshold_method="li"
         )
+        logging.info("Volume segmentation completed.")
+        
+        print(f"Original volume shape:", volume.shape)
+        print(f"Original mask shape:", mask.shape)
+        
+        # Get the total number of slices (assumed to be the third dimension).
+        total_slices = volume.shape[2]
+
+        # Calculate the total number of slices to ignore.
+        total_ignore = int(round(FRACTION * total_slices))
+
+        # Split the ignored slices equally (or as equally as possible) between the beginning and the end.
+        ignore_begin = total_ignore // 2
+        ignore_end = total_ignore - ignore_begin
+
+        # Slice the volume and mask accordingly.
+        volume = volume[:, :, ignore_begin: total_slices - ignore_end]
+        mask = mask[:, :, ignore_begin: total_slices - ignore_end]
+
+        print(f"New volume shape (ignored {total_ignore} slices):", volume.shape)
+        print(f"New mask shape (ignored {total_ignore} slices):", mask.shape)
+
     except Exception as e:
-        logging.error(f"Error during segmentation: {e}")
-        return
+        logging.error(f"Error during segmentation for pulse: {e}")
 
     assert volume.shape == mask.shape, "Volume and mask shapes do not match."
     logging.info(f"Volume shape: {volume.shape}")
