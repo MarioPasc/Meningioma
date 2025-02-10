@@ -413,6 +413,7 @@ def get_3d_volume_segmentation(
         hull_pts = cv2.convexHull(largest_contour)
 
         hull_mask_slice = np.zeros_like(slice_i, dtype=np.uint8)
+        hull_mask_slice = np.ascontiguousarray(hull_mask_slice)
         cv2.drawContours(
             hull_mask_slice, [hull_pts], -1, color=255, thickness=cv2.FILLED
         )  # type: ignore
