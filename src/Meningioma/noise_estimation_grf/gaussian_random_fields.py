@@ -142,6 +142,10 @@ def get_gaussian_random_fields_noise_3d(
         A tuple (real_volume, imag_volume, combined_volume), where each array has shape `shape`.
         The combined_volume is computed as the modulus (Euclidean norm) of the two volumes.
     """
+    
+    # TODO: Comprobar cómo conseguir el tamaño de vóxeles a partir de los metadatos
+    # TODO: Comprobar a generar volumenes de ruido con (z,x,y)
+    
     nx, ny, nz = shape
     # Define coordinate arrays for a structured grid.
     x = np.arange(nx)
@@ -156,11 +160,7 @@ def get_gaussian_random_fields_noise_3d(
     srf_imag = gs.SRF(model, seed=seed_imag)
     imag_volume = srf_imag((x, y, z), mesh_type="structured")
 
-    # Normalize signal amplitude
-    real_volume = real_volume / np.sqrt(2)
-    imag_volume = imag_volume / np.sqrt(2)
-
     # Combine the two volumes by taking the Euclidean norm and normalize by √2.
-    combined_volume = np.sqrt(real_volume**2 + imag_volume**2)
+    combined_volume = np.sqrt(real_volume**2 + imag_volume**2) / np.sqrt(2)
 
     return real_volume, imag_volume, combined_volume
