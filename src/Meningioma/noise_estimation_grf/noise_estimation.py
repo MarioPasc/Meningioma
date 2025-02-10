@@ -218,6 +218,7 @@ class BlindNoiseEstimation:
         shape: Tuple[int, int, int],
         seed_real: int = 19770928,
         seed_imag: int = 19773022,
+        voxel_size: Optional[Tuple[float, float, float]] = None,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Generate independent 3D Gaussian random field volumes representing the real and
@@ -249,5 +250,9 @@ class BlindNoiseEstimation:
             The combined_volume is computed as the modulus (Euclidean norm) of the two volumes.
         """
         return get_gaussian_random_fields_noise_3d(
-            model=model, shape=shape, seed_real=seed_real, seed_imag=seed_imag
+            model=model,
+            shape=shape,
+            seed_real=seed_real,
+            seed_imag=seed_imag,
+            voxel_size=voxel_size,
         )
