@@ -1095,7 +1095,7 @@ def main() -> None:
             "estimator": estimator,
             "len_scale_guess": len_scale_guess,
         },
-        "best_covariance_model": run_parameters["best_covariance_model"],  # type: ignore
+        "best_covariance_model": best_model_info["params"],  # type: ignore
         "seeds": {"seed_real": seed_real, "seed_imag": seed_imag, "seed_3d": seed_3d},
         "output_files": {
             "noise_volume_npz": NOISE_VOLUME_NPZ,
