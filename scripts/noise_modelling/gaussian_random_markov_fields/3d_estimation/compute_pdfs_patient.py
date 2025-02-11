@@ -4,6 +4,8 @@ from typing import List
 
 from Meningioma import Stats  # type: ignore
 
+from tqdm import tqdm  # type:ignore
+
 
 def save_pdf_arrays_for_pulse(
     base_results_folder: str,
@@ -96,6 +98,8 @@ def save_pdf_arrays_for_pulse(
             print(f"Warning: file not found {npz_filepath}. Skipping seed={seed}.")
             continue
 
+        print(f"Computing for seed: {seed}")
+
         data_4d = np.load(npz_filepath)["data"]  # shape => (nx, ny, nz, 5)
         vol_3d = data_4d[..., 0]  # original volume
         mask_3d = data_4d[..., 1]  # segmentation mask
@@ -104,7 +108,12 @@ def save_pdf_arrays_for_pulse(
         # cast mask to bool in case it's not
         mask_3d = mask_3d.astype(bool)
 
-        for slice_idx in range(n_slices):
+        for slice_idx in tqdm(
+            iterable=range(n_slices),
+            total=n_slices,
+            desc="Computing per-slice PDF ...",
+            colour="green",
+        ):
             vol_slice = vol_3d[:, :, slice_idx]
             mask_slice = mask_3d[:, :, slice_idx]
             noise_slice = noise_3d[:, :, slice_idx]
@@ -170,3 +179,7 @@ def main() -> None:
         bandwidth_h=bandwidth_h,
         output_npz_name=output_name,
     )
+
+
+if __name__ == "__main__":
+    main()
