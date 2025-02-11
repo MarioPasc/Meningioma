@@ -162,7 +162,9 @@ def save_pdf_arrays_for_pulse(
 
 
 def main() -> None:
-    results_folder: str = "/home/mariopascual/Projects/MENINGIOMA/Results"
+    results_folder: str = (
+        "/home/mariopascual/Projects/MENINGIOMA/Results/NoiseEstimation_20250210_231309"
+    )
     pulse: str = "T1"
     seeds: List[int] = [123, 456, 789]
     pdf_theoretical_fit: str = "rayleigh"
