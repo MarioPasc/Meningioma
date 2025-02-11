@@ -12,6 +12,16 @@ import matplotlib.pyplot as plt
 import gstools as gs  # type: ignore
 from Meningioma import ImageProcessing, BlindNoiseEstimation, Metrics, Stats  # type: ignore
 
+"""
+This script aims to explore:
+    1. The visualization of variograms and covariance models fitted to a volume of noise .
+    2. The comparsion of noise generation methods:
+        2.1. Generate one slice of noise, and compare it to its corresponding slice of the volume.
+        2.2. Generate slice by slice all th study, varying the seed, until you have the volume depth.
+        2.3. Generate a volume of noise directly.
+        2.4. Generate a volume of noise incorporating information about the voxel size.
+"""
+
 # -----------------------------------------------------------------------------
 # Set up plotting style and logging
 # -----------------------------------------------------------------------------
@@ -32,7 +42,7 @@ logging.basicConfig(
 # -----------------------------------------------------------------------------
 # Create run folder with date/time stamp for all outputs
 # -----------------------------------------------------------------------------
-BASE_OUTPUT_FOLDER = "/home/mariopascual/Projects/MENINGIOMA/Results"
+BASE_OUTPUT_FOLDER = "/home/mariopasc/Python/Results/Meningioma/noise_modelling/NoiseEstimation_20250210_231309/Figures"
 run_folder = os.path.join(BASE_OUTPUT_FOLDER, datetime.now().strftime("%Y%m%d_%H%M%S"))
 os.makedirs(run_folder, exist_ok=True)
 logging.info(f"Created run folder: {run_folder}")
@@ -62,10 +72,14 @@ PULSE = "T1"
 SEED = "42"  # a single seed for this test
 SLICE_INDICES: List[int] = [32, 72, 112, 152]  # slices to visualize
 
+ONLY_VARIOGRAM: bool = True
 GENERATE_PER_SLICE_NOISE: bool = False
 
+
 # Input NPZ folder and file (adjust as needed)
-BASE_NRRD_PATH: str = "/media/hddb/mario/data/Meningioma_Adquisition"
+BASE_NRRD_PATH: str = (
+    "/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_Adquisition"
+)
 # In our pipeline, the segmentation file is located as follows:
 FILEPATH_NRRD = os.path.join(
     BASE_NRRD_PATH, "RM", PULSE, PATIENT, f"{PULSE}_{PATIENT}.nrrd"
@@ -347,6 +361,166 @@ def visualize_noise_comparison(noise_volume, noise_slice, rep_slice: int, H=0.5)
 
     plt.tight_layout()
     return fig
+
+
+import os
+import logging
+import matplotlib.pyplot as plt
+import gstools as gs
+from typing import Dict, Tuple, Any
+
+# Assuming we have:
+#  iso_bin_center, iso_gamma, iso_models: isotropic variogram results & models
+#  anisotropic_variograms: dict with keys like "X-axis $[1,0,0]$", etc.
+#  variogram_bins, var_guess, len_scale_guess
+#  BlindNoiseEstimation.fit_model_3d(...) is available
+
+
+def plot_variograms_1x4(
+    iso_bin_center: np.ndarray,
+    iso_gamma: np.ndarray,
+    iso_models: Dict[str, Tuple[gs.CovModel, Dict[str, Any]]],
+    anisotropic_variograms: Dict[str, Tuple[np.ndarray, np.ndarray]],
+    variogram_bins: np.ndarray,
+    var_guess: float,
+    len_scale_guess: float,
+    save_path: str,
+    filename: str = "variograms_1x4.svg",
+) -> None:
+    """
+    Creates a 1x4 figure showing variograms for:
+      - X-axis [1,0,0]
+      - Y-axis [0,1,0]
+      - Z-axis [0,0,1]
+      - Isotropic [0,0,0]
+
+    Each column plots:
+      - The estimated variogram (scatter)
+      - The best-fitted covariance model (dashed line)
+      - R^2 in the legend.
+
+    Parameters
+    ----------
+    iso_bin_center : np.ndarray
+        Distances (bin centers) for the isotropic variogram.
+    iso_gamma : np.ndarray
+        Semivariance (gamma) for the isotropic variogram.
+    iso_models : Dict[str, Tuple[gs.CovModel, Dict[str, Any]]]
+        Dictionary of model name → (CovModel, fit info) for isotropic.
+    anisotropic_variograms : Dict[str, Tuple[np.ndarray, np.ndarray]]
+        Keys are direction labels (e.g. "X-axis $[1,0,0]$", etc.);
+        Values are (bin_center, gamma) for that direction.
+    variogram_bins : np.ndarray
+        The array of distance bins originally used (for x_max in plotting).
+    var_guess : float
+        Initial variance guess for model fitting.
+    len_scale_guess : float
+        Initial length scale guess for model fitting.
+    save_path : str
+        Directory where the figure will be saved.
+    filename : str
+        Name of the output file (SVG, PNG, etc.).
+
+    Returns
+    -------
+    None. Saves the figure to disk and closes the figure.
+    """
+
+    logging.info("Plotting X, Y, Z, and Isotropic variograms in 1x4 layout...")
+
+    # We only care about these three directions in the anisotropic variograms
+    directions_of_interest = [
+        r"X-axis $[1,0,0]$",
+        r"Y-axis $[0,1,0]$",
+        r"Z-axis $[0,0,1]$",
+    ]
+
+    fig, axs = plt.subplots(nrows=1, ncols=4, figsize=(20, 5))  # 1x4
+    color_cycle = plt.cm.viridis(np.linspace(0, 1, 10))  # type: ignore
+
+    # -------------------------------------------------------------------------
+    # 1) X, Y, Z in columns [0..2]
+    # -------------------------------------------------------------------------
+    for i, direction in enumerate(directions_of_interest):
+        ax = axs[i]
+        ax.set_xlabel("Distance")
+        ax.set_ylabel(r"$\gamma$")
+        ax.set_title(direction)
+
+        # Plot the estimated variogram if it exists in anisotropic_variograms
+        if direction in anisotropic_variograms:
+            bin_center, gamma = anisotropic_variograms[direction]
+            ax.plot(
+                bin_center, gamma, "o", markersize=4, color="black", label="Estimated"
+            )
+            # Fit a model for this direction
+            logging.info(f"Fitting model for {direction} direction variogram...")
+            models_dir = BlindNoiseEstimation.fit_model_3d(
+                bin_center, gamma, var=var_guess, len_scale=len_scale_guess
+            )
+            if models_dir:
+                best_key = max(models_dir, key=lambda k: models_dir[k][1]["r2"])
+                best_model, best_fit_params = models_dir[best_key]
+                label_text = f"{best_key}\n$r^2$={best_fit_params['r2']:.2f}"
+                best_model.plot(
+                    x_max=variogram_bins[-1],
+                    ax=ax,
+                    color=color_cycle[0],
+                    linestyle="--",
+                    label=label_text,
+                )
+        else:
+            # If that direction is missing, just show "No data"
+            ax.text(
+                0.5, 0.5, "No data", ha="center", va="center", transform=ax.transAxes
+            )
+
+        ax.legend()
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.xaxis.tick_bottom()
+        ax.yaxis.tick_left()
+    # -------------------------------------------------------------------------
+    # 2) Isotropic in column [3]
+    # -------------------------------------------------------------------------
+    ax_iso = axs[3]
+    ax_iso.set_xlabel("Distance")
+    ax_iso.set_ylabel(r"$\gamma$")
+    ax_iso.set_title("Isotropic [0,0,0]")
+
+    ax_iso.plot(
+        iso_bin_center, iso_gamma, "o", markersize=4, color="black", label="Estimated"
+    )
+    if iso_models:
+        best_iso_key = max(iso_models, key=lambda k: iso_models[k][1]["r2"])
+        best_iso_model, best_iso_params = iso_models[best_iso_key]
+        label_text = f"{best_iso_key}\n$r^2$={best_iso_params['r2']:.2f}"
+        best_iso_model.plot(
+            x_max=variogram_bins[-1],
+            ax=ax_iso,
+            color=color_cycle[0],
+            linestyle="--",
+            label=label_text,
+        )
+    else:
+        ax_iso.text(
+            0.5,
+            0.5,
+            "No isotropic model fitted",
+            ha="center",
+            va="center",
+            transform=ax_iso.transAxes,
+        )
+    ax_iso.legend()
+    ax_iso.spines["top"].set_visible(False)
+    ax_iso.spines["right"].set_visible(False)
+    ax_iso.xaxis.tick_bottom()
+    ax_iso.yaxis.tick_left()
+    plt.tight_layout()
+    fpath = os.path.join(save_path, filename)
+    plt.savefig(fpath, bbox_inches="tight")
+    logging.info(f"Saved 1x4 variogram plot to {fpath}")
+    plt.close(fig)
 
 
 def plot_fitted_variograms_3x3(
@@ -918,6 +1092,18 @@ def main() -> None:
         save_path=run_folder,
     )
 
+    logging.info("Plotting fitted variograms (1x4 grid)...")
+    plot_variograms_1x4(
+        iso_bin_center=iso_bin_center,
+        iso_gamma=iso_gamma,
+        iso_models=iso_models,
+        anisotropic_variograms=anisotropic_variograms,
+        variogram_bins=variogram_bins,
+        var_guess=var_guess,
+        len_scale_guess=len_scale_guess,
+        save_path=run_folder,
+    )
+
     all_variograms = {"Isotropic": (iso_bin_center, iso_gamma)}
     for key, val in anisotropic_variograms.items():
         all_variograms[key] = val
@@ -960,163 +1146,170 @@ def main() -> None:
     logging.info(f"Best r^2: {best_r2}")
     logging.info(f"Fitted parameters: {best_model_info['params']}")  # type: ignore
 
-    # --- Generate noise fields ---
-    logging.info("Generating independent noise slices (2D, independent GRF)...")
-    real_field_independent, imaginary_field_independent, final_noise_independent = (
-        BlindNoiseEstimation.gaussian_random_fields_noise_2d(
+    if not ONLY_VARIOGRAM:
+        # --- Generate noise fields ---
+        logging.info("Generating independent noise slices (2D, independent GRF)...")
+        real_field_independent, imaginary_field_independent, final_noise_independent = (
+            BlindNoiseEstimation.gaussian_random_fields_noise_2d(
+                model=best_model,
+                shape=(volume.shape[0], volume.shape[1]),
+                independent=True,
+                seed_real=seed_real,
+                seed_imag=seed_imag,
+                seed_3d=seed_3d,
+            )
+        )
+
+        logging.info("Plotting noise distributions for independent noise...")
+        plot_noise_distributions(
+            real_field_independent,
+            imaginary_field_independent,
+            final_noise_independent,
+            os.path.join(
+                run_folder,
+                f"noise_distributions_independent_real{seed_real}_imag{seed_imag}.svg",
+            ),
+            h=0.5,
+        )
+
+        logging.info("Plotting mask and PDF comparison for independent noise...")
+        slice_idx = SLICE_INDICES[2]
+        image_slice = volume[:, :, slice_idx]
+        mask_slice = mask[:, :, slice_idx]
+        plot_mask_and_pdf_comparison(
+            image=image_slice,
+            mask=mask_slice,
+            noise_final=final_noise_independent,
+            output_path=os.path.join(
+                run_folder,
+                f"final_noise_comparison_independent_real{seed_real}_imag{seed_imag}.svg",
+            ),
+        )
+
+        # --- Generate full-volume and per-slice noise ---
+        logging.info("Generating full-volume noise...")
+        noise_volume = get_volume_noise(
             model=best_model,
-            shape=(volume.shape[0], volume.shape[1]),
-            independent=True,
-            seed_real=seed_real,
-            seed_imag=seed_imag,
-            seed_3d=seed_3d,
+            volume_shape=volume.shape,
+            npz_filepath=NOISE_VOLUME_NPZ,
+            voxel_size=None,
         )
-    )
-
-    logging.info("Plotting noise distributions for independent noise...")
-    plot_noise_distributions(
-        real_field_independent,
-        imaginary_field_independent,
-        final_noise_independent,
-        os.path.join(
-            run_folder,
-            f"noise_distributions_independent_real{seed_real}_imag{seed_imag}.svg",
-        ),
-        h=0.5,
-    )
-
-    logging.info("Plotting mask and PDF comparison for independent noise...")
-    slice_idx = SLICE_INDICES[2]
-    image_slice = volume[:, :, slice_idx]
-    mask_slice = mask[:, :, slice_idx]
-    plot_mask_and_pdf_comparison(
-        image=image_slice,
-        mask=mask_slice,
-        noise_final=final_noise_independent,
-        output_path=os.path.join(
-            run_folder,
-            f"final_noise_comparison_independent_real{seed_real}_imag{seed_imag}.svg",
-        ),
-    )
-
-    # --- Generate full-volume and per-slice noise ---
-    logging.info("Generating full-volume noise...")
-    noise_volume = get_volume_noise(
-        model=best_model,
-        volume_shape=volume.shape,
-        npz_filepath=NOISE_VOLUME_NPZ,
-        voxel_size=None,
-    )
-    logging.info("Generating full-volume noise using voxel sizes...")
-    noise_volume_voxels = get_volume_noise(
-        model=best_model,
-        volume_shape=volume.shape,
-        npz_filepath=NOISE_VOLUME_VOXELS_NPZ,
-        voxel_size=voxel_sizes,  # pass the voxel sizes for coarse-graining
-    )
-
-    logging.info("Creating visualization for volume-generated noise...")
-    generate_visualizations(
-        volume,
-        mask,
-        noise_volume,
-        SLICE_INDICES,
-        OUTPUT_FIGURE_VOLUME,
-        "(Volume Noise)",
-    )
-
-    logging.info("Creating visualization for volume-generated noise with voxels...")
-    generate_visualizations(
-        volume,
-        mask,
-        noise_volume_voxels,
-        SLICE_INDICES,
-        OUTPUT_FIGURE_VOLUME_VOXELS,
-        "(Volume Noise using Voxel Size)",
-    )
-
-    logging.info(
-        "Creating 3x4 comparison visualization of volume with and without voxels..."
-    )
-    rep_slice = SLICE_INDICES[2]
-    fig_comp = visualize_noise_comparison(
-        noise_volume, noise_volume_voxels, rep_slice, H=H
-    )
-    plt.savefig(OUTPUT_FIGURE_COMPARISON_VOXELS, bbox_inches="tight")
-    logging.info(
-        f"Saved 3x4 comparison visualization to {OUTPUT_FIGURE_COMPARISON_VOXELS}"
-    )
-
-    if GENERATE_PER_SLICE_NOISE:
-        logging.info("Generating per-slice noise...")
-        noise_slice = generate_slice_noise(
-            best_model, volume.shape, PER_SLICE_NOISE_NPZ
+        logging.info("Generating full-volume noise using voxel sizes...")
+        noise_volume_voxels = get_volume_noise(
+            model=best_model,
+            volume_shape=volume.shape,
+            npz_filepath=NOISE_VOLUME_VOXELS_NPZ,
+            voxel_size=voxel_sizes,  # pass the voxel sizes for coarse-graining
         )
-        logging.info("Creating visualization for per-slice generated noise...")
-        noise_array_2d = np.zeros_like(volume, dtype=np.float32)
-        for slice_idx in SLICE_INDICES:
-            noise_array_2d[:, :, slice_idx] = noise_slice[:, :, slice_idx, 0]
+
+        logging.info("Creating visualization for volume-generated noise...")
         generate_visualizations(
             volume,
             mask,
-            noise_array_2d,
+            noise_volume,
             SLICE_INDICES,
-            OUTPUT_FIGURE_SLICE,
-            "(Slice Noise)",
+            OUTPUT_FIGURE_VOLUME,
+            "(Volume Noise)",
         )
+
+        logging.info("Creating visualization for volume-generated noise with voxels...")
+        generate_visualizations(
+            volume,
+            mask,
+            noise_volume_voxels,
+            SLICE_INDICES,
+            OUTPUT_FIGURE_VOLUME_VOXELS,
+            "(Volume Noise using Voxel Size)",
+        )
+
         logging.info(
-            "Creating 3x4 comparison visualization of volume against slice-generated..."
+            "Creating 3x4 comparison visualization of volume with and without voxels..."
         )
         rep_slice = SLICE_INDICES[2]
-        fig_comp = visualize_noise_comparison(noise_volume, noise_slice, rep_slice, H=H)
-        plt.savefig(OUTPUT_FIGURE_COMPARISON, bbox_inches="tight")
+        fig_comp = visualize_noise_comparison(
+            noise_volume, noise_volume_voxels, rep_slice, H=H
+        )
+        plt.savefig(OUTPUT_FIGURE_COMPARISON_VOXELS, bbox_inches="tight")
         logging.info(
-            f"Saved 3x4 comparison visualization to {OUTPUT_FIGURE_COMPARISON}"
+            f"Saved 3x4 comparison visualization to {OUTPUT_FIGURE_COMPARISON_VOXELS}"
         )
 
-    total_time = time.time() - start_time
-    logging.info(f"Pipeline execution time: {total_time:.2f} seconds")
+        if GENERATE_PER_SLICE_NOISE:
+            logging.info("Generating per-slice noise...")
+            noise_slice = generate_slice_noise(
+                best_model, volume.shape, PER_SLICE_NOISE_NPZ
+            )
+            logging.info("Creating visualization for per-slice generated noise...")
+            noise_array_2d = np.zeros_like(volume, dtype=np.float32)
+            for slice_idx in SLICE_INDICES:
+                noise_array_2d[:, :, slice_idx] = noise_slice[:, :, slice_idx, 0]
+            generate_visualizations(
+                volume,
+                mask,
+                noise_array_2d,
+                SLICE_INDICES,
+                OUTPUT_FIGURE_SLICE,
+                "(Slice Noise)",
+            )
+            logging.info(
+                "Creating 3x4 comparison visualization of volume against slice-generated..."
+            )
+            rep_slice = SLICE_INDICES[2]
+            fig_comp = visualize_noise_comparison(
+                noise_volume, noise_slice, rep_slice, H=H
+            )
+            plt.savefig(OUTPUT_FIGURE_COMPARISON, bbox_inches="tight")
+            logging.info(
+                f"Saved 3x4 comparison visualization to {OUTPUT_FIGURE_COMPARISON}"
+            )
 
-    # --- Write run parameters and results to YAML ---
-    run_parameters = {
-        "patient": PATIENT,
-        "pulse": PULSE,
-        "seed": SEED,
-        "slice_indices": SLICE_INDICES,
-        "input_filepath": FILEPATH_NRRD,
-        "volume_shape_after_ignore": volume.shape,
-        "mask_shape_after_ignore": mask.shape,
-        "inside_mask": {"mean": float(inside_mean), "std": float(inside_std)},
-        "outside_mask": {"mean": float(outside_mean), "std": float(outside_std)},
-        "initial_variance_guess": float(var_guess),
-        "variogram": {
-            "bins": variogram_bins.tolist(),
-            "sampling_size": variogram_sampling_size,
-            "estimator": estimator,
-            "len_scale_guess": len_scale_guess,
-        },
-        "best_covariance_model": best_model_info["params"],  # type: ignore
-        "seeds": {"seed_real": seed_real, "seed_imag": seed_imag, "seed_3d": seed_3d},
-        "output_files": {
-            "noise_volume_npz": NOISE_VOLUME_NPZ,
-            "per_slice_noise_npz": PER_SLICE_NOISE_NPZ,
-            "volume_noise_figure": OUTPUT_FIGURE_VOLUME,
-            "slice_noise_figure": OUTPUT_FIGURE_SLICE,
-            "comparison_figure": OUTPUT_FIGURE_COMPARISON,
-            "rayleigh_comparison_figure": OUTPUT_FIGURE_RAYLEIGH,
-            "segmentation_npz": SEGMENTATION_NPZ,
-        },
-        "execution_time_sec": total_time,
-    }
+        total_time = time.time() - start_time
+        logging.info(f"Pipeline execution time: {total_time:.2f} seconds")
 
-    # Convert numpy types to native Python types
-    run_parameters["best_covariance_model"] = make_serializable(
-        run_parameters["best_covariance_model"]
-    )
+        # --- Write run parameters and results to YAML ---
+        run_parameters = {
+            "patient": PATIENT,
+            "pulse": PULSE,
+            "seed": SEED,
+            "slice_indices": SLICE_INDICES,
+            "input_filepath": FILEPATH_NRRD,
+            "volume_shape_after_ignore": volume.shape,
+            "mask_shape_after_ignore": mask.shape,
+            "inside_mask": {"mean": float(inside_mean), "std": float(inside_std)},
+            "outside_mask": {"mean": float(outside_mean), "std": float(outside_std)},
+            "initial_variance_guess": float(var_guess),
+            "variogram": {
+                "bins": variogram_bins.tolist(),
+                "sampling_size": variogram_sampling_size,
+                "estimator": estimator,
+                "len_scale_guess": len_scale_guess,
+            },
+            "best_covariance_model": best_model_info["params"],  # type: ignore
+            "seeds": {
+                "seed_real": seed_real,
+                "seed_imag": seed_imag,
+                "seed_3d": seed_3d,
+            },
+            "output_files": {
+                "noise_volume_npz": NOISE_VOLUME_NPZ,
+                "per_slice_noise_npz": PER_SLICE_NOISE_NPZ,
+                "volume_noise_figure": OUTPUT_FIGURE_VOLUME,
+                "slice_noise_figure": OUTPUT_FIGURE_SLICE,
+                "comparison_figure": OUTPUT_FIGURE_COMPARISON,
+                "rayleigh_comparison_figure": OUTPUT_FIGURE_RAYLEIGH,
+                "segmentation_npz": SEGMENTATION_NPZ,
+            },
+            "execution_time_sec": total_time,
+        }
 
-    with open(RUN_PARAMETERS_YAML, "w") as f:
-        yaml.dump(run_parameters, f)
-    logging.info(f"Saved run parameters to {RUN_PARAMETERS_YAML}")
+        # Convert numpy types to native Python types
+        run_parameters["best_covariance_model"] = make_serializable(
+            run_parameters["best_covariance_model"]
+        )
+
+        with open(RUN_PARAMETERS_YAML, "w") as f:
+            yaml.dump(run_parameters, f)
+        logging.info(f"Saved run parameters to {RUN_PARAMETERS_YAML}")
 
 
 if __name__ == "__main__":
