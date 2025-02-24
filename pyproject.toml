@@ -24,6 +24,7 @@ dependencies = [
   "gstools",
   "pyvista",
   "pyyaml",
+  "natsort"
 ]
 description = "A Python library that contains all the functions used to perform experiments on neuroimaging data and generate a Meningioma dataset."
 keywords = ["neuroimaging", "deep learning", "bioinformatics"]
