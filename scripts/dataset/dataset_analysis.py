@@ -17,17 +17,18 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import os
 
-from Meningioma.image_processing.nrrd_processing import open_nrrd
+from Meningioma.image_processing.nrrd_processing import open_nrrd  # type: ignore
 
 PULSE_LABELS = ["T1", "T1SIN", "T2", "SUSC"]
 
 import matplotlib.pyplot as plt
-import scienceplots
+import scienceplots  # type: ignore
 
 plt.style.use(["science", "ieee"])
 
 # Define the set of timepoint labels for volume plotting
 TIMEPOINT_LABELS = ["first_study", "c1", "c2", "c3", "c4", "c5"]
+
 
 def load_data(json_path: str) -> Dict[str, Any]:
     """
@@ -36,9 +37,10 @@ def load_data(json_path: str) -> Dict[str, Any]:
     :param json_path: The path to the meningioma JSON file.
     :return: A dictionary representing the entire meningioma dataset.
     """
-    with open(json_path, 'r', encoding='utf-8') as f:
+    with open(json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
     return data
+
 
 def parse_binary_label(value: Any) -> Optional[int]:
     """
@@ -53,6 +55,7 @@ def parse_binary_label(value: Any) -> Optional[int]:
     elif value in [0, 0.0, "0", "0.0"]:
         return 0
     return None
+
 
 def analyze_patient_metadata(data: Dict[str, Any], output_dir: Path) -> None:
     """
@@ -84,7 +87,7 @@ def analyze_patient_metadata(data: Dict[str, Any], output_dir: Path) -> None:
                 ages.append(float(age_str))
             except ValueError:
                 pass
-        
+
         # Collect sex as a raw string
         if sex_str is not None:
             sexes.append(str(sex_str))
@@ -99,7 +102,7 @@ def analyze_patient_metadata(data: Dict[str, Any], output_dir: Path) -> None:
 
     # Write a text summary
     summary_file = output_dir / "patient_metadata_summary.txt"
-    with summary_file.open('w', encoding='utf-8') as f:
+    with summary_file.open("w", encoding="utf-8") as f:
         f.write("=== Patient Metadata Summary ===\n")
         f.write(f"Number of patients: {len(data)}\n")
         f.write(f"Average age: {avg_age}\n")
@@ -109,8 +112,10 @@ def analyze_patient_metadata(data: Dict[str, Any], output_dir: Path) -> None:
 
     # Plot a simple histogram of ages if we have any
     if ages:
-        plt.figure(figsize=(6,4))
-        plt.hist(ages, bins=range(int(min_age), int(max_age)+2, 2), alpha=0.7, color='blue')
+        plt.figure(figsize=(6, 4))
+        plt.hist(
+            ages, bins=range(int(min_age), int(max_age) + 2, 2), alpha=0.7, color="blue"
+        )
         plt.title("Age Distribution")
         plt.xlabel("Age")
         plt.ylabel("Count")
@@ -156,7 +161,6 @@ def analyze_patient_metadata(data: Dict[str, Any], output_dir: Path) -> None:
         else:
             color = "grey"
             alpha = 0.3
-        
 
         # Collect volumes from each timepoint
         volumes_for_patient = []
@@ -200,8 +204,8 @@ def analyze_patient_metadata(data: Dict[str, Any], output_dir: Path) -> None:
 
     # --- (B) Middle subplot: confusion matrix ---
     im = axs[1].imshow(conf_matrix, cmap="Blues", origin="upper")
-    axs[1].set_xticks([0,1])
-    axs[1].set_yticks([0,1])
+    axs[1].set_xticks([0, 1])
+    axs[1].set_yticks([0, 1])
     axs[1].set_xticklabels(["growth=0", "growth=1"])
     axs[1].set_yticklabels(["calcif=0", "calcif=1"])
     axs[1].set_xlabel("Groundtruth/Growth")
@@ -211,8 +215,15 @@ def analyze_patient_metadata(data: Dict[str, Any], output_dir: Path) -> None:
     # numeric annotations
     for i in range(2):
         for j in range(2):
-            axs[1].text(j, i, conf_matrix[i, j],
-                        ha="center", va="center", color="black", fontsize=12)
+            axs[1].text(
+                j,
+                i,
+                conf_matrix[i, j],
+                ha="center",
+                va="center",
+                color="black",
+                fontsize=12,
+            )
 
     fig.colorbar(im, ax=axs[1], fraction=0.046, pad=0.04)
 
@@ -225,17 +236,25 @@ def analyze_patient_metadata(data: Dict[str, Any], output_dir: Path) -> None:
     axs[2].set_title("Tumor Volume Over Time")
 
     for volumes_for_patient, color, alpha in volume_lines:
-        axs[2].plot(x_indices, volumes_for_patient, marker='o', color=color, alpha=alpha, linestyle=":")
+        axs[2].plot(
+            x_indices,
+            volumes_for_patient,
+            marker="o",
+            color=color,
+            alpha=alpha,
+            linestyle=":",
+        )
 
     # Add a custom legend to show color meaning
     # We can create invisible lines for the legend
     from matplotlib.lines import Line2D
+
     legend_elements = [
-        Line2D([0], [0], color='red', lw=2, label='growth=1'),
-        Line2D([0], [0], color='blue', lw=2, label='growth=0'),
-        Line2D([0], [0], color='grey', lw=2, alpha=0.3, label='growth=NaN'),
+        Line2D([0], [0], color="red", lw=2, label="growth=1"),
+        Line2D([0], [0], color="blue", lw=2, label="growth=0"),
+        Line2D([0], [0], color="grey", lw=2, alpha=0.3, label="growth=NaN"),
     ]
-    axs[2].legend(handles=legend_elements, loc='upper right')
+    axs[2].legend(handles=legend_elements, loc="upper right")
 
     fig.tight_layout()
     fig.savefig(output_dir / "metadata_1x3_plots.png", dpi=150)
@@ -288,14 +307,14 @@ def analyze_per_pulse_volumes(data: Dict[str, Any], output_dir: Path) -> None:
 
     # Write summary to a text file
     summary_file = output_dir / "per_pulse_volume_summary.txt"
-    with summary_file.open('w', encoding='utf-8') as f:
+    with summary_file.open("w", encoding="utf-8") as f:
         f.write("=== Per-Pulse Volume Analysis ===\n")
         for line in summary_lines:
             f.write(line + "\n")
 
     # Optionally, we can plot sorted min and max intensities
     if min_values and max_values:
-        plt.figure(figsize=(6,4))
+        plt.figure(figsize=(6, 4))
         plt.plot(sorted(min_values), label="Min Intensities")
         plt.plot(sorted(max_values), label="Max Intensities")
         plt.title("Sorted Min/Max Intensities Across All Pulses")
@@ -305,17 +324,16 @@ def analyze_per_pulse_volumes(data: Dict[str, Any], output_dir: Path) -> None:
         plt.savefig(output_dir / "min_max_intensity_plot.png", dpi=150)
         plt.close()
 
+
 def analyze_per_pulse_segmentation(
-    data: Dict[str, Any],
-    output_dir: Path,
-    data_file_path: Optional[Path] = None
+    data: Dict[str, Any], output_dir: Path, data_file_path: Optional[Path] = None
 ) -> None:
     """
     Analyzes per-pulse segmentation volumes across patients, plus a 1x3 subplot:
-      1) Bar chart (horizontal) showing total patients vs. non-empty segmentation 
+      1) Bar chart (horizontal) showing total patients vs. non-empty segmentation
          for each pulse.
       2) Boxplot of mask volume (# of voxels in segmentation) for each pulse.
-      3) Boxplot of the volume intensities (from the underlying volume) in 
+      3) Boxplot of the volume intensities (from the underlying volume) in
          the masked region, for each pulse.
 
     This function also supports saving/loading intermediate data to/from a JSON file:
@@ -336,9 +354,9 @@ def analyze_per_pulse_segmentation(
         # ------------------------------
         # 1) Load data from JSON
         # ------------------------------
-        with open(data_file_path, 'r', encoding='utf-8') as f:
+        with open(data_file_path, "r", encoding="utf-8") as f:
             stored = json.load(f)
-        
+
         seg_volumes = stored["seg_volumes"]
         total_count = stored["total_count"]
         non_empty_seg_count = stored["non_empty_seg_count"]
@@ -403,7 +421,7 @@ def analyze_per_pulse_segmentation(
                 non_empty_seg_count[pulse] += 1
 
                 max_val = np.max(unique_vals)
-                mask = (seg_data == max_val)
+                mask = seg_data == max_val
                 voxel_count = np.count_nonzero(mask)
                 mask_volumes[pulse].append(voxel_count)
 
@@ -417,7 +435,9 @@ def analyze_per_pulse_segmentation(
                     continue
                 # (Optional) check for shape mismatch
                 if seg_data.shape != vol_data.shape:
-                    print(f"Warning: shape mismatch for patient {patient_id}, pulse {pulse}")
+                    print(
+                        f"Warning: shape mismatch for patient {patient_id}, pulse {pulse}"
+                    )
                     continue
 
                 region_intensity = vol_data[mask]
@@ -430,9 +450,9 @@ def analyze_per_pulse_segmentation(
                 "total_count": total_count,
                 "non_empty_seg_count": non_empty_seg_count,
                 "mask_volumes": mask_volumes,
-                "mask_intensities": mask_intensities
+                "mask_intensities": mask_intensities,
             }
-            with open(data_file_path, 'w', encoding='utf-8') as f:
+            with open(data_file_path, "w", encoding="utf-8") as f:
                 json.dump(to_store, f, indent=2)
 
     # -----------------------------------------
@@ -447,7 +467,7 @@ def analyze_per_pulse_segmentation(
         mean_vol = median_vol = min_vol = max_vol = 0.0
 
     summary_file = output_dir / "segmentation_summary.txt"
-    with summary_file.open('w', encoding='utf-8') as f:
+    with summary_file.open("w", encoding="utf-8") as f:
         f.write("=== Per-Pulse Segmentation Analysis ===\n")
         f.write(f"Count of segmentations: {len(seg_volumes)}\n")
         f.write(f"Mean segmentation volume: {mean_vol}\n")
@@ -467,18 +487,18 @@ def analyze_per_pulse_segmentation(
 
     bar_height = 0.4
     axs[0].barh(
-        y_positions - bar_height/2,
+        y_positions - bar_height / 2,
         total_vals,
         bar_height,
-        color='lightblue',
-        label="Total Patients"
+        color="lightblue",
+        label="Total Patients",
     )
     axs[0].barh(
-        y_positions + bar_height/2,
+        y_positions + bar_height / 2,
         seg_vals,
         bar_height,
-        color='salmon',
-        label="Non-empty Seg"
+        color="salmon",
+        label="Non-empty Seg",
     )
     axs[0].set_yticks(y_positions)
     axs[0].set_yticklabels(PULSE_LABELS)
@@ -487,7 +507,9 @@ def analyze_per_pulse_segmentation(
     axs[0].legend()
 
     # B) subplot 1: horizontal boxplot of mask volumes
-    box_data_vol = [mask_volumes[p] if len(mask_volumes[p]) > 0 else [0] for p in PULSE_LABELS]
+    box_data_vol = [
+        mask_volumes[p] if len(mask_volumes[p]) > 0 else [0] for p in PULSE_LABELS
+    ]
     axs[1].boxplot(box_data_vol, vert=False, labels=PULSE_LABELS)
     axs[1].set_xlabel("Mask Volume (voxel count)")
     axs[1].set_title("Distribution of Mask Volume")
@@ -513,9 +535,7 @@ def analyze_per_pulse_segmentation(
             yticks = ax.get_yticks()
             ax.set_yticks(yticks - 0.6)
             ax.set_yticklabels([])
-        ax.invert_yaxis()  
-        
-        
+        ax.invert_yaxis()
 
     fig.tight_layout()
     save_path = output_dir / "segmentation_1x3_summary.png"
@@ -529,8 +549,10 @@ def main() -> None:
     """
 
     # Default paths (as requested)
-    json_path = "/home/mario/Python/Results/Meningioma/preprocessing/plan_meningioma.json"
-    output_dir = "/home/mario/Python/Results/Meningioma/preprocessing"
+    json_path = (
+        "/home/mariopasc/Python/Results/Meningioma/preprocessing/plan_meningioma.json"
+    )
+    output_dir = "/home/mariopasc/Python/Results/Meningioma/preprocessing"
 
     # 1. Load data as a dictionary
     meningioma_data: Dict[str, Any] = load_data(json_path)
@@ -544,11 +566,16 @@ def main() -> None:
     # 3. Run analyses
     analyze_patient_metadata(meningioma_data, metadata_dir)
     analyze_per_pulse_volumes(meningioma_data, volume_dir)
-    analyze_per_pulse_segmentation(data=meningioma_data, 
-                                   output_dir=segmentation_dir, 
-                                   data_file_path=Path(os.path.join(segmentation_dir, "segmentation_3x1_data.json")))
+    analyze_per_pulse_segmentation(
+        data=meningioma_data,
+        output_dir=segmentation_dir,
+        data_file_path=Path(
+            os.path.join(segmentation_dir, "segmentation_3x1_data.json")
+        ),
+    )
 
     print(f"Analysis complete. Results available in {output_base.absolute()}")
+
 
 if __name__ == "__main__":
     main()

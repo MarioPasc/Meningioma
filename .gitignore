@@ -168,3 +168,6 @@ saved_data/
 *.npz
 .flake8
 .vscode/
+*.nrrd
+*.nii.gz
+*.nii

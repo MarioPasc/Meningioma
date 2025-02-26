@@ -20,8 +20,8 @@ from Meningioma.utils.parse_nrrd_header import numpy_converter
 
 
 # Define dataset root, output folder, and metadata CSV file.
-ROOT = "/home/mario/Python/Datasets/Meningiomas/Meningioma_Adquisition"
-OUTPUT_FOLDER = "/home/mario/Python/Results/Meningioma/preprocessing"
+ROOT = "/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_Adquisition"
+OUTPUT_FOLDER = "/home/mariopasc/Python/Results/Meningioma/preprocessing"
 
 
 # Create a logger
@@ -99,10 +99,10 @@ def process_patient(pulse, patient_dir, output_folder, preprocessing_steps):
         header = {}
         volume_info = {
             "route": volume_path,
-            "dtype": np.NaN,
-            "min": np.NaN,
-            "max": np.NaN,
-            "transversal_axis": np.NaN,
+            "dtype": np.nan,
+            "min": np.nan,
+            "max": np.nan,
+            "transversal_axis": np.nan,
         }
 
     # Process segmentation: if file does not exist, mark as control for this pulse.
