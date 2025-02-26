@@ -348,6 +348,7 @@ def analyze_per_pulse_segmentation(
         the intermediate data. (Default: None)
     """
     output_dir.mkdir(parents=True, exist_ok=True)
+    seg_volumes: List[float] = []
 
     # Will we load from a JSON file, or compute now?
     if data_file_path and data_file_path.is_file():
@@ -367,7 +368,6 @@ def analyze_per_pulse_segmentation(
         # ------------------------------
         # 1) Compute data from NRRDs
         # ------------------------------
-        seg_volumes: List[float] = []
         # For the bar chart
         total_count = {pulse: 0 for pulse in PULSE_LABELS}
         non_empty_seg_count = {pulse: 0 for pulse in PULSE_LABELS}
