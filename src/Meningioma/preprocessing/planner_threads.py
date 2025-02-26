@@ -24,8 +24,8 @@ tqdm.set_lock(pbar_lock)
 
 
 # Define dataset root, output folder, and metadata CSV file.
-ROOT = "/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_Adquisition/RM"
-OUTPUT_FOLDER = "/home/mariopasc/Python/Results/Meningioma/preprocessing"
+ROOT = "/home/mario/Python/Datasets/Meningiomas/Meningioma_Adquisition"
+OUTPUT_FOLDER = "/home/mario/Python/Results/Meningioma/preprocessing"
 
 
 # Create a logger
@@ -33,11 +33,10 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 # Ensure log directory exists
-output_folder = "/home/mariopasc/Python/Results/Meningioma/preprocessing"
-os.makedirs(output_folder, exist_ok=True)
+os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
 # Define log file path
-log_file = os.path.join(output_folder, "preprocessing.log")
+log_file = os.path.join(OUTPUT_FOLDER, "preprocessing.log")
 
 # Avoid duplicate handlers
 if not logger.hasHandlers():
@@ -192,8 +191,7 @@ def main():
         logger.error("Number of threads must be between 1 and 4.")
         return
 
-    xlsx_path = "/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_Adquisition/metadata.xlsx"
-
+    xlsx_path = os.path.join(ROOT, "metadata.xlsx")
     csv_path = os.path.join(OUTPUT_FOLDER, "metadata_recodified.csv")
     # 1. Apply the hardcoded codification
     apply_hardcoded_codification(
@@ -220,37 +218,36 @@ def main():
 
     # Prepare tasks for pulses that exist.
     tasks = []
-    with tqdm(total=threads) as pbar:
-        with ProcessPoolExecutor(max_workers=threads) as executor:
-            for pulse in pulses:
-                pulse_folder = os.path.join(dataset_folder, pulse)
-                if not os.path.exists(pulse_folder):
-                    logger.warning(
-                        f"Warning: Pulse folder '{pulse_folder}' does not exist. Skipping pulse {pulse}."
-                    )
-                    continue
-                # Submit one task per pulse folder.
-                tasks.append(
-                    executor.submit(
-                        process_pulse,
-                        pulse,
-                        pulse_folder,
-                        output_folder,
-                        preprocessing_steps,
-                    )
+    with ProcessPoolExecutor(max_workers=threads) as executor:
+        for pulse in pulses:
+            pulse_folder = os.path.join(dataset_folder, pulse)
+            if not os.path.exists(pulse_folder):
+                logger.warning(
+                    f"Warning: Pulse folder '{pulse_folder}' does not exist. Skipping pulse {pulse}."
                 )
+                continue
+            # Submit one task per pulse folder.
+            tasks.append(
+                executor.submit(
+                    process_pulse,
+                    pulse,
+                    pulse_folder,
+                    OUTPUT_FOLDER,
+                    preprocessing_steps,
+                )
+            )
 
-            # Collect results as they complete.
-            for future in as_completed(tasks):
-                try:
-                    pulse, pulse_data = future.result()
-                    # Merge pulse_data into the global patients dictionary.
-                    for patient_id, pulse_entry in pulse_data.items():
-                        if patient_id not in patients:
-                            patients[patient_id] = {"pulses": {}}
-                        patients[patient_id]["pulses"][pulse] = pulse_entry
-                except Exception as e:
-                    logger.error(f"Error processing a pulse: {e}")
+        # Collect results as they complete.
+        for future in as_completed(tasks):
+            try:
+                pulse, pulse_data = future.result()
+                # Merge pulse_data into the global patients dictionary.
+                for patient_id, pulse_entry in pulse_data.items():
+                    if patient_id not in patients:
+                        patients[patient_id] = {"pulses": {}}
+                    patients[patient_id]["pulses"][pulse] = pulse_entry
+            except Exception as e:
+                logger.error(f"Error processing a pulse: {e}")
 
     # Compute patient-level "control": if all available pulses lack segmentation (total_volume is None), then control = True.
     for patient_id, patient_data in patients.items():
@@ -264,7 +261,7 @@ def main():
         # Add metadata for the patient (if available).
         patient_data["metadata"] = metadata_dict.get(patient_id, {})
 
-    output_json = os.path.join(output_folder, "plan_meningioma.json")
+    output_json = os.path.join(OUTPUT_FOLDER, "plan_meningioma.json")
     with open(output_json, "w") as outfile:
         json.dump(patients, outfile, indent=2, default=numpy_converter)
     logger.info(f"Preprocessing plan JSON saved to '{output_json}'.")

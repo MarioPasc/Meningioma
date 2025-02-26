@@ -13,15 +13,40 @@ from Meningioma.preprocessing.metadata import (
     apply_hardcoded_codification,
 )
 
-# --------------------------------------------------------------------------------
-# Logging configuration
-# --------------------------------------------------------------------------------
+# Define dataset root, output folder, and metadata CSV file.
+ROOT = "/home/mario/Python/Datasets/Meningiomas/Meningioma_Adquisition/RM"
+OUTPUT_FOLDER = "/home/mario/Python/Results/Meningioma/preprocessing"
+
+
+# Create a logger
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
-console_handler = logging.StreamHandler(sys.stdout)
-formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(name)s - %(message)s")
-console_handler.setFormatter(formatter)
-logger.addHandler(console_handler)
+
+# Ensure log directory exists
+os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+
+# Define log file path
+log_file = os.path.join(OUTPUT_FOLDER, "preprocessing.log")
+
+# Avoid duplicate handlers
+if not logger.hasHandlers():
+    file_handler = logging.FileHandler(log_file)
+    formatter = logging.Formatter(
+        "%(asctime)s - %(levelname)s - %(name)s - %(message)s"
+    )
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+
+# Redirect uncaught exceptions to logger
+def log_exceptions(exc_type, exc_value, exc_traceback):
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+        return
+    logger.error("Uncaught Exception", exc_info=(exc_type, exc_value, exc_traceback))
+
+
+sys.excepthook = log_exceptions
 
 
 def numpy_converter(o):
@@ -117,16 +142,9 @@ def process_patient(pulse, patient_dir, output_folder, preprocessing_steps):
 
 
 def main():
-    # Define dataset root, output folder, and metadata CSV file.
-    root = "/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_Adquisition/RM"
-    output_folder = "/home/mariopasc/Python/Results/Meningioma/preprocessing"
+    xlsx_path = os.path.join(ROOT, "/metadata.xlsx")
 
-    xlsx_path = "/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_Adquisition/metadata.xlsx"
-    output_folder = (
-        "/home/mariopasc/Python/Datasets/Meningiomas/preprocessing/metadata/"
-    )
-
-    csv_path = os.path.join(output_folder, "metadata_recodified.csv")
+    csv_path = os.path.join(OUTPUT_FOLDER, "metadata_recodified.csv")
     # 1. Apply the hardcoded codification
     apply_hardcoded_codification(
         xlsx_path=xlsx_path,
@@ -148,8 +166,8 @@ def main():
     pulses = ["T1", "T1SIN", "T2", "SUSC"]
 
     # Use the "RM" subfolder if it exists.
-    rm_folder = os.path.join(root, "RM")
-    dataset_folder = rm_folder if os.path.exists(rm_folder) else root
+    rm_folder = os.path.join(ROOT, "RM")
+    dataset_folder = rm_folder if os.path.exists(rm_folder) else ROOT
 
     # Iterate over each pulse folder.
     for pulse in pulses:
@@ -166,7 +184,7 @@ def main():
             patient_path = os.path.join(pulse_folder, patient)
             if os.path.isdir(patient_path) and patient.startswith("P"):
                 entry = process_patient(
-                    pulse, patient_path, output_folder, preprocessing_steps
+                    pulse, patient_path, OUTPUT_FOLDER, preprocessing_steps
                 )
                 if entry is not None:
                     # Group by patient: add the pulse entry under patients[patient]["pulses"]
@@ -186,7 +204,7 @@ def main():
         # Add metadata for the patient (if available).
         patient_data["metadata"] = metadata_dict.get(patient_id, {})
 
-    output_json = os.path.join(output_folder, "plan_meningioma.json")
+    output_json = os.path.join(OUTPUT_FOLDER, "plan_meningioma.json")
     with open(output_json, "w") as outfile:
         json.dump(patients, outfile, indent=2, default=numpy_converter)
     logger.info(f"Preprocessing plan JSON saved to '{output_json}'.")
