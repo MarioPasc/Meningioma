@@ -3,7 +3,7 @@ from numpy.typing import NDArray
 from typing import List
 from typing_extensions import LiteralString
 from Meningioma.image_processing import ImageProcessing  # type: ignore
-from Meningioma.utils import Stats, npz_converter  # type: ignore
+from Meningioma.utils import Stats, nrrd_to_npz  # type: ignore
 import os
 import matplotlib.pyplot as plt
 import scienceplots  # type: ignore
@@ -67,7 +67,7 @@ def run_pipeline_for_w_z(
     """
     try:
         # Load MRI slice
-        slice_data = npz_converter.load_mri_slice(
+        slice_data = nrrd_to_npz.load_mri_slice(
             filepath=filepath, slice_index=slice_index
         )
 
@@ -158,7 +158,7 @@ if __name__ == "__main__":
     thresholding_method: str = "mean_filter"
 
     # Convert data to NPZ format
-    npz_converter.convert_to_npz(
+    nrrd_to_npz.convert_to_npz(
         base_path=base_path, output_path=output_npz_path, patient=patient, pulse=pulse
     )
 

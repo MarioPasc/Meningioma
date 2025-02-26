@@ -6,7 +6,7 @@ import os
 
 import numpy as np
 from Meningioma.image_processing import ImageProcessing  # type: ignore
-from Meningioma.utils import npz_converter  # type: ignore
+from Meningioma.utils import nrrd_to_npz  # type: ignore
 from skimage.draw import rectangle
 from matplotlib.patches import Rectangle
 
@@ -309,14 +309,14 @@ def pipeline_one_patient(
 ) -> None:
     # Load the MRI slice
     try:
-        npz_converter.convert_to_npz(
+        nrrd_to_npz.convert_to_npz(
             base_path=base_path,
             output_path=output_npz_path,
             patient=patient,
             pulse=pulse,
         )
         filepath = os.path.join(output_npz_path, patient, f"{patient}_{pulse}.npz")
-        slice_data = npz_converter.load_mri_slice(
+        slice_data = nrrd_to_npz.load_mri_slice(
             filepath=filepath, slice_index=slice_index
         )
 

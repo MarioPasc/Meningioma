@@ -9,7 +9,7 @@ import gstools as gs
 from gstools.covmodel.plot import plot_variogram  # type : ignore
 
 from Meningioma.image_processing import ImageProcessing  # type: ignore
-from Meningioma.utils import Stats, npz_converter  # type: ignore
+from Meningioma.utils import Stats, nrrd_to_npz  # type: ignore
 
 import matplotlib.pyplot as plt
 from cycler import cycler
@@ -342,6 +342,7 @@ def generate_random_fields(
     # Combine into magnitude
     new_data = np.sqrt(new_data_real**2 + new_data_imag**2)
     return new_data_real, new_data_imag, new_data
+
 
 def main():
     # Example Input Paths and Parameters

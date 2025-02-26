@@ -5,7 +5,7 @@ import numpy as np
 import cv2
 import os
 from Meningioma.image_processing import ImageProcessing
-from Meningioma.utils import npz_converter
+from Meningioma.utils import nrrd_to_npz
 
 
 def process_whole_study(filepath: str, pulse: str):
@@ -171,7 +171,9 @@ def process_and_save_study(filepath: str, output_path: str, patient: str, pulse:
 # Example Input Paths
 base_path = "/home/mario/Python/Datasets/Meningiomas/Meningioma_Adquisition"
 output_npz_path = "/home/mario/Python/Datasets/Meningiomas/npz"
-output_path = "/home/mario/Python/Datasets/Meningiomas/ConvexHull"  # Directory to store images
+output_path = (
+    "/home/mario/Python/Datasets/Meningiomas/ConvexHull"  # Directory to store images
+)
 patient = "P50"
 
 pulses = ["T1SIN", "T2", "SUSC", "T1"]
@@ -186,7 +188,7 @@ os.makedirs(output_path, exist_ok=True)
 
 for pulse in pulses:
     try:
-        npz_converter.convert_to_npz(
+        nrrd_to_npz.convert_to_npz(
             base_path=base_path,
             output_path=output_npz_path,
             patient=patient,

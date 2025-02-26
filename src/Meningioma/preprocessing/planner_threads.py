@@ -8,17 +8,13 @@ import argparse
 from tqdm import tqdm  # type: ignore
 from natsort import natsorted
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from multiprocessing import Lock
 
 from Meningioma.image_processing.nrrd_processing import open_nrrd, transversal_axis
 from Meningioma.preprocessing.metadata import (
     create_json_from_csv,
     apply_hardcoded_codification,
 )
-
-# Set up a global lock for tqdm
-pbar_lock = Lock()
-tqdm.set_lock(pbar_lock)
+from Meningioma.utils.parse_nrrd_header import numpy_converter
 
 # User-defined variables
 
@@ -57,17 +53,6 @@ def log_exceptions(exc_type, exc_value, exc_traceback):
 
 
 sys.excepthook = log_exceptions
-
-
-def numpy_converter(o):
-    """Convert NumPy objects into JSON-serializable objects."""
-    if isinstance(o, np.ndarray):
-        return o.tolist()
-    if isinstance(o, (np.int64, np.int32)):
-        return int(o)
-    if isinstance(o, (np.float64, np.float32)):
-        return float(o)
-    return str(o)
 
 
 def process_patient(pulse, patient_dir, output_folder, preprocessing_steps):

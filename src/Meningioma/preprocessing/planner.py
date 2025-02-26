@@ -12,6 +12,7 @@ from Meningioma.preprocessing.metadata import (
     create_json_from_csv,
     apply_hardcoded_codification,
 )
+from Meningioma.utils.parse_nrrd_header import numpy_converter
 
 # Define dataset root, output folder, and metadata CSV file.
 ROOT = "/home/mario/Python/Datasets/Meningiomas/Meningioma_Adquisition/RM"
@@ -47,17 +48,6 @@ def log_exceptions(exc_type, exc_value, exc_traceback):
 
 
 sys.excepthook = log_exceptions
-
-
-def numpy_converter(o):
-    """Convert NumPy objects into JSON-serializable objects."""
-    if isinstance(o, np.ndarray):
-        return o.tolist()
-    if isinstance(o, (np.int64, np.int32)):
-        return int(o)
-    if isinstance(o, (np.float64, np.float32)):
-        return float(o)
-    return str(o)
 
 
 def process_patient(pulse, patient_dir, output_folder, preprocessing_steps):

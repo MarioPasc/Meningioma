@@ -7,7 +7,7 @@ from sklearn.cluster import DBSCAN  # type: ignore
 from scipy.stats import gaussian_kde  # type: ignore
 
 from Meningioma.image_processing import ImageProcessing  # type: ignore
-from Meningioma.utils import Stats, npz_converter  # type: ignore
+from Meningioma.utils import Stats, nrrd_to_npz  # type: ignore
 
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
@@ -413,9 +413,7 @@ if __name__ == "__main__":
     filepath = os.path.join(output_npz_path, patient, f"{patient}_{pulse}.npz")
 
     # 3. Load MRI Slice
-    slice_data = npz_converter.load_mri_slice(
-        filepath=filepath, slice_index=slice_index
-    )
+    slice_data = nrrd_to_npz.load_mri_slice(filepath=filepath, slice_index=slice_index)
 
     # 4. Compute Mutual Information Map
     binarized_image, _ = ImageProcessing.local_histogram_segmentation(
