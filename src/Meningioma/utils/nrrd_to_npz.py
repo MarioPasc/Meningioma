@@ -2,11 +2,8 @@ import os
 import nrrd  # type: ignore
 import numpy as np
 from numpy.typing import NDArray
-from typing import List, Tuple
+from typing import Tuple
 from Meningioma.image_processing.nrrd_processing import transversal_axis
-
-# Global variable for pulse types
-PULSE_TYPES: List[str] = ["SUSC", "T1", "T2", "T1SIN"]
 
 
 def reorder_to_transversal(
