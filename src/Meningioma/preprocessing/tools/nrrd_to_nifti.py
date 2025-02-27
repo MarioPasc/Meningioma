@@ -68,7 +68,9 @@ def _space2ras(space):
     return np.diag(flips)
 
 
-def nifti_write_3d(in_img, prefix=None, verbose: bool = False) -> str:
+def nifti_write_3d(
+    volume_path_nrrd: str, out_file: str = "default", verbose: bool = False
+) -> str:
     """
     Convert a 3D NRRD image to NIfTI, preserving as much metadata as possible:
       - space directions (voxel spacing & orientation)
@@ -76,17 +78,13 @@ def nifti_write_3d(in_img, prefix=None, verbose: bool = False) -> str:
       - flips to RAS if the NRRD space is recognized
       - stores the entire NRRD header in a NIfTI extension
 
-    :param in_img: path to input NRRD
+    :param volume: path to input NRRD
     :param prefix: output file prefix (if None, uses input filename stem)
 
     :return path to output niigz
     """
-    if prefix:
-        prefix = os.path.abspath(prefix)
-    else:
-        prefix = os.path.abspath(in_img).rsplit(".", 1)[0]
 
-    data, hdr = nrrd.read(in_img)
+    data, hdr = nrrd.read(volume_path_nrrd)
     if "dimension" not in hdr or hdr["dimension"] != 3:
         raise ValueError("This script only supports 3D NRRD data.")
 
@@ -131,7 +129,9 @@ def nifti_write_3d(in_img, prefix=None, verbose: bool = False) -> str:
     hdr_nifti.set_xyzt_units(xyz=2, t=0)
     hdr_nifti["qform_code"] = 2
     hdr_nifti["sform_code"] = 2
-    hdr_nifti["descrip"] = "Converted from NRRD by nrrd_to_nifti_3d.py"
+    hdr_nifti["descrip"] = (
+        "Original code from pnlbwh, Modified by Mario Pascual Gonzalez, NRRD to NIFTI converter for sMRI"
+    )
 
     # Optionally store the entire NRRD header as a JSON extension
     # so that we preserve that metadata if needed later.
@@ -143,7 +143,8 @@ def nifti_write_3d(in_img, prefix=None, verbose: bool = False) -> str:
     hdr_nifti.extensions.append(extension)
 
     # Finally save the .nii.gz
-    out_file = prefix + ".nii.gz"
+    if not out_file.endswith("nii.gz"):
+        out_file = out_file + ".nii.gz"
     nib.save(img_nifti, out_file)
     if verbose:
         print(f"Saved 3D NIfTI to: {out_file}")

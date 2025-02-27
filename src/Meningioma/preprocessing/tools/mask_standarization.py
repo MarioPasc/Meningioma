@@ -1,111 +1,74 @@
+#!/usr/bin/env python3
 """
-This module provides utility functions for reading and processing 3D volumes 
-in NRRD format using SimpleITK, including:
-- Removing the first channel (or any specified channel) from multi-component volumes
-- Ensuring a segmentation NRRD has the same geometry/dimensions as a reference volume
+match_geometry.py
+Ensures a mask has the same geometry (size, spacing, origin, direction)
+as the given volume. Returns both as sitk.Images.
 """
 
-import SimpleITK as sitk
-import numpy as np
 from typing import Tuple, Optional
-
-
-def remove_first_channel(volume_path: str, channel: int = 0) -> np.ndarray:
-    """
-    Load a multi-channel (vector) NRRD volume and extract a single channel
-    as a scalar image, returning it as a NumPy array.
-
-    Args:
-        volume_path (str):
-            Path to the NRRD volume file.
-        channel (int, optional):
-            Which channel index to extract. Defaults to 0 (i.e., the first channel).
-
-    Returns:
-        np.ndarray:
-            A 3D NumPy array (shape = [Z, Y, X]) representing the specified channel
-            of the volume in float32 format.
-
-    Example:
-        >>> channel0_array = remove_first_channel("my_vector_volume.nrrd", channel=0)
-        >>> channel1_array = remove_first_channel("my_vector_volume.nrrd", channel=1)
-    """
-    # Read the NRRD as a SimpleITK image
-    img = sitk.ReadImage(volume_path)
-
-    # Extract the specified channel
-    scalar_img = sitk.VectorIndexSelectionCast(img, channel, sitk.sitkFloat32)
-
-    # Convert to NumPy array (shape [Z, Y, X])
-    array_3d = sitk.GetArrayFromImage(scalar_img)
-
-    # Transpose accordingly to return [X, Y, Z]:
-
-    array_3d = array_3d.transpose(1, 2, 0)
-
-    return array_3d
+import SimpleITK as sitk
 
 
 def match_mask_and_volume_dimensions(
-    volume_path: str,
-    seg_path: str,
-    out_seg_path: Optional[str] = "./output_segmentation.nrrd",
-) -> Tuple[np.ndarray, np.ndarray]:
+    volume_img: sitk.Image, mask_img: sitk.Image
+) -> Tuple[sitk.Image, sitk.Image]:
     """
-    Read a volume NRRD and a segmentation NRRD, ensuring they match in geometry
-    (dimensions, spacing, origin, direction). If mismatched, resample the segmentation
-    to align with the volume. Returns both as NumPy arrays.
+    Ensures that a mask has the same geometry (size, spacing, origin, direction)
+    as a given volume. If they differ, the mask is resampled onto the volume's grid.
 
     Args:
-        volume_path (str):
-            Path to the .nrrd volume file.
-        seg_path (str):
-            Path to the .nrrd segmentation file.
-        out_seg_path (Optional[str], optional):
-            If provided, writes the (potentially resampled) segmentation
-            to this path. Defaults to "./output_segmentation.nrrd".
+        volume_img (sitk.Image):
+            The reference volume (SimpleITK Image).
+        mask_img (sitk.Image):
+            The mask (SimpleITK Image) that may need resampling.
 
     Returns:
-        Tuple[np.ndarray, np.ndarray]:
-            (volume_array, seg_array)
-            Each is a 3D NumPy array with shape [Z, Y, X].
-            The segmentation is guaranteed to match the volume geometry.
-
-    Example:
-        >>> volume_array, seg_array = match_mask_and_volume_dimensions(
-        ...     "T2_P2.nrrd",
-        ...     "T2_P2_seg.nrrd",
-        ...     out_seg_path="T2_P2_seg_matched.nrrd"
-        ... )
+        Tuple[sitk.Image, sitk.Image]:
+            (volume_out, mask_out), where:
+              - volume_out is the original volume_img (unchanged)
+              - mask_out is either the original mask_img (if geometry matched)
+                or a resampled version on the volume grid.
     """
-    # Read both as SimpleITK images (preserves all geometric metadata)
-    volume_img = sitk.ReadImage(volume_path)
-    seg_img = sitk.ReadImage(seg_path)
-
     # Check if size, origin, spacing, and direction match
-    same_size = volume_img.GetSize() == seg_img.GetSize()
-    same_spacing = volume_img.GetSpacing() == seg_img.GetSpacing()
-    same_origin = volume_img.GetOrigin() == seg_img.GetOrigin()
-    same_direction = volume_img.GetDirection() == seg_img.GetDirection()
+    same_size = volume_img.GetSize() == mask_img.GetSize()
+    same_spacing = volume_img.GetSpacing() == mask_img.GetSpacing()
+    same_origin = volume_img.GetOrigin() == mask_img.GetOrigin()
+    same_direction = volume_img.GetDirection() == mask_img.GetDirection()
 
-    if not (same_size and same_spacing and same_origin and same_direction):
-        # Resample the segmentation onto the volume's grid
+    if all([same_size, same_spacing, same_origin, same_direction]):
+        # No resampling needed
+        return volume_img, mask_img
+    else:
+        # Resample the mask onto the volume's grid
         resampler = sitk.ResampleImageFilter()
         resampler.SetReferenceImage(volume_img)
         # Use NearestNeighbor for label images to preserve discrete values
         resampler.SetInterpolator(sitk.sitkNearestNeighbor)
-        seg_img = resampler.Execute(seg_img)
+        matched_mask = resampler.Execute(mask_img)
 
-    # Optionally write out the updated segmentation
-    if out_seg_path is not None:
-        sitk.WriteImage(seg_img, out_seg_path)
+        return volume_img, matched_mask
 
-    # Convert both images to NumPy arrays (shape [Z, Y, X])
-    volume_array = sitk.GetArrayFromImage(volume_img)
-    seg_array = sitk.GetArrayFromImage(seg_img)
 
-    # Transpose accordingly to return [X, Y, Z]:
-    volume_array = volume_array.transpose(1, 2, 0)
-    seg_array = seg_array.transpose(1, 2, 0)
+if __name__ == "__main__":
+    import sys
 
-    return volume_array, seg_array
+    if len(sys.argv) < 3:
+        print("Usage: python match_geometry.py <volume.nii.gz> <mask.nrrd>")
+        sys.exit(1)
+
+    vol_path = sys.argv[1]
+    mask_path = sys.argv[2]
+
+    try:
+        vol_in = sitk.ReadImage(vol_path)
+        mask_in = sitk.ReadImage(mask_path)
+
+        vol_out, mask_out = match_mask_and_volume_dimensions(vol_in, mask_in)
+
+        sitk.WriteImage(vol_out, "volume_matched.nii.gz")
+        sitk.WriteImage(mask_out, "mask_matched.nrrd")
+
+        print("Geometry matching completed. Saved matched volume and mask.")
+    except Exception as e:
+        print(f"Error: {e}")
+        sys.exit(1)
