@@ -33,6 +33,10 @@ def resample_images(
     Raises:
         RuntimeError:
             If any unexpected error occurs during resampling.
+
+    Comments:
+        More info on available interpolators from the SimpleITK library in
+        https://simpleitk.org/doxygen/v2_4/html/namespaceitk_1_1simple.html#a7cb1ef8bd02c669c02ea2f9f5aa374e5
     """
     original_spacing = np.array(volume_img.GetSpacing())
     original_size = np.array(volume_img.GetSize())
@@ -51,7 +55,9 @@ def resample_images(
     vol_resampler.SetOutputOrigin(volume_img.GetOrigin())
     vol_resampler.SetOutputDirection(volume_img.GetDirection())
     # Higher-order interpolation for intensity images
-    vol_resampler.SetInterpolator(sitk.sitkBSpline)
+    vol_resampler.SetInterpolator(
+        sitk.sitkBSpline
+    )  # Modify to accept more interpolators
     try:
         resampled_vol = vol_resampler.Execute(volume_img)
     except Exception as e:
