@@ -9,6 +9,7 @@ we are only dealing with sMRI 3D data, and to ensure a better conversion of the 
 to the nifti header through the numpy converter.
 """
 
+import collections
 import nrrd  # type: ignore
 import numpy as np
 import argparse
@@ -16,6 +17,8 @@ import os
 import json
 import nibabel as nib
 from Meningioma.utils.parse_nrrd_header import numpy_converter
+from typing import Union, Tuple
+import SimpleITK as sitk
 
 PRECISION = 17
 np.set_printoptions(precision=PRECISION, suppress=True, floatmode="maxprec")
@@ -69,7 +72,9 @@ def _space2ras(space):
 
 
 def nifti_write_3d(
-    volume_path_nrrd: str, out_file: str = "default", verbose: bool = False
+    volume: Union[str, Tuple[sitk.Image, collections.OrderedDict]],
+    out_file: str = "default",
+    verbose: bool = False,
 ) -> str:
     """
     Convert a 3D NRRD image to NIfTI, preserving as much metadata as possible:
@@ -84,7 +89,12 @@ def nifti_write_3d(
     :return path to output niigz
     """
 
-    data, hdr = nrrd.read(volume_path_nrrd)
+    if isinstance(volume, (str, os.PathLike)):
+        data, hdr = nrrd.read(volume)
+    else:
+        data, hdr = volume
+        data = sitk.GetArrayFromImage(data)
+
     if "dimension" not in hdr or hdr["dimension"] != 3:
         raise ValueError("This script only supports 3D NRRD data.")
 

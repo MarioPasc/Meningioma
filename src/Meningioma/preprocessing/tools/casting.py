@@ -5,7 +5,7 @@ from typing import Tuple
 
 
 def cast_volume_and_mask(
-    volume_img: sitk.Image, mask_img: sitk.Image, squeeze: bool = False
+    volume_img: sitk.Image, mask_img: sitk.Image
 ) -> Tuple[sitk.Image, sitk.Image]:
     """
     Casts the input volume to float32 and the input mask to uint8 entirely using
@@ -23,9 +23,6 @@ def cast_volume_and_mask(
             The input volume (any float or integer type).
         mask_img (sitk.Image):
             The input mask (integer type). If squeeze=True, we clamp to [0,255].
-        squeeze (bool, optional):
-            If True, do min–max normalize the volume to [0,1] and clamp the mask to [0,255].
-            Defaults to False.
 
     Returns:
         Tuple[sitk.Image, sitk.Image]:
@@ -40,18 +37,11 @@ def cast_volume_and_mask(
         >>> sitk.WriteImage(msk_out, 'mask_uint8.nrrd')
     """
 
-    # 1) Optionally rescale the volume intensities to [0,1]
-    if squeeze:
-        rescale_filter = sitk.RescaleIntensityImageFilter()
-        rescale_filter.SetOutputMinimum(0.0)
-        rescale_filter.SetOutputMaximum(1.0)
-        volume_img = rescale_filter.Execute(volume_img)
-
-        # Also clamp the mask to [0..255]
-        clamp_filter = sitk.ClampImageFilter()
-        clamp_filter.SetLowerBound(0)
-        clamp_filter.SetUpperBound(255)
-        mask_img = clamp_filter.Execute(mask_img)
+    # 1) Clamp the mask to [0,1]
+    clamp_filter = sitk.ClampImageFilter()
+    clamp_filter.SetLowerBound(0)
+    clamp_filter.SetUpperBound(1)
+    mask_img = clamp_filter.Execute(mask_img)
 
     # 2) Cast the volume to float32
     cast_volume = sitk.Cast(volume_img, sitk.sitkFloat32)
@@ -66,12 +56,11 @@ if __name__ == "__main__":
     import sys
 
     if len(sys.argv) < 3:
-        print("Usage: python cast_sitk_only.py <volume.nii.gz> <mask.nrrd> [--squeeze]")
+        print("Usage: python cast_sitk_only.py <volume.nii.gz> <mask.nrrd>")
         sys.exit(1)
 
     vol_path = sys.argv[1]
     mask_path = sys.argv[2]
-    squeeze_flag = "--squeeze" in sys.argv
 
     # Read input images
     try:
@@ -82,7 +71,7 @@ if __name__ == "__main__":
         sys.exit(1)
 
     # Cast entirely in SimpleITK
-    cast_vol, cast_msk = cast_volume_and_mask(volume_in, mask_in, squeeze_flag)
+    cast_vol, cast_msk = cast_volume_and_mask(volume_in, mask_in)
 
     # Write outputs
     sitk.WriteImage(cast_vol, "cast_volume.nii.gz")
