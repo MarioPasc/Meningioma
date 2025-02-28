@@ -260,7 +260,7 @@ def get_convex_hull_mask(
         A binary mask (2D) with the brain/skull region inside and background outside.
     """
     # Normalize image intensity
-    img_norm = cv2.normalize(image, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    img_norm = cv2.normalize(image, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)  # type: ignore
 
     # Apply thresholding (using the global histogram method)
     mask, _ = get_global_umbralization(image=img_norm, method=threshold_method)
@@ -332,7 +332,7 @@ def _threshold_slice(slice_img: np.ndarray, method: str = "otsu") -> np.ndarray:
 
 def get_3d_volume_segmentation(
     volume_nrrd: np.ndarray,
-    threshold_method: str = "otsu",
+    threshold_method: str = "li",
     structure_size_2d: int = 7,
     iterations_2d: int = 3,
     structure_size_3d: int = 3,

@@ -17,6 +17,33 @@ Usage (Command-line):
     
 Example:
     python denoise_susan.py my_volume.nii.gz --output denoised.nii.gz --brightness_threshold 0.1
+
+Parameters:
+    brightness_threshold (a.k.a. intensity threshold)
+        Meaning: This parameter (often a fraction of the image's intensity range) sets the threshold 
+        below which intensity changes are treated as noise rather than true edges.
+        Effect: Affects how aggressively smoothing is applied. Higher threshold => SUSAN treats more intensity 
+        differences as “noise,” thus potentially smoothing more. A lower threshold => more edge preservation, 
+        but less noise reduction.
+        Higher or lower better?
+            If too high, you might blur important edges or small structures.
+            If too low, you might not remove enough noise.
+            It's about finding a balance.
+        Typical values:
+            Often 0.05-0.2 if the input is normalized to [0,1] (i.e., 5-20% of the robust range).
+            If your intensities are not in [0,1], the value might be 10-50 or more, depending on the absolute 
+            scale of the image.
+
+    fwhm
+
+        Meaning: The full-width-at-half-maximum of the smoothing kernel in millimeters.
+        Effect: A larger FWHM means more spatial smoothing (a bigger “kernel”).
+        Higher or lower better?
+            Higher => heavier smoothing and noise removal, but risk of losing fine details.
+            Lower => more edge preservation, but less overall denoising.
+        Typical values:
+            Often 1-2 mm for slight denoising.
+            Values up to 3-4 mm if the data is quite noisy.
 """
 
 import argparse
@@ -30,7 +57,7 @@ import numpy as np
 
 # Nipype FSL
 try:
-    from nipype.interfaces.fsl import SUSAN
+    from nipype.interfaces.fsl import SUSAN  # type: ignore
 except ImportError as e:
     raise ImportError(
         "Nipype with FSL support is required for this script. "
@@ -40,7 +67,7 @@ except ImportError as e:
 
 def denoise_susan(
     image_sitk: sitk.Image,
-    brightness_threshold: float = 0.05,
+    brightness_threshold: float = 0.01,
     fwhm: float = 1.0,
     dimension: int = 3,
     mask_sitk: Optional[sitk.Image] = None,
