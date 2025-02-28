@@ -3,7 +3,47 @@ import nrrd  # type: ignore
 import numpy as np
 from numpy.typing import NDArray
 from typing import Tuple
-from Meningioma.image_processing.nrrd_processing import transversal_axis
+
+
+def transversal_axis(nrrd_path: str) -> np.intp:
+    """
+    Finds the transversal axis from the NRRD file by selecting the axis where
+    the z-component dominates over the other components (x, y).
+
+    Args:
+        nrrd_path (str): Path to the NRRD file.
+
+    Returns:
+        Optional[int]: The index of the transversal axis (0, 1, or 2), or None if no valid axis is found.
+    """
+    try:
+        # Load the NRRD file and read the header
+        header: dict
+        _, header = nrrd.read(nrrd_path)
+
+        # Extract space directions from the header
+        space_directions: NDArray[np.float64] = np.array(header.get("space directions"))
+
+        # Extract the z-components from the space directions (third element of each vector)
+        z_components: NDArray[np.float64] = space_directions[:, 2]
+
+        # Normalize each direction vector to compare relative dominance
+        normalized_directions: NDArray[np.float64] = np.linalg.norm(
+            space_directions, axis=1
+        )
+
+        # Calculate the dominance ratios for each axis
+        dominance_ratios: NDArray[np.float64] = np.array(
+            [abs(z) / norm for z, norm in zip(z_components, normalized_directions)]
+        )
+
+        # Find the axis with the highest dominance ratio
+        transversal_axis: np.intp = np.argmax(dominance_ratios)
+
+        return transversal_axis
+
+    except Exception as e:
+        raise Exception(f"Error processing {nrrd_path}: {e}")
 
 
 def reorder_to_transversal(

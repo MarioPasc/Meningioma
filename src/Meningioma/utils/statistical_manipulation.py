@@ -6,8 +6,6 @@ from scipy.interpolate import interp1d  # type: ignore
 
 import pandas as pd
 
-from Meningioma import ImageProcessing
-
 
 class StatsException(Exception):
     """
@@ -196,76 +194,3 @@ class Stats:
             return mutual_info
         except Exception as e:
             raise RuntimeError(f"Error during mutual information computation: {e}")
-
-    @staticmethod
-    def compute_pdf(
-        data: np.ndarray, h: float, dist: str = "norm", num_points: int = 1000
-    ) -> tuple:
-        """
-        Estimate the probability density function (PDF) for a 1D data array by computing:
-        - A Parzen–Rosenblatt KDE (using ImageProcessing.kde)
-        - A theoretical PDF fitted to the data using one of several distributions.
-
-        Parameters:
-            data: 1D numpy array of noise values.
-            h: Bandwidth for the KDE estimation.
-            dist: A string specifying the distribution to fit. One of:
-                "norm"     → Gaussian (normal) distribution.
-                "rayleigh" → Rayleigh distribution.
-                "rice"     → Rice distribution.
-                "ncx2"     → Non-central chi-squared distribution.
-
-        Returns:
-            A tuple with:
-            - x_common: Common x-axis values (numpy array).
-            - kde_est: The KDE-estimated PDF (numpy array).
-            - pdf_fit: The theoretical PDF evaluated on x_common (numpy array).
-            - param_str: A string summarizing the fitted parameters.
-            - param_series: A pandas Series with the fitted parameter values.
-        """
-        data = data.flatten()
-        x_min = data.min()
-        x_max = data.max()
-        x_common = np.linspace(x_min, x_max, num_points)
-
-        # Compute KDE using the custom function.
-        kde_vals, x_kde = ImageProcessing.kde(
-            data, h=h, num_points=num_points, return_x_values=True
-        )
-        f_interp = interp1d(x_kde, kde_vals, bounds_error=False, fill_value=0)
-        kde_est = f_interp(x_common)
-
-        # Fit the theoretical distribution and compute the PDF.
-        if dist.lower() == "norm":
-            mu, sigma = norm.fit(data)
-            pdf_fit = norm.pdf(x_common, loc=mu, scale=sigma)
-            param_str = f"$\mu$={mu:.2f}, $\sigma$={sigma:.2f}"
-            param_series = pd.Series({"mu": mu, "sigma": sigma})
-        elif dist.lower() == "rayleigh":
-            loc, scale = rayleigh.fit(data)
-            pdf_fit = rayleigh.pdf(x_common, loc=loc, scale=scale)
-            # Report sigma as sqrt(scale) if desired.
-            sigma_est = np.sqrt(scale)
-            param_str = f"loc={loc:.2f}, $\sigma$={sigma_est:.2f}"
-            param_series = pd.Series({"loc": loc, "scale": scale, "sigma": sigma_est})
-        elif dist.lower() == "rice":
-            # rice.fit returns: shape parameter b, location, and scale.
-            b, loc, scale = rice.fit(data)
-            pdf_fit = rice.pdf(x_common, b, loc=loc, scale=scale)
-            param_str = f"b={b:.5f}, loc={loc:.2f}, scale={scale:.2f}"
-            param_series = pd.Series({"b": b, "loc": loc, "scale": scale})
-        elif dist.lower() == "ncx2":
-            # ncx2.fit returns: degrees of freedom, noncentrality, location, and scale.
-            df, nc, loc, scale = ncx2.fit(data)
-            pdf_fit = ncx2.pdf(x_common, df, nc, loc=loc, scale=scale)
-            sigma_est = np.sqrt(scale)
-            param_str = f"L={df:.2f}, NC={nc:.2f}, $\sigma$={sigma_est:.2f}"
-            param_series = pd.Series(
-                {"df": df, "nc": nc, "loc": loc, "scale": scale, "sigma": sigma_est}
-            )
-        else:
-            raise ValueError(
-                f"Distribution '{dist}' not recognized. Choose among 'norm', 'rayleigh', 'rice', 'ncx2'."
-            )
-
-        return x_common, kde_est, pdf_fit, param_str, param_series

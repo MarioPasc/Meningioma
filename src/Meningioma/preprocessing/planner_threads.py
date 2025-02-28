@@ -5,11 +5,11 @@ import numpy as np
 import logging
 import sys
 import argparse
+import nrrd  # type: ignore
 from tqdm import tqdm  # type: ignore
 from natsort import natsorted
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-from Meningioma.image_processing.nrrd_processing import open_nrrd, transversal_axis
 from Meningioma.preprocessing.metadata import (
     create_json_from_csv,
     apply_hardcoded_codification,
@@ -78,8 +78,7 @@ def process_patient(pulse, patient_dir, output_folder, preprocessing_steps):
 
     error = False
     try:
-        volume, header = open_nrrd(volume_path, return_header=True)
-        trans_axis = transversal_axis(nrrd_path=volume_path)
+        volume, header = nrrd.read(volume_path)
         dtype = str(volume.dtype)
         min_intensity = np.min(volume)
         max_intensity = np.max(volume)
@@ -88,7 +87,6 @@ def process_patient(pulse, patient_dir, output_folder, preprocessing_steps):
             "dtype": dtype,
             "min": min_intensity,
             "max": max_intensity,
-            "transversal_axis": trans_axis,
         }
     except Exception as e:
         if "Invalid NRRD magic line" in str(e):
@@ -110,7 +108,7 @@ def process_patient(pulse, patient_dir, output_folder, preprocessing_steps):
         segmentation_info = {"route": seg_path, "total_volume": None}
     else:
         try:
-            seg_img = open_nrrd(seg_path, return_header=False)
+            seg_img = nrrd.read(seg_path)
             total_volume = int(np.sum(seg_img))
         except Exception as e:
             logger.error(f"Error processing segmentation file {seg_path}: {e}")

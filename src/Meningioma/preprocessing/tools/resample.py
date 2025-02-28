@@ -67,8 +67,11 @@ def resample_images(
     mask_resampler = sitk.ResampleImageFilter()
     mask_resampler.SetOutputSpacing(new_spacing)
     mask_resampler.SetSize(new_size)
-    mask_resampler.SetOutputOrigin(mask_img.GetOrigin())
-    mask_resampler.SetOutputDirection(mask_img.GetDirection())
+    # We want the mask to remain in the same physical space as the volume,
+    # therefore we will use the volume’s origin/direction for both volume and mask.
+    # This is to prevent shifting or misaligning if the original mask’s origin/direction differs.
+    mask_resampler.SetOutputOrigin(volume_img.GetOrigin())
+    mask_resampler.SetOutputDirection(volume_img.GetDirection())
     # Use nearest-neighbor for segmentation masks
     mask_resampler.SetInterpolator(sitk.sitkNearestNeighbor)
     try:
