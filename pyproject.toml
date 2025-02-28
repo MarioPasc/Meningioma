@@ -24,14 +24,15 @@ dependencies = [
   "gstools",
   "pyvista",
   "pyyaml",
-  "natsort"
+  "natsort",
+  "nipype",
 ]
 description = "A Python library that contains all the functions used to perform experiments on neuroimaging data and generate a Meningioma dataset."
 keywords = ["neuroimaging", "deep learning", "bioinformatics"]
 license = {file = "LICENSE"}
 name = "Meningioma"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 version = "0.1.0"
 
 [project.urls]
