@@ -20,7 +20,7 @@ import tempfile
 from typing import Optional, Tuple
 
 import SimpleITK as sitk
-from nipype.interfaces.fsl import BET  # type: ignore
+from nipype.interfaces.fsl import BET  # type:ignore
 
 
 def fsl_bet_brain_extraction(
