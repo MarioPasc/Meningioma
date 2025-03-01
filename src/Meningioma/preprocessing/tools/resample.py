@@ -13,6 +13,8 @@ def resample_images(
     volume_img: sitk.Image,
     mask_img: sitk.Image,
     new_spacing: Tuple[float, float, float] = (1.0, 1.0, 1.0),
+    interpolation_method=sitk.sitkBSpline,
+    mask_interpolation_method=sitk.sitkNearestNeighbor,
 ) -> Tuple[sitk.Image, sitk.Image]:
     """
     Resamples a volume and mask to a specified voxel spacing, preserving alignment.
@@ -56,7 +58,7 @@ def resample_images(
     vol_resampler.SetOutputDirection(volume_img.GetDirection())
     # Higher-order interpolation for intensity images
     vol_resampler.SetInterpolator(
-        sitk.sitkBSpline
+        interpolation_method
     )  # Modify to accept more interpolators
     try:
         resampled_vol = vol_resampler.Execute(volume_img)
@@ -73,7 +75,7 @@ def resample_images(
     mask_resampler.SetOutputOrigin(volume_img.GetOrigin())
     mask_resampler.SetOutputDirection(volume_img.GetDirection())
     # Use nearest-neighbor for segmentation masks
-    mask_resampler.SetInterpolator(sitk.sitkNearestNeighbor)
+    mask_resampler.SetInterpolator(mask_interpolation_method)
     try:
         resampled_mask = mask_resampler.Execute(mask_img)
     except Exception as e:
