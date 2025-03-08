@@ -21,7 +21,7 @@ import json
 import time
 from typing import Optional, Tuple, Dict, Any
 
-import SimpleITK as sitk
+import SimpleITK as sitk # type:ignore
 from nipype.interfaces.ants import Registration, ApplyTransforms  # type:ignore
 
 
