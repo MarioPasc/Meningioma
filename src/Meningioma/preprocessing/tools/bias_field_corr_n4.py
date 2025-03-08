@@ -15,7 +15,7 @@ Parameters:
     (A) shrink_factor
 
         Meaning: How much you downsample the image (and mask) before computing the bias field at each iteration. 
-        A factor of 4 means each dimension is reduced by a factor of 4 => 64× smaller in voxel count.
+        A factor of 4 means each dimension is reduced by a factor of 4 => 64x smaller in voxel count.
         Effect on final image:
             The final corrected image is still full resolution, but the bias field estimation is done on a coarser 
             version. This speeds up each iteration.
@@ -40,7 +40,7 @@ Parameters:
             Too high => unnecessary computation time if the field has already converged.
         Typical values: 50-100 per level. Some people do 100-150 if the dataset is tricky.
 
-    (C) BiasFieldFullWidthAtHalfMaximum (FWHM)
+    (C) bias_field_fwhm (FWHM)
 
         Meaning: Controls the Gaussian kernel used to smooth the log bias field each iteration. A bigger FWHM means you enforce 
         a smoother bias field; a smaller FWHM allows more local variations.
@@ -53,7 +53,7 @@ Parameters:
             Lower => more local detail, but can lead to spurious corrections or “patchy” fields.
         Typical values: 0.15-0.5 mm is a common range for many 3D MR images. Some pipelines simply keep the default (0.15).
 
-    (D) NumberOfControlPoints
+    (D) control_points
 
         Meaning: The resolution of the underlying B-spline mesh. For example, [4,4,4] is fairly coarse, [8,8,8] is finer. 
         More control points => can capture more complex bias fields.
@@ -71,6 +71,8 @@ from typing import Optional, List, Tuple
 
 import SimpleITK as sitk
 import numpy as np
+
+from Meningioma.utils.segmentation import get_3d_volume_segmentation
 
 
 def generate_brain_mask_sitk(
@@ -94,9 +96,9 @@ def generate_brain_mask_sitk(
     # We'll reorder axes so your code sees (H, W, S):
     volume_np = np.moveaxis(volume_np, 0, -1)  # now shape = (H, W, S)
 
-    # 2) Use your segmentation pipeline (returns (volume, mask) in NumPy)
+    # 2) To give a pre-mask segmentation of brain volume, we use the segmentation
+    #    convex hull algorithm coded in Meningioma.utils.segmentation (returns (volume, mask) in NumPy)
     #    where 'volume' is float32 shape (H, W, S), 'mask' is boolean shape (H, W, S)
-    from Meningioma.utils.segmentation import get_3d_volume_segmentation
 
     vol_float, mask_3d = get_3d_volume_segmentation(
         volume_np,
@@ -119,7 +121,7 @@ def generate_brain_mask_sitk(
 
 
 def n4_bias_field_correction(
-    image_sitk: sitk.Image,
+    volume_sitk: sitk.Image,
     mask_sitk: Optional[sitk.Image] = None,
     shrink_factor: int = 4,
     max_iterations: int = 50,
@@ -147,20 +149,11 @@ def n4_bias_field_correction(
         control_points (int, optional):
             If not None, we set the same number of control points in x,y,z. e.g. 4 => [4,4,4].
             If None, defaults to [4,4,4].
-        use_otsu_if_no_mask (bool, optional):
-            If True and mask_sitk is None, create a binary mask using Otsu.
         verbose (bool, optional):
             Print progress or debugging info.
 
     Returns:
         sitk.Image: The bias-corrected volume in full resolution.
-
-    Example:
-        >>> import SimpleITK as sitk
-        >>> from bias_correction_n4 import n4_bias_field_correction
-        >>> img = sitk.ReadImage('input.nii.gz')
-        >>> corrected = n4_bias_field_correction(img, mask_sitk=None, shrink_factor=4)
-        >>> sitk.WriteImage(corrected, 'corrected_n4.nii.gz')
     """
 
     # 1) Instantiate the filter
@@ -171,10 +164,6 @@ def n4_bias_field_correction(
     #    We'll use 4 resolution levels, each with 'max_iterations' allowed:
     n4_filter.SetMaximumNumberOfIterations([max_iterations] * 4)
 
-    #    If you want to stop early if the convergence is small, set:
-    #        n4_filter.SetConvergenceThreshold( ... )
-    #    or read docs for more advanced usage.
-
     #    The bias field smoothing can be controlled with:
     n4_filter.SetBiasFieldFullWidthAtHalfMaximum(bias_field_fwhm)
 
@@ -182,23 +171,24 @@ def n4_bias_field_correction(
     if control_points is None:
         # default to 4 for each dimension
         control_points = 4
-    n4_filter.SetNumberOfControlPoints([control_points] * image_sitk.GetDimension())
+    n4_filter.SetNumberOfControlPoints([control_points] * volume_sitk.GetDimension())
 
-    # 4) If no mask given, optionally create one via Otsu
+    # 4) If no mask given, optionally create one using the custom Meningioma.utils
+    # convex hull algorithm with standard parameters
     if mask_sitk is None:
-        mask_sitk = sitk.OtsuThreshold(image_sitk, 0, 1, 200)
+        _, mask_sitk = generate_brain_mask_sitk(volume_sitk=volume_sitk)
 
     if verbose:
         print("[N4] Starting bias field correction with the following params:")
         print(
             f"  shrink_factor={shrink_factor}, max_iterations={max_iterations}, "
-            f"bias_field_fwhm={bias_field_fwhm}, control_points={[control_points]*image_sitk.GetDimension()}"
+            f"bias_field_fwhm={bias_field_fwhm}, control_points={[control_points]*volume_sitk.GetDimension()}"
         )
 
-    # 5) Shrink images for speed (recommended for large data)
+    # 5) Shrink images for speed 
     if shrink_factor > 1:
         shrinked_image = sitk.Shrink(
-            image_sitk, [shrink_factor] * image_sitk.GetDimension()
+            volume_sitk, [shrink_factor] * volume_sitk.GetDimension()
         )
         shrinked_mask = (
             sitk.Shrink(mask_sitk, [shrink_factor] * mask_sitk.GetDimension())
@@ -206,7 +196,7 @@ def n4_bias_field_correction(
             else None
         )
     else:
-        shrinked_image = image_sitk
+        shrinked_image = volume_sitk
         shrinked_mask = mask_sitk
 
     # 6) Run N4 on the downsampled data
@@ -214,9 +204,9 @@ def n4_bias_field_correction(
 
     # 7) Resample the log bias field onto the full-resolution image
     #    Then exponentiate and multiply by the original input to get the corrected volume
-    log_bias_field = n4_filter.GetLogBiasFieldAsImage(image_sitk)
+    log_bias_field = n4_filter.GetLogBiasFieldAsImage(volume_sitk)
     bias_field_full = sitk.Exp(log_bias_field)
-    corrected_full = sitk.Cast(image_sitk, sitk.sitkFloat32) / bias_field_full
+    corrected_full = sitk.Cast(volume_sitk, sitk.sitkFloat32) / bias_field_full
 
     if verbose:
         current_level = n4_filter.GetCurrentLevel()
