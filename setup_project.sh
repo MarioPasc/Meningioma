@@ -24,9 +24,14 @@ if command -v susan &> /dev/null
 then
     echo "[OK] FSL is already installed at: $(which susan)"
 else
-    echo "FSL not found, please, run ./setup_fsl.sh, and then re-run setup_project.sh"
-    echo "Exiting"
-    exit 1
+    echo "[WARNING] FSL not found, please, run ./setup_fsl.sh after the environment is created"
+fi
+
+if command -v antsRegistration &> /dev/null
+then
+    echo "[OK] ANTs is already installed at: $(which antsRegistration)"
+else
+    echo "[WARNING] ANTs not found, please, run ./setup_ants.sh after the environment is created"
 fi
 
 echo "=== Checking conda availability ==="
@@ -52,9 +57,8 @@ source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate "$CONDA_ENV_NAME"
 
 echo "=== Installing Meningioma in editable mode (pip install -e .) ==="
-pip install -e .
+pip install -r requirements.txt
 
 echo "=== Installation successful! ==="
 echo "Conda environment: $CONDA_ENV_NAME"
 echo "You can now run: conda activate $CONDA_ENV_NAME"
-echo "FSL is installed at: $FSLDIR"

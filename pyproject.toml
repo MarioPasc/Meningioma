@@ -1,13 +1,28 @@
-[build-system]
-build-backend = "setuptools.build_meta"
-requires = ["setuptools", "wheel"]
-
 [project]
-authors = [{name = "Mario Pascual Gonzalez", email = "mario.pg02@gmail.com"}]
+name = "Meningioma"
+version = "1.0.0"
+requires-python = ">=3.10"
+description = "Meningioma package harbors every tools used for meningioma characterization and growth prediction."
+readme = "README.md"
+license = {file = "LICENSE"}
+authors = [
+  {name = "Mario Pascual González", email = "mpascual@uma.es"},
+  {name = "Computational Intelligence and Image Analysis lab (ICAI)"},
+  {name = "Hospital Regional Universitario de Málaga"},
+]
 classifiers = [
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "Intended Audience :: Healthcare Industry",
   "Programming Language :: Python :: 3",
-  "License :: OSI Approved :: MIT License",
-  "Operating System :: OS Independent",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Scientific/Engineering :: Image Recognition",
+  "Topic :: Scientific/Engineering :: Medical Science Apps.",
+]
+keywords = [
+  'deep learning',
+  'medical image analysis',
+  'medical image segmentation',
 ]
 dependencies = [
   "opencv-python-headless",
@@ -30,13 +45,10 @@ dependencies = [
   "numpy",
   "nibabel",
 ]
-description = "A Python library that contains all the functions used to perform experiments on neuroimaging data and generate a Meningioma dataset."
-keywords = ["neuroimaging", "deep learning", "bioinformatics"]
-license = {file = "LICENSE"}
-name = "Meningioma"
-readme = "README.md"
-requires-python = ">=3.10"
-version = "0.1.0"
+
+[build-system]
+build-backend = "setuptools.build_meta"
+requires = ["setuptools", "wheel"]
 
 [project.urls]
 "Repository" = "https://github.com/MarioPasc/Meningioma"

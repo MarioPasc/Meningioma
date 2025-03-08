@@ -19,9 +19,7 @@ This external component of the **Meningioma** project was originally developed b
 
 - The `SteeringMatrix.c` script requires the Matlab _Image Processing Toolbox_.
 - When starting matlab, select opengl as the rendering software `/usr/local/MATLAB/R2024b/bin/matlab -softwareopengl`
-- 
 
 ## References
 
-LÓPEZ-RUBIO, Ezequiel. Restoration of images corrupted by Gaussian and uniform impulsive noise. *Pattern Recognition*, 2010, vol. 43, no 5, p. 1835-1846.
-
+LÓPEZ-RUBIO, Ezequiel. Restoration of images corrupted by Gaussian and uniform impulsive noise. _Pattern Recognition_, 2010, vol. 43, no 5, p. 1835-1846.
