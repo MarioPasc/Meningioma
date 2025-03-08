@@ -1,5 +1,5 @@
 import json
-import pandas as pd
+import pandas as pd # type: ignore
 from typing import Any, Dict
 import os
 import re
