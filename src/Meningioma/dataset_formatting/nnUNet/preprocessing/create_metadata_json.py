@@ -8,7 +8,6 @@ def generate_dataset_json(
     dataset_folder: Path,
     sequences_to_use,
     labels=None,
-    dataset_name="BraTSMen",
     file_ending=".nii.gz",
     reader_writer=None
 ):
@@ -26,10 +25,11 @@ def generate_dataset_json(
     The "numTraining" in dataset.json is simply the number of unique files in imagesTr / (number_of_modalities).
     """
     if labels is None:
-        # Default label scheme: 0 = background, 1 = tumor
         labels = {
             "background": 0,
-            "tumor": 1
+            "tumor_core": 1,
+            "non_enhancing_tumor": 2,
+            "edema": 3
         }
     
     imagesTr_folder = dataset_folder / "imagesTr"
@@ -75,12 +75,7 @@ def main():
         default=["t1c", "t2f", "t2w"],
         help="List of sequences in the order they appear as channels (e.g. t1c t2f t2w)."
     )
-    parser.add_argument(
-        "--dataset_name",
-        type=str,
-        default="BraTSMen",
-        help="Name of the dataset, used only for documentation in dataset.json."
-    )
+
     parser.add_argument(
         "--file_ending",
         type=str,
@@ -95,17 +90,17 @@ def main():
     )
     args = parser.parse_args()
     
-    # You can define your custom label mapping here if needed
     custom_labels = {
         "background": 0,
-        "tumor": 1
+        "tumor_core": 1,
+        "non_enhancing_tumor": 2,
+        "edema": 3
     }
-    
+
     generate_dataset_json(
         dataset_folder=Path(args.dataset_folder),
         sequences_to_use=args.sequences,
         labels=custom_labels,
-        dataset_name=args.dataset_name,
         file_ending=args.file_ending,
         reader_writer=args.reader_writer
     )

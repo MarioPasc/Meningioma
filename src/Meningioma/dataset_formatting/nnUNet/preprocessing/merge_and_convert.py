@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 import argparse
-import os
 import shutil
 from pathlib import Path
 from typing import List
@@ -17,7 +16,7 @@ def copy_and_rename_cases(
     selecting only the given sequences, and renames them to the nnUNet format.
 
     Args:
-        input_root (Path): Path to the folder containing 'BraTS_Men_Train' and 'BraTS_Men_Validation'.
+        input_root (Path): Path to the folder 'BraTS_Men_Train'. 
         output_root (Path): Path to where the nnUNet_raw folder will be created. The dataset
                             will go to `nnUNet_raw/Dataset<dataset_id>_<dataset_name>`.
         sequences_to_use (List[str]): List of MRI sequence suffixes to include (e.g. ["t1c", "t2f", "t2w"]).
@@ -43,15 +42,8 @@ def copy_and_rename_cases(
     imagesTr_folder.mkdir(parents=True, exist_ok=True)
     labelsTr_folder.mkdir(parents=True, exist_ok=True)
     
-    # Combine "BraTS_Men_Train" and "BraTS_Men_Validation" into a single list of subject folders
-    train_folder = input_root / "BraTS_Men_Train"
-    valid_folder = input_root / "BraTS_Men_Validation"
     
-    all_cases = []
-    if train_folder.is_dir():
-        all_cases.extend(sorted(train_folder.iterdir()))
-    if valid_folder.is_dir():
-        all_cases.extend(sorted(valid_folder.iterdir()))
+    all_cases = sorted(input_root.iterdir())
     
     # For each case folder, copy the relevant sequences + seg
     for case_dir in all_cases:
