@@ -19,7 +19,7 @@ import SimpleITK as sitk
 
 def apply_window(
     image_sitk: sitk.Image, 
-    window_width: float = 400, 
+    window_width: float = 80, 
     window_level: float = 40, 
     verbose: bool = False
 ) -> sitk.Image:

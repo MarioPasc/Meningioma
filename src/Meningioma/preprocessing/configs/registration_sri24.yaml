@@ -1,10 +1,7 @@
 # Example YAML configuration for ANTs registration
 
 # Input and output paths
-input_image: /path/to/input/image.nii.gz
 atlas_path: /path/to/atlas/SRI24.nii.gz
-mask_path: /path/to/input/mask.nii.gz  # Optional
-output_dir: /path/to/output
 output_registered: registered.nii.gz
 output_mask: registered_mask.nii.gz
 output_transform_prefix: transform_

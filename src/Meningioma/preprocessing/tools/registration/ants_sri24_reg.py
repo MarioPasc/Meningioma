@@ -2,17 +2,40 @@
 """
 Provides functions to perform registration (affine and nonlinear) to the SRI24 atlas 
 via Nipype's ANTS interface, returning SimpleITK images. Supports registering both 
-image volumes and their corresponding masks. Also includes a command-line main.
+image volumes and their corresponding masks.
 
 Requires:
   - Nipype
   - ANTs installed on your system
-  - Python 3, SimpleITK
+  - Python 3, SimpleITK, PyYAML
 
-Example usage:
-  python sri24_registration.py moving_image.nii.gz --atlas_path /path/to/SRI24.nii.gz 
-  --mask_path subject_mask.nii.gz --output_registered registered_output.nii.gz 
-  --output_mask registered_mask.nii.gz --output_transform transform_
+Example usage from command line:
+  # Direct CLI parameters:
+  python ants_sri24_reg.py --input_image subject.nii.gz --atlas_path SRI24.nii.gz --output_dir ./output
+  
+  # Using a YAML config:
+  python ants_sri24_reg.py --config registration_config.yaml
+  
+  # Hybrid approach:
+  python ants_sri24_reg.py --input_image subject.nii.gz --atlas_path SRI24.nii.gz --config params.yaml
+
+Example Python usage:
+  from Meningioma.preprocessing.tools.registration import ants_sri24_reg
+  
+  # Basic usage:
+  img, params = ants_sri24_reg.register_image_to_sri24(
+      input_image_path='subject.nii.gz',
+      atlas_path='SRI24.nii.gz',
+      output_dir='./output'
+  )
+  
+  # With mask:
+  img, mask, params = ants_sri24_reg.register_image_to_sri24(
+      input_image_path='subject.nii.gz',
+      atlas_path='SRI24.nii.gz',
+      mask_path='subject_mask.nii.gz',
+      output_dir='./output'
+  )
 """
 
 import os
@@ -20,7 +43,7 @@ import argparse
 import json
 import time
 import yaml
-from typing import Optional, Tuple, Dict, Any, List
+from typing import Optional, Tuple, Dict, Any, List, Union
 
 import SimpleITK as sitk
 from nipype.interfaces.ants import Registration, ApplyTransforms 
@@ -497,53 +520,248 @@ def register_to_sri24_with_mask(
 
     return registered_image, registered_mask, transform_params
 
-
-def main():
-    """Command-line interface for the registration function using YAML configuration."""
-    parser = argparse.ArgumentParser(
-        description="Register a T1/T2 image to SRI24 atlas using configuration from a YAML file."
-    )
-    parser.add_argument(
-        "config_path", type=str, help="Path to the YAML configuration file."
-    )
-
-    args = parser.parse_args()
+def register_image_to_sri24(
+    input_image_path: str,
+    mask_path: Optional[str] = None,
+    output_dir: str = './registration_output',
+    output_registered: Optional[str] = None,
+    output_mask: Optional[str] = None,
+    transform_prefix: str = 'transform_',
+    config_path: Optional[str] = None,
+    verbose: bool = False,
+    number_threads: int = 1,
+    **kwargs
+) -> Union[Tuple[sitk.Image, Dict[str, Any]], Tuple[sitk.Image, sitk.Image, Dict[str, Any]]]:
+    """
+    Register an image to the SRI24 atlas with optional mask, allowing for both direct parameters
+    and YAML configuration.
     
-    # Load configuration from YAML
-    try:
-        with open(args.config_path, 'r') as f:
-            config = yaml.safe_load(f)
-    except Exception as e:
-        print(f"Error loading configuration file: {e}")
-        return
+    Args:
+        input_image_path (str):
+            Path to the input image to be registered
+        atlas_path (str):
+            Path to the SRI24 atlas
+        mask_path (Optional[str]):
+            Path to the input mask (optional)
+        output_dir (str):
+            Directory to save outputs
+        output_registered (Optional[str]):
+            Path for the registered output image
+        output_mask (Optional[str]):
+            Path for the registered output mask
+        transform_prefix (str):
+            Prefix for transform files
+        config_path (Optional[str]):
+            Path to YAML config file for advanced parameters
+        verbose (bool):
+            Enable verbose output
+        number_threads (int):
+            Number of threads to use
+        **kwargs:
+            Additional registration parameters to override defaults
+    
+    Returns:
+        Tuple[sitk.Image, Dict[str, Any]]: Registered image and transform parameters
+    """
 
-    # Create output directory if it doesn't exist
-    output_dir = config.get('output_dir', './registration_output')
+    # Create config dictionary from parameters
+    config = {
+        'input_image': input_image_path,
+        'output_dir': output_dir,
+        'output_transform_prefix': transform_prefix,
+        'num_threads': number_threads,
+        'verbose': verbose
+    }
+    
+    # Add optional parameters
+    if mask_path:
+        config['mask_path'] = mask_path
+    
+    if output_registered:
+        config['output_registered'] = output_registered
+        
+    if output_mask:
+        config['output_mask'] = output_mask
+    
+    # Load YAML config if provided and merge with parameters
+    if config_path:
+        try:
+            with open(config_path, 'r') as f:
+                yaml_config = yaml.safe_load(f)
+                # Update config but keep explicit parameters
+                for k, v in yaml_config.items():
+                    if k not in config or config[k] is None:
+                        config[k] = v
+        except Exception as e:
+            if verbose:
+                print(f"Warning: Could not load configuration file: {e}")
+    
+    # Add any additional kwargs as registration parameters
+    config.update(kwargs)
+    
+    # Create output directory
     os.makedirs(output_dir, exist_ok=True)
-
-    # Set verbose mode from config
-    verbose = config.get('verbose', False)
+    
+    # Get the atlas
+    atlas_path = config.get('atlas_path')
+    if not atlas_path:
+        raise ValueError("Missing required parameter: atlas_path")
 
     # Load input images
-    moving_image_path = config.get('input_image')
-    atlas_path = config.get('atlas_path')
-    mask_path = config.get('mask_path')
-    
-    if not moving_image_path or not atlas_path:
-        print("Missing required parameters: input_image and atlas_path must be provided")
-        return
-        
     if verbose:
-        print(f"[ANTS REGISTRATION] Loading input image: {moving_image_path}")
+        print(f"[ANTS REGISTRATION] Loading input image: {input_image_path}")
         print(f"[ANTS REGISTRATION] Loading atlas image: {atlas_path}")
-
+    
     try:
-        moving_image = sitk.ReadImage(moving_image_path)
-        fixed_image = sitk.ReadImage(atlas_path)
+        moving_image = sitk.ReadImage(input_image_path)
+        fixed_image = sitk.ReadImage(str(atlas_path))
+    except Exception as e:
+        raise RuntimeError(f"Error loading images: {e}")
+    
+    # Build registration parameters
+    reg_params = {
+        'output_dir': output_dir,
+        'output_transform_prefix': config.get('output_transform_prefix', 'transform_'),
+        'initial_moving_transform': config.get('initial_transform'),
+        'use_histogram_matching': config.get('histogram_matching', True),
+        'dimension': config.get('dimension', 3),
+        'winsorize_lower_quantile': config.get('winsorize_lower_quantile', 0.005),
+        'winsorize_upper_quantile': config.get('winsorize_upper_quantile', 0.995),
+        'number_threads': config.get('num_threads', 1),
+        'transforms': config.get('transforms'),
+        'transform_parameters': config.get('transform_parameters'),
+        'iterations': config.get('iterations'),
+        'shrink_factors': config.get('shrink_factors'),
+        'smoothing_sigmas': config.get('smoothing_sigmas'),
+        'metrics': config.get('metrics'),
+        'metric_weights': config.get('metric_weights'),
+        'verbose': verbose
+    }
+    
+    # Set output paths
+    output_registered_path = config.get('output_registered')
+    if not output_registered_path:
+        output_registered_path = os.path.join(output_dir, "registered.nii.gz")
+    elif not os.path.isabs(str(output_registered_path)):
+        output_registered_path = os.path.join(output_dir, str(output_registered_path))
+    
+    reg_params['output_image_path'] = output_registered_path
+    
+    # Process with mask if provided
+    if mask_path:
+        output_mask_path = config.get('output_mask')
+        if not output_mask_path:
+            output_mask_path = os.path.join(output_dir, "registered_mask.nii.gz")
+        elif not os.path.isabs(str(output_mask_path)):
+            output_mask_path = os.path.join(output_dir, str(output_mask_path))
+        
+        try:
+            moving_mask = sitk.ReadImage(mask_path)
+        except Exception as e:
+            raise RuntimeError(f"Error loading mask image: {e}")
+        
+        # Perform registration with mask
+        registered_image, registered_mask, transform_params = register_to_sri24_with_mask(
+            moving_image_sitk=moving_image,
+            moving_mask_sitk=moving_mask,
+            fixed_image_sitk=fixed_image,
+            output_image_prefix=os.path.basename(str(output_registered_path)),
+            output_mask_path=str(output_mask_path),
+            **reg_params # type: ignore
+        )
+        
+        return registered_image, registered_mask, transform_params
+    else:
+        # Perform registration without mask
+        registered_image, transform_params = register_to_sri24(
+            moving_image_sitk=moving_image,
+            fixed_image_sitk=fixed_image,
+            **reg_params # type: ignore
+        )
+        
+        return registered_image, transform_params
+
+def main():
+    """
+    Command-line interface for the registration function supporting both YAML configuration
+    and direct CLI arguments, with the latter taking precedence.
+    """
+    parser = argparse.ArgumentParser(
+        description="Register a T1/T2 image to SRI24 atlas using YAML config or CLI arguments."
+    )
+    
+    # Primary input/output arguments (can override YAML)
+    parser.add_argument("-i", "--input_image", type=str, help="Path to the input image")
+    parser.add_argument("-m", "--mask_path", type=str, help="Path to the input mask (optional)")
+    parser.add_argument("-o", "--output_dir", type=str, help="Output directory path")
+    parser.add_argument("-r", "--output_registered", type=str, help="Output registered image path")
+    parser.add_argument("-k", "--output_mask", type=str, help="Output registered mask path")
+    
+    # Optional YAML config
+    parser.add_argument("-c", "--config", type=str, help="Path to YAML configuration file")
+    
+    # Other common parameters
+    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output")
+    parser.add_argument("-t", "--threads", type=int, help="Number of threads to use")
+    
+    args = parser.parse_args()
+    
+    # Initialize config with defaults
+    config = {
+        'verbose': args.verbose or False,
+        'num_threads': args.threads or 1
+    }
+    
+    # Load YAML config if provided (as base configuration)
+    if args.config:
+        try:
+            with open(args.config, 'r') as f:
+                yaml_config = yaml.safe_load(f)
+                config.update(yaml_config)  # Update with YAML values
+        except Exception as e:
+            print(f"Error loading configuration file: {e}")
+            return
+    
+    # Override with CLI arguments if provided
+    if args.input_image:
+        config['input_image'] = args.input_image
+    if args.mask_path:
+        config['mask_path'] = args.mask_path
+    if args.output_dir:
+        config['output_dir'] = args.output_dir
+    if args.output_registered:
+        config['output_registered'] = args.output_registered
+    if args.output_mask:
+        config['output_mask'] = args.output_mask
+    if args.verbose:
+        config['verbose'] = args.verbose
+    if args.threads:
+        config['num_threads'] = args.threads
+    
+    # Check required parameters
+    if not config.get('input_image') or not config.get('atlas_path'):
+        print("Error: Missing required parameters. Please provide input_image and atlas_path.")
+        parser.print_help()
+        return
+    
+    # Set up output directory
+    output_dir = config.get('output_dir', './registration_output')
+    os.makedirs(output_dir, exist_ok=True)
+    
+    verbose = config.get('verbose', False)
+    
+    # Load input images
+    if verbose:
+        print(f"[ANTS REGISTRATION] Loading input image: {config['input_image']}")
+        print(f"[ANTS REGISTRATION] Loading atlas image: {config['atlas_path']}")
+    
+    try:
+        moving_image = sitk.ReadImage(config['input_image'])
+        fixed_image = sitk.ReadImage(config['atlas_path'])
     except Exception as e:
         print(f"Error loading images: {e}")
         return
-
+    
     # Extract registration parameters from config
     reg_params = {
         'output_dir': output_dir,
@@ -554,6 +772,13 @@ def main():
         'winsorize_lower_quantile': config.get('winsorize_lower_quantile', 0.005),
         'winsorize_upper_quantile': config.get('winsorize_upper_quantile', 0.995),
         'number_threads': config.get('num_threads', 1),
+        'transforms': config.get('transforms'),
+        'transform_parameters': config.get('transform_parameters'),
+        'iterations': config.get('iterations'),
+        'shrink_factors': config.get('shrink_factors'),
+        'smoothing_sigmas': config.get('smoothing_sigmas'),
+        'metrics': config.get('metrics'),
+        'metric_weights': config.get('metric_weights'),
         'verbose': verbose
     }
     
@@ -571,29 +796,30 @@ def main():
         print(f"[ANTS REGISTRATION] Fixed image size: {fixed_image.GetSize()}")
         print(f"[ANTS REGISTRATION] Output directory: {output_dir}")
         print(f"[ANTS REGISTRATION] Output registered image: {output_registered}")
-
+    
     # Check if we're processing a mask as well
+    mask_path = config.get('mask_path')
     if mask_path:
         output_mask = config.get('output_mask')
         if not output_mask:
             output_mask = os.path.join(output_dir, "registered_mask.nii.gz")
         elif not os.path.isabs(output_mask):
             output_mask = os.path.join(output_dir, output_mask)
-            
+        
         if verbose:
             print(f"[ANTS REGISTRATION] Loading mask image: {mask_path}")
             print(f"[ANTS REGISTRATION] Output registered mask: {output_mask}")
-
+        
         try:
             moving_mask = sitk.ReadImage(mask_path)
         except Exception as e:
             print(f"Error loading mask image: {e}")
             return
-
+        
         if verbose:
             print(f"[ANTS REGISTRATION] Mask image size: {moving_mask.GetSize()}")
             print("[ANTS REGISTRATION] Performing registration with mask...")
-
+        
         # Perform registration with mask
         registered_image, registered_mask, transform_params = register_to_sri24_with_mask(
             moving_image_sitk=moving_image,
@@ -603,23 +829,24 @@ def main():
             output_mask_path=output_mask,
             **reg_params
         )
-
+    
     else:
         # Perform registration without mask
         if verbose:
             print("[ANTS REGISTRATION] Performing registration without mask...")
-
+        
         registered_image, transform_params = register_to_sri24(
             moving_image_sitk=moving_image,
             fixed_image_sitk=fixed_image,
             **reg_params
         )
-
+    
     if verbose:
         print("[ANTS REGISTRATION] Registration completed successfully")
         print(f"[ANTS REGISTRATION] All outputs saved to directory: {output_dir}")
         print(f"[ANTS REGISTRATION] Transform files saved with prefix: {reg_params['output_transform_prefix']}")
         print(f"[ANTS REGISTRATION] Transform parameters saved to: {os.path.join(output_dir, 'transform_params.json')}")
-
+    
+    return registered_image, transform_params
 if __name__ == "__main__":
     main()

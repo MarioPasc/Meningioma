@@ -142,7 +142,7 @@ def main():
     parser.add_argument(
         "-c", "--config", 
         type=str, 
-        default="config.yaml",
+        default="./src/Meningioma/preprocessing/configs/planner.yaml",
         help="Path to YAML configuration file"
     )
     args = parser.parse_args()

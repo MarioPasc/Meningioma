@@ -7,8 +7,9 @@ paths:
 processing:
   threads: 4
 
+# "T1SIN" excluded
 modalities:
-  RM: ["T1", "T1SIN", "T2", "SUSC"]
+  RM: ["T1", "T2", "SUSC"]
   TC: ["TC"]
 
 preprocessing:
@@ -50,7 +51,8 @@ preprocessing:
         enable: true
         pulse: "T1"
         num_threads: 2
-        pulses_to_register: ["T1", "T2"]
+        pulses_to_register: ["T1", "T2", "SUSC"]
+        config_path: "/home/mariopasc/Python/Projects/Meningioma/src/Meningioma/preprocessing/configs/registration_sri24.yaml" 
     transpose:
       axis: [2, 1, 0]
     
@@ -67,8 +69,20 @@ preprocessing:
         brightness_threshold: 0.001
         fwhm: 0.5
         dimension: 3
+    brain_extraction:
+      apply_smoothing: False
+      bet_fractional_intensity: 0.01
+      perform_skull_erosion: False
+      erosion_radius: 1
     hounsfield_clipping:
-      range: [-1000, 1000]
-    bone_window: true
+      window_width: 80
+      window_level: 40
+    registration:
+      sri24:
+        enable: true
+        pulse: "T1"
+        num_threads: 2
+        pulses_to_register: ["TC"]
+        config_path: "/home/mariopasc/Python/Projects/Meningioma/src/Meningioma/preprocessing/configs/registration_sri24.yaml" 
     transpose:
       axis: [2, 1, 0]
