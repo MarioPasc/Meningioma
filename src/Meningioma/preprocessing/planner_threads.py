@@ -5,6 +5,7 @@ import numpy as np
 import logging
 import sys
 import argparse
+import yaml
 import nrrd  # type: ignore
 from tqdm import tqdm  # type: ignore
 from natsort import natsorted
@@ -16,32 +17,9 @@ from Meningioma.preprocessing.metadata import (
 )
 from Meningioma.utils.parse_nrrd_header import numpy_converter
 
-# User-defined variables
-
-
-# Define dataset root, output folder, and metadata CSV file.
-ROOT = "/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_Adquisition"
-OUTPUT_FOLDER = "/home/mariopasc/Python/Datasets/Meningiomas/jsons"
-
-
 # Create a logger
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
-
-# Ensure log directory exists
-os.makedirs(OUTPUT_FOLDER, exist_ok=True)
-
-# Define log file path
-log_file = os.path.join(OUTPUT_FOLDER, "preprocessing.log")
-
-# Avoid duplicate handlers
-if not logger.hasHandlers():
-    file_handler = logging.FileHandler(log_file)
-    formatter = logging.Formatter(
-        "%(asctime)s - %(levelname)s - %(name)s - %(message)s"
-    )
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
 
 
 # Redirect uncaught exceptions to logger
@@ -55,7 +33,8 @@ def log_exceptions(exc_type, exc_value, exc_traceback):
 sys.excepthook = log_exceptions
 
 
-def process_patient(pulse, patient_dir, output_folder, preprocessing_steps):
+
+def process_patient(pulse, patient_dir, output_folder, modality):
     """
     Process a single patient folder for a given pulse.
 
@@ -67,7 +46,7 @@ def process_patient(pulse, patient_dir, output_folder, preprocessing_steps):
       - volume: { route, dtype, min, max, transversal_axis }
       - header: the full header dictionary from the volume file (or {} on error)
       - segmentation: { route, total_volume } (total_volume is None if segmentation is missing)
-      - preprocessing_plan: (empty or loaded externally)
+      - modality: RM or TC
       - outputs: paths for preprocessed volume and log
     """
     patient_name = os.path.basename(patient_dir)  # e.g., "P1"
@@ -97,10 +76,10 @@ def process_patient(pulse, patient_dir, output_folder, preprocessing_steps):
         header = {}
         volume_info = {
             "route": volume_path,
-            "dtype": np.nan,
-            "min": np.nan,
-            "max": np.nan,
-            "transversal_axis": np.nan,
+            "dtype": None,
+            "min": None,
+            "max": None,
+            "transversal_axis": None,
         }
 
     # Process segmentation: if file does not exist, mark as control for this pulse.
@@ -108,7 +87,7 @@ def process_patient(pulse, patient_dir, output_folder, preprocessing_steps):
         segmentation_info = {"route": seg_path, "total_volume": None}
     else:
         try:
-            seg_img = nrrd.read(seg_path)
+            seg_img, _ = nrrd.read(seg_path)
             total_volume = int(np.sum(seg_img))
         except Exception as e:
             logger.error(f"Error processing segmentation file {seg_path}: {e}")
@@ -127,20 +106,19 @@ def process_patient(pulse, patient_dir, output_folder, preprocessing_steps):
         "volume": volume_info,
         "header": header,
         "segmentation": segmentation_info,
-        "preprocessing_plan": preprocessing_steps,
+        "modality": modality,
         "outputs": outputs,
     }
     return entry
 
 
-def process_pulse(pulse, pulse_folder, output_folder, preprocessing_steps):
+def process_pulse(pulse, pulse_folder, output_folder, modality):
     """
     Process all patients in a given pulse folder.
 
     Iterates over the patient folders in the pulse folder and returns a tuple:
     (pulse, { patient_id: pulse_entry, ... })
     """
-    # Remove hardcoded pulses list and use position parameter more carefully
     pulse_results = {}
     for patient in tqdm(
         natsorted(os.listdir(pulse_folder)),
@@ -150,7 +128,7 @@ def process_pulse(pulse, pulse_folder, output_folder, preprocessing_steps):
         patient_path = os.path.join(pulse_folder, patient)
         if os.path.isdir(patient_path) and patient.startswith("P"):
             entry = process_patient(
-                pulse, patient_path, output_folder, preprocessing_steps
+                pulse, patient_path, output_folder, modality
             )
             if entry is not None:
                 pulse_results[patient] = entry
@@ -162,25 +140,59 @@ def main():
         description="Generate patient-based preprocessing plan JSON with parallel pulse processing."
     )
     parser.add_argument(
-        "--threads",
-        type=int,
-        default=1,
-        help="Number of threads to use (between 1 and 4)",
+        "-c", "--config", 
+        type=str, 
+        default="config.yaml",
+        help="Path to YAML configuration file"
     )
     args = parser.parse_args()
-    threads = args.threads
+    
+    # Load configuration from YAML file
+    try:
+        with open(args.config, 'r') as file:
+            config = yaml.safe_load(file)
+    except Exception as e:
+        logger.error(f"Error reading config file: {e}")
+        return
+
+    # Extract configuration parameters
+    ROOT = config.get("paths", {}).get("root", "/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_Adquisition")
+    OUTPUT_FOLDER = config.get("paths", {}).get("output", "/home/mariopasc/Python/Datasets/Meningiomas/jsons")
+    threads = config.get("processing", {}).get("threads", 1)
+    
+    # Define preprocessing plans from config
+    preprocessing_plan = {
+        "RM": config.get("preprocessing", {}).get("RM", {}),
+        "TC": config.get("preprocessing", {}).get("TC", {})
+    }
+
+    # Ensure output directory exists
+    os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+
+    # Define log file path
+    log_file = os.path.join(OUTPUT_FOLDER, "preprocessing.log")
+
+    # Avoid duplicate handlers
+    if not logger.hasHandlers():
+        file_handler = logging.FileHandler(log_file)
+        formatter = logging.Formatter(
+            "%(asctime)s - %(levelname)s - %(name)s - %(message)s"
+        )
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+    
+    # Validate threads
     if threads < 1 or threads > 4:
         logger.error("Number of threads must be between 1 and 4.")
         return
 
     xlsx_path = os.path.join(ROOT, "metadata.xlsx")
     csv_path = os.path.join(OUTPUT_FOLDER, "metadata_recodified.csv")
-    # 1. Apply the hardcoded codification
+    # Apply the hardcoded codification
     apply_hardcoded_codification(
         xlsx_path=xlsx_path,
         output_csv_path=csv_path,
     )
-    preprocessing_steps = {}  # Currently empty
 
     # Load patient metadata using your helper function.
     try:
@@ -192,11 +204,11 @@ def main():
     # Global dictionary to collect patient data
     patients = {}
 
-    # Define modalities and their respective pulses
-    modalities = {
+    # Define modalities and their respective pulses from config
+    modalities = config.get("modalities", {
         "RM": ["T1", "T1SIN", "T2", "SUSC"],
         "TC": ["TC"]  
-    }
+    })
 
     # Prepare tasks for pulses that exist.
     tasks = []
@@ -225,7 +237,7 @@ def main():
                         pulse,
                         pulse_folder,
                         OUTPUT_FOLDER,
-                        preprocessing_steps,
+                        modality,
                     )
                 )
 
@@ -253,9 +265,15 @@ def main():
         # Add metadata for the patient (if available).
         patient_data["metadata"] = metadata_dict.get(patient_id, {})
 
+    # Create the new structure with preprocessing_plan at the top level
+    result = {
+        "preprocessing_plan": preprocessing_plan,
+        "data": patients
+    }
+
     output_json = os.path.join(OUTPUT_FOLDER, "plan_meningioma.json")
     with open(output_json, "w") as outfile:
-        json.dump(patients, outfile, indent=2, default=numpy_converter)
+        json.dump(result, outfile, indent=2, default=numpy_converter)
     logger.info(f"Preprocessing plan JSON saved to '{output_json}'.")
 
 

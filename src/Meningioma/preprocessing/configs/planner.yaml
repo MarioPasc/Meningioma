@@ -1,0 +1,24 @@
+# Dataset configuration
+paths:
+  root: "/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_Adquisition"
+  output: "/home/mariopasc/Python/Datasets/Meningiomas/jsons"
+
+processing:
+  threads: 4
+
+modalities:
+  RM: ["T1", "T1SIN", "T2", "SUSC"]
+  TC: ["TC"]
+
+preprocessing:
+  RM:
+    normalize: True
+    window_size: [256, 256, 128]
+    resampling: [1.0, 1.0, 1.0]  # mm
+    intensity_clipping: [-150, 350]
+    
+  TC:
+    normalize: True
+    window_size: [256, 256, 128]
+    hounsfield_clipping: [-1000, 1000]
+    bone_window: True
