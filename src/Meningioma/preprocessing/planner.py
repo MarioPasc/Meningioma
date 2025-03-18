@@ -7,7 +7,7 @@ from tqdm import tqdm  # type: ignore
 from natsort import natsorted
 import sys
 
-from Meningioma.image_processing.nrrd_processing import open_nrrd, transversal_axis
+from Meningioma.utils.transversal_axis_finder import open_nrrd, transversal_axis
 from Meningioma.preprocessing.metadata import (
     create_json_from_csv,
     apply_hardcoded_codification,
@@ -15,7 +15,7 @@ from Meningioma.preprocessing.metadata import (
 from Meningioma.utils.parse_nrrd_header import numpy_converter
 
 # Define dataset root, output folder, and metadata CSV file.
-ROOT = "/home/mario/Python/Datasets/Meningiomas/Meningioma_Adquisition/RM"
+ROOT = "/home/mario/Python/Datasets/Meningiomas/Meningioma_Adquisition"
 OUTPUT_FOLDER = "/home/mario/Python/Results/Meningioma/preprocessing"
 
 
@@ -132,7 +132,7 @@ def process_patient(pulse, patient_dir, output_folder, preprocessing_steps):
 
 
 def main():
-    xlsx_path = os.path.join(ROOT, "/metadata.xlsx")
+    xlsx_path = os.path.join(ROOT, "metadata.xlsx")  # Removed extra slash
 
     csv_path = os.path.join(OUTPUT_FOLDER, "metadata_recodified.csv")
     # 1. Apply the hardcoded codification
@@ -153,34 +153,41 @@ def main():
     # Global dictionary: key = patient id (e.g., "P1")
     patients = {}
 
-    pulses = ["T1", "T1SIN", "T2", "SUSC"]
+    # Define modalities and their respective pulses
+    modalities = {
+        "RM": ["T1", "T1SIN", "T2", "SUSC"],
+        "TC": ["TC"]  # TC as its own pulse type
+    }
 
-    # Use the "RM" subfolder if it exists.
-    rm_folder = os.path.join(ROOT, "RM")
-    dataset_folder = rm_folder if os.path.exists(rm_folder) else ROOT
-
-    # Iterate over each pulse folder.
-    for pulse in pulses:
-        logger.info(f"Processing {pulse} pulse")
-        pulse_folder = os.path.join(dataset_folder, pulse)
-        if not os.path.exists(pulse_folder):
-            logger.warning(
-                f"Warning: Pulse folder '{pulse_folder}' does not exist. Skipping pulse {pulse}."
-            )
+    # Process each modality
+    for modality, pulses in modalities.items():
+        modality_folder = os.path.join(ROOT, modality)
+        if not os.path.exists(modality_folder):
+            logger.warning(f"Warning: Modality folder '{modality_folder}' does not exist. Skipping {modality}.")
             continue
-        for patient in tqdm(
-            natsorted(os.listdir(pulse_folder)), desc=f"Processing patients in {pulse}"
-        ):
-            patient_path = os.path.join(pulse_folder, patient)
-            if os.path.isdir(patient_path) and patient.startswith("P"):
-                entry = process_patient(
-                    pulse, patient_path, OUTPUT_FOLDER, preprocessing_steps
+            
+        for pulse in pulses:
+            logger.info(f"Processing {modality}/{pulse}")
+            pulse_folder = os.path.join(modality_folder, pulse)
+            if not os.path.exists(pulse_folder):
+                logger.warning(
+                    f"Warning: Pulse folder '{pulse_folder}' does not exist. Skipping pulse {pulse}."
                 )
-                if entry is not None:
-                    # Group by patient: add the pulse entry under patients[patient]["pulses"]
-                    if patient not in patients:
-                        patients[patient] = {"pulses": {}}
-                    patients[patient]["pulses"][pulse] = entry
+                continue
+                
+            for patient in tqdm(
+                natsorted(os.listdir(pulse_folder)), desc=f"Processing patients in {pulse}"
+            ):
+                patient_path = os.path.join(pulse_folder, patient)
+                if os.path.isdir(patient_path) and patient.startswith("P"):
+                    entry = process_patient(
+                        pulse, patient_path, OUTPUT_FOLDER, preprocessing_steps
+                    )
+                    if entry is not None:
+                        # Group by patient: add the pulse entry under patients[patient]["pulses"]
+                        if patient not in patients:
+                            patients[patient] = {"pulses": {}}
+                        patients[patient]["pulses"][pulse] = entry
 
     # Compute patient-level "control": if all available pulses lack segmentation (total_volume is None), then control = True.
     for patient_id, patient_data in patients.items():

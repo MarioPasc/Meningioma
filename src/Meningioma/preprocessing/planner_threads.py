@@ -21,7 +21,7 @@ from Meningioma.utils.parse_nrrd_header import numpy_converter
 
 # Define dataset root, output folder, and metadata CSV file.
 ROOT = "/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_Adquisition"
-OUTPUT_FOLDER = "/home/mariopasc/Python/Results/Meningioma/preprocessing"
+OUTPUT_FOLDER = "/home/mariopasc/Python/Datasets/Meningiomas/jsons"
 
 
 # Create a logger
@@ -140,13 +140,12 @@ def process_pulse(pulse, pulse_folder, output_folder, preprocessing_steps):
     Iterates over the patient folders in the pulse folder and returns a tuple:
     (pulse, { patient_id: pulse_entry, ... })
     """
-    pulses = ["T1", "T1SIN", "T2", "SUSC"]
+    # Remove hardcoded pulses list and use position parameter more carefully
     pulse_results = {}
     for patient in tqdm(
         natsorted(os.listdir(pulse_folder)),
         desc=f"Processing patients in {pulse}",
         leave=True,
-        position=pulses.index(pulse),
     ):
         patient_path = os.path.join(pulse_folder, patient)
         if os.path.isdir(patient_path) and patient.startswith("P"):
@@ -193,32 +192,42 @@ def main():
     # Global dictionary to collect patient data
     patients = {}
 
-    pulses = ["T1", "T1SIN", "T2", "SUSC"]
-
-    # Use the "RM" subfolder if it exists.
-    rm_folder = os.path.join(ROOT, "RM")
-    dataset_folder = rm_folder if os.path.exists(rm_folder) else ROOT
+    # Define modalities and their respective pulses
+    modalities = {
+        "RM": ["T1", "T1SIN", "T2", "SUSC"],
+        "TC": ["TC"]  
+    }
 
     # Prepare tasks for pulses that exist.
     tasks = []
     with ProcessPoolExecutor(max_workers=threads) as executor:
-        for pulse in pulses:
-            pulse_folder = os.path.join(dataset_folder, pulse)
-            if not os.path.exists(pulse_folder):
-                logger.warning(
-                    f"Warning: Pulse folder '{pulse_folder}' does not exist. Skipping pulse {pulse}."
-                )
+        for modality, pulses in modalities.items():
+            modality_folder = os.path.join(ROOT, modality)
+            if not os.path.exists(modality_folder):
+                logger.warning(f"Warning: Modality folder '{modality_folder}' does not exist. Skipping {modality}.")
                 continue
-            # Submit one task per pulse folder.
-            tasks.append(
-                executor.submit(
-                    process_pulse,
-                    pulse,
-                    pulse_folder,
-                    OUTPUT_FOLDER,
-                    preprocessing_steps,
+                
+            for pulse in pulses:
+                logger.info(f"Processing {modality}/{pulse}")
+                if modality != "TC": 
+                    pulse_folder = os.path.join(modality_folder, pulse)
+                else:
+                    pulse_folder = modality_folder
+                if not os.path.exists(pulse_folder):
+                    logger.warning(
+                        f"Warning: Pulse folder '{pulse_folder}' does not exist. Skipping pulse {pulse}."
+                    )
+                    continue
+                # Submit one task per pulse folder.
+                tasks.append(
+                    executor.submit(
+                        process_pulse,
+                        pulse,
+                        pulse_folder,
+                        OUTPUT_FOLDER,
+                        preprocessing_steps,
+                    )
                 )
-            )
 
         # Collect results as they complete.
         for future in as_completed(tasks):

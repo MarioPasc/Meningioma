@@ -76,4 +76,4 @@ line_length = 88
 
 [[tool.mypy.overrides]]
 ignore_missing_imports = true
-module = ["scipy.*", "scienceplots", "pandas.*"]
+module = ["scipy.*", "scienceplots", "pandas.*", "nrrd"]
