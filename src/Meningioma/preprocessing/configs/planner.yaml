@@ -2,6 +2,7 @@
 paths:
   root: "/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_Adquisition"
   output: "/home/mariopasc/Python/Datasets/Meningiomas/jsons"
+  atlas_root: "/home/mariopasc/Python/Datasets/Meningiomas/ATLAS/sri24_spm8/templates"
 
 processing:
   threads: 4
@@ -12,13 +13,62 @@ modalities:
 
 preprocessing:
   RM:
-    normalize: True
-    window_size: [256, 256, 128]
-    resampling: [1.0, 1.0, 1.0]  # mm
-    intensity_clipping: [-150, 350]
+    remove_channel:
+      channel: 0
+    export_nifti: true
+    cast_volume: true
+    reorientation:
+      orientation: "LPS"
+    resample:
+      spacing: [1.0, 1.0, 1.0]
+    denoise:
+      enable: false
+      susan:
+        brightness_threshold: 0.001
+        fwhm: 0.5
+        dimension: 3
+    brain_mask:
+      threshold_method: "li"
+      structure_size_2d: 7
+      iterations_2d: 3
+      structure_size_3d: 3
+      iterations_3d: 1
+    bias_field_correction:
+      n4:
+        shrink_factor: 4
+        max_iterations: 100
+        control_points: 6
+        bias_field_fwhm: 0.1
+    brain_extraction:
+      fsl_bet:
+        frac: 0.5
+        robust: true
+        vertical_gradient: 0
+        skull: false
+    registration:
+      sri24:
+        enable: true
+        pulse: "T1"
+        num_threads: 2
+        pulses_to_register: ["T1", "T2"]
+    transpose:
+      axis: [2, 1, 0]
     
   TC:
-    normalize: True
-    window_size: [256, 256, 128]
-    hounsfield_clipping: [-1000, 1000]
-    bone_window: True
+    export_nifti: true
+    cast_volume: true
+    reorientation:
+      orientation: "LPS"
+    resample:
+      spacing: [1.0, 1.0, 1.0]
+    denoise:
+      enable: false
+      susan:
+        brightness_threshold: 0.001
+        fwhm: 0.5
+        dimension: 3
+    hounsfield_clipping:
+      range: [-1000, 1000]
+    bone_window: true
+    transpose:
+      axis: [2, 1, 0]

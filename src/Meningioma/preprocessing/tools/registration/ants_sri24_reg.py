@@ -19,10 +19,11 @@ import os
 import argparse
 import json
 import time
-from typing import Optional, Tuple, Dict, Any
+import yaml
+from typing import Optional, Tuple, Dict, Any, List
 
-import SimpleITK as sitk # type:ignore
-from nipype.interfaces.ants import Registration, ApplyTransforms  # type:ignore
+import SimpleITK as sitk
+from nipype.interfaces.ants import Registration, ApplyTransforms 
 
 
 def register_to_sri24(
@@ -37,6 +38,13 @@ def register_to_sri24(
     winsorize_lower_quantile: float = 0.005,
     winsorize_upper_quantile: float = 0.995,
     number_threads: int = 1,
+    transforms: Optional[List[str]] = None,
+    transform_parameters: Optional[List[Tuple]] = None,
+    iterations: Optional[List[List[int]]] = None,
+    shrink_factors: Optional[List[List[int]]] = None,
+    smoothing_sigmas: Optional[List[List[float]]] = None,
+    metrics: Optional[List[str]] = None,
+    metric_weights: Optional[List[float]] = None,
     verbose: bool = False,
 ) -> Tuple[sitk.Image, Dict[str, Any]]:
     """
@@ -65,6 +73,22 @@ def register_to_sri24(
             Lower quantile to winsorize the intensities. Default is 0.005.
         winsorize_upper_quantile (float, optional):
             Upper quantile to winsorize the intensities. Default is 0.995.
+        number_threads (int, optional):
+            Number of CPU threads to use. Default is 1.
+        transforms (List[str], optional):
+            Registration stages to use. Default is ["Rigid", "Affine", "SyN"].
+        transform_parameters (List[Tuple], optional):
+            Parameters for each transform stage. Default is [(0.1,), (0.1,), (0.1, 3.0, 0.0)].
+        iterations (List[List[int]], optional):
+            Number of iterations for each stage. Default is [[1000,500,250,100], [1000,500,250,100], [100,70,50,20]].
+        shrink_factors (List[List[int]], optional):
+            Shrink factors for each stage. Default is [[8,4,2,1], [8,4,2,1], [8,4,2,1]].
+        smoothing_sigmas (List[List[float]], optional):
+            Smoothing sigmas for each stage. Default is [[3,2,1,0], [3,2,1,0], [3,2,1,0]].
+        metrics (List[str], optional):
+            Similarity metrics for each stage. Default is ["MI", "MI", "CC"].
+        metric_weights (List[float], optional):
+            Weights for each metric. Default is [1.0, 1.0, 1.0].
         verbose (bool, optional):
             If True, prints debug info.
 
@@ -73,6 +97,27 @@ def register_to_sri24(
             - registered_image: SITK image of the moving image registered to the fixed image.
             - transform_params: Dictionary containing paths to the transformation files.
     """
+    # Default registration parameters if not provided
+    if transforms is None:
+        transforms = ["Rigid", "Affine", "SyN"]
+    
+    if transform_parameters is None:
+        transform_parameters = [(0.1,), (0.1,), (0.1, 3.0, 0.0)]
+    
+    if iterations is None:
+        iterations = [[1000, 500, 250, 100], [1000, 500, 250, 100], [100, 70, 50, 20]]
+    
+    if shrink_factors is None:
+        shrink_factors = [[8, 4, 2, 1], [8, 4, 2, 1], [8, 4, 2, 1]]
+    
+    if smoothing_sigmas is None:
+        smoothing_sigmas = [[3, 2, 1, 0], [3, 2, 1, 0], [3, 2, 1, 0]]
+    
+    if metrics is None:
+        metrics = ["MI", "MI", "CC"]
+    
+    if metric_weights is None:
+        metric_weights = [1.0, 1.0, 1.0]
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
 
@@ -112,6 +157,15 @@ def register_to_sri24(
 
     # Output paths
     transform_prefix = os.path.join(output_dir, output_transform_prefix)
+
+    # Set other registration parameters
+    reg.inputs.transforms = transforms
+    reg.inputs.transform_parameters = transform_parameters
+    reg.inputs.number_of_iterations = iterations
+    reg.inputs.shrink_factors = shrink_factors
+    reg.inputs.smoothing_sigmas = smoothing_sigmas
+    reg.inputs.metric = metrics
+    reg.inputs.metric_weight = metric_weights
 
     if verbose:
         print(f"[ANTS REGISTRATION] Transform prefix set to: {transform_prefix}")
@@ -256,23 +310,30 @@ def register_to_sri24_with_mask(
     output_dir: str,
     output_transform_prefix: str,
     output_image_prefix: str,
-    output_mask_prefix: str,
+    output_mask_path: str,
     initial_moving_transform: Optional[str] = None,
     dimension: int = 3,
     use_histogram_matching: bool = True,
     winsorize_lower_quantile: float = 0.005,
     winsorize_upper_quantile: float = 0.995,
-    num_threads: int = 1,
+    number_threads: int = 1,
+    transforms: Optional[List[str]] = None,
+    transform_parameters: Optional[List[Tuple]] = None,
+    iterations: Optional[List[List[int]]] = None,
+    shrink_factors: Optional[List[List[int]]] = None,
+    smoothing_sigmas: Optional[List[List[float]]] = None,
+    metrics: Optional[List[str]] = None,
+    metric_weights: Optional[List[float]] = None,
     verbose: bool = False,
 ) -> Tuple[sitk.Image, sitk.Image, Dict[str, Any]]:
     """
-    Register a moving image (T1 or T2) and its corresponding mask to a reference atlas (SRI24)
+    Register a moving image (T1) and its corresponding mask to a reference atlas (SRI24)
     using ANTs via Nipype, returning the registered image and mask as SimpleITK images
     along with the transformation parameters.
 
     Args:
         moving_image_sitk (sitk.Image):
-            The input 3D MRI volume (T1 or T2) as a SimpleITK image to be registered.
+            The input 3D MRI volume (T1) as a SimpleITK image to be registered.
         moving_mask_sitk (sitk.Image):
             The corresponding mask for the moving image as a SimpleITK image.
         fixed_image_sitk (sitk.Image):
@@ -281,8 +342,8 @@ def register_to_sri24_with_mask(
             Directory to save all output files.
         output_transform_prefix (str):
             Prefix for the output transformation files.
-        output_image_path (str):
-            Path to save the registered image.
+        output_image_prefix (str):
+            Path or filename for the registered image output.
         output_mask_path (str):
             Path to save the registered mask.
         initial_moving_transform (str, optional):
@@ -295,6 +356,22 @@ def register_to_sri24_with_mask(
             Lower quantile to winsorize the intensities. Default is 0.005.
         winsorize_upper_quantile (float, optional):
             Upper quantile to winsorize the intensities. Default is 0.995.
+        number_threads (int, optional):
+            Number of CPU threads to use. Default is 1.
+        transforms (List[str], optional):
+            Registration stages to use. Default is ["Rigid", "Affine", "SyN"].
+        transform_parameters (List[Tuple], optional):
+            Parameters for each transform stage. Default is [(0.1,), (0.1,), (0.1, 3.0, 0.0)].
+        iterations (List[List[int]], optional):
+            Number of iterations for each stage. Default is [[1000,500,250,100], [1000,500,250,100], [100,70,50,20]].
+        shrink_factors (List[List[int]], optional):
+            Shrink factors for each stage. Default is [[8,4,2,1], [8,4,2,1], [8,4,2,1]].
+        smoothing_sigmas (List[List[float]], optional):
+            Smoothing sigmas for each stage. Default is [[3,2,1,0], [3,2,1,0], [3,2,1,0]].
+        metrics (List[str], optional):
+            Similarity metrics for each stage. Default is ["MI", "MI", "CC"].
+        metric_weights (List[float], optional):
+            Weights for each metric. Default is [1.0, 1.0, 1.0].
         verbose (bool, optional):
             If True, prints debug info.
 
@@ -322,10 +399,11 @@ def register_to_sri24_with_mask(
         else os.path.join(output_dir, output_image_prefix + ".nii.gz")
     )
 
-    output_mask_path = (
-        os.path.join(output_dir, output_mask_prefix)
-        if output_mask_prefix.endswith(".nii.gz")
-        else os.path.join(output_dir, output_mask_prefix + ".nii.gz")
+    # Build output paths
+    output_image_path = (
+        os.path.join(output_dir, output_image_prefix)
+        if output_image_prefix.endswith(".nii.gz")
+        else os.path.join(output_dir, output_image_prefix + ".nii.gz")
     )
 
     if verbose:
@@ -344,7 +422,14 @@ def register_to_sri24_with_mask(
         use_histogram_matching=use_histogram_matching,
         winsorize_lower_quantile=winsorize_lower_quantile,
         winsorize_upper_quantile=winsorize_upper_quantile,
-        number_threads=num_threads,
+        number_threads=number_threads,
+        transforms=transforms,
+        transform_parameters=transform_parameters,
+        iterations=iterations,
+        shrink_factors=shrink_factors,
+        smoothing_sigmas=smoothing_sigmas,
+        metrics=metrics,
+        metric_weights=metric_weights,
         verbose=verbose,
     )
 
@@ -414,153 +499,127 @@ def register_to_sri24_with_mask(
 
 
 def main():
-    """Command-line interface for the registration function."""
+    """Command-line interface for the registration function using YAML configuration."""
     parser = argparse.ArgumentParser(
-        description="Register a T1/T2 image to SRI24 atlas."
+        description="Register a T1/T2 image to SRI24 atlas using configuration from a YAML file."
     )
     parser.add_argument(
-        "input_image", type=str, help="Path to the input image file (NIfTI format)."
-    )
-    parser.add_argument(
-        "--atlas_path",
-        type=str,
-        required=True,
-        help="Path to the SRI24 atlas image (NIfTI format).",
-    )
-    parser.add_argument(
-        "--mask_path",
-        type=str,
-        default=None,
-        help="Path to the mask file corresponding to the input image.",
-    )
-    parser.add_argument(
-        "--output_dir",
-        type=str,
-        default="./registration_output",
-        help="Directory to save all output files.",
-    )
-    parser.add_argument(
-        "--output_registered",
-        type=str,
-        default=None,
-        help="Path to save the registered output image.",
-    )
-    parser.add_argument(
-        "--output_mask",
-        type=str,
-        default=None,
-        help="Path to save the registered output mask (if mask_path is provided).",
-    )
-    parser.add_argument(
-        "--output_transform_prefix",
-        type=str,
-        default="transform_",
-        help="Prefix for the output transformation files.",
-    )
-    parser.add_argument(
-        "--initial_transform",
-        type=str,
-        default=None,
-        help="Optional initial transform to apply.",
-    )
-    parser.add_argument(
-        "--histogram_matching",
-        action="store_true",
-        default=True,
-        help="Use histogram matching prior to registration.",
-    )
-    parser.add_argument(
-        "--num_threads",
-        type=int,
-        default=1,
-        help="Number of threads to use for processing.",
-    )
-    parser.add_argument(
-        "--verbose", action="store_true", help="Print detailed progress information."
+        "config_path", type=str, help="Path to the YAML configuration file."
     )
 
     args = parser.parse_args()
+    
+    # Load configuration from YAML
+    try:
+        with open(args.config_path, 'r') as f:
+            config = yaml.safe_load(f)
+    except Exception as e:
+        print(f"Error loading configuration file: {e}")
+        return
 
     # Create output directory if it doesn't exist
-    os.makedirs(args.output_dir, exist_ok=True)
+    output_dir = config.get('output_dir', './registration_output')
+    os.makedirs(output_dir, exist_ok=True)
 
-    # Set default output paths if not provided
-    if args.output_registered is None:
-        args.output_registered = os.path.join(args.output_dir, "registered.nii.gz")
-
-    if args.mask_path is not None and args.output_mask is None:
-        args.output_mask = os.path.join(args.output_dir, "registered_mask.nii.gz")
+    # Set verbose mode from config
+    verbose = config.get('verbose', False)
 
     # Load input images
-    if args.verbose:
-        print(f"[ANTS REGISTRATION] Loading input image: {args.input_image}")
-        print(f"[ANTS REGISTRATION] Loading atlas image: {args.atlas_path}")
+    moving_image_path = config.get('input_image')
+    atlas_path = config.get('atlas_path')
+    mask_path = config.get('mask_path')
+    
+    if not moving_image_path or not atlas_path:
+        print("Missing required parameters: input_image and atlas_path must be provided")
+        return
+        
+    if verbose:
+        print(f"[ANTS REGISTRATION] Loading input image: {moving_image_path}")
+        print(f"[ANTS REGISTRATION] Loading atlas image: {atlas_path}")
 
-    moving_image = sitk.ReadImage(args.input_image)
-    fixed_image = sitk.ReadImage(args.atlas_path)
+    try:
+        moving_image = sitk.ReadImage(moving_image_path)
+        fixed_image = sitk.ReadImage(atlas_path)
+    except Exception as e:
+        print(f"Error loading images: {e}")
+        return
 
-    if args.verbose:
+    # Extract registration parameters from config
+    reg_params = {
+        'output_dir': output_dir,
+        'output_transform_prefix': config.get('output_transform_prefix', 'transform_'),
+        'initial_moving_transform': config.get('initial_transform'),
+        'use_histogram_matching': config.get('histogram_matching', True),
+        'dimension': config.get('dimension', 3),
+        'winsorize_lower_quantile': config.get('winsorize_lower_quantile', 0.005),
+        'winsorize_upper_quantile': config.get('winsorize_upper_quantile', 0.995),
+        'number_threads': config.get('num_threads', 1),
+        'verbose': verbose
+    }
+    
+    # Set output paths
+    output_registered = config.get('output_registered')
+    if not output_registered:
+        output_registered = os.path.join(output_dir, "registered.nii.gz")
+    elif not os.path.isabs(output_registered):
+        output_registered = os.path.join(output_dir, output_registered)
+    
+    reg_params['output_image_path'] = output_registered
+    
+    if verbose:
         print(f"[ANTS REGISTRATION] Moving image size: {moving_image.GetSize()}")
         print(f"[ANTS REGISTRATION] Fixed image size: {fixed_image.GetSize()}")
-        print(f"[ANTS REGISTRATION] Output directory: {args.output_dir}")
-        print(f"[ANTS REGISTRATION] Output registered image: {args.output_registered}")
+        print(f"[ANTS REGISTRATION] Output directory: {output_dir}")
+        print(f"[ANTS REGISTRATION] Output registered image: {output_registered}")
 
     # Check if we're processing a mask as well
-    if args.mask_path:
-        if args.verbose:
-            print(f"[ANTS REGISTRATION] Loading mask image: {args.mask_path}")
-            print(f"[ANTS REGISTRATION] Output registered mask: {args.output_mask}")
+    if mask_path:
+        output_mask = config.get('output_mask')
+        if not output_mask:
+            output_mask = os.path.join(output_dir, "registered_mask.nii.gz")
+        elif not os.path.isabs(output_mask):
+            output_mask = os.path.join(output_dir, output_mask)
+            
+        if verbose:
+            print(f"[ANTS REGISTRATION] Loading mask image: {mask_path}")
+            print(f"[ANTS REGISTRATION] Output registered mask: {output_mask}")
 
-        moving_mask = sitk.ReadImage(args.mask_path)
+        try:
+            moving_mask = sitk.ReadImage(mask_path)
+        except Exception as e:
+            print(f"Error loading mask image: {e}")
+            return
 
-        if args.verbose:
+        if verbose:
             print(f"[ANTS REGISTRATION] Mask image size: {moving_mask.GetSize()}")
             print("[ANTS REGISTRATION] Performing registration with mask...")
 
         # Perform registration with mask
-        registered_image, registered_mask, transform_params = (
-            register_to_sri24_with_mask(
-                moving_image_sitk=moving_image,
-                moving_mask_sitk=moving_mask,
-                fixed_image_sitk=fixed_image,
-                output_dir=args.output_dir,
-                output_transform_prefix=args.output_transform_prefix,
-                output_image_path=args.output_registered,
-                output_mask_path=args.output_mask,
-                initial_moving_transform=args.initial_transform,
-                use_histogram_matching=args.histogram_matching,
-                num_threads=args.num_threads,
-                verbose=args.verbose,
-            )
+        registered_image, registered_mask, transform_params = register_to_sri24_with_mask(
+            moving_image_sitk=moving_image,
+            moving_mask_sitk=moving_mask,
+            fixed_image_sitk=fixed_image,
+            output_image_prefix=os.path.basename(output_registered),
+            output_mask_path=output_mask,
+            **reg_params
         )
 
     else:
         # Perform registration without mask
-        if args.verbose:
+        if verbose:
             print("[ANTS REGISTRATION] Performing registration without mask...")
 
         registered_image, transform_params = register_to_sri24(
             moving_image_sitk=moving_image,
             fixed_image_sitk=fixed_image,
-            output_dir=args.output_dir,
-            output_transform_prefix=args.output_transform_prefix,
-            output_image_path=args.output_registered,
-            initial_moving_transform=args.initial_transform,
-            use_histogram_matching=args.histogram_matching,
-            number_threads=args.num_threads,
-            verbose=args.verbose,
+            **reg_params
         )
 
-    if args.verbose:
+    if verbose:
         print("[ANTS REGISTRATION] Registration completed successfully")
-        print(f"[ANTS REGISTRATION] All outputs saved to directory: {args.output_dir}")
-        print(
-            f"[ANTS REGISTRATION] Transform files saved with prefix: {args.output_transform_prefix}"
-        )
-        print(
-            f"[ANTS REGISTRATION] Transform parameters saved to: {os.path.join(args.output_dir, 'transform_params.json')}"
-        )
-
+        print(f"[ANTS REGISTRATION] All outputs saved to directory: {output_dir}")
+        print(f"[ANTS REGISTRATION] Transform files saved with prefix: {reg_params['output_transform_prefix']}")
+        print(f"[ANTS REGISTRATION] Transform parameters saved to: {os.path.join(output_dir, 'transform_params.json')}")
 
 if __name__ == "__main__":
     main()

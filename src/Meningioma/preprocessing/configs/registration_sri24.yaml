@@ -1,0 +1,39 @@
+# Example YAML configuration for ANTs registration
+
+# Input and output paths
+input_image: /path/to/input/image.nii.gz
+atlas_path: /path/to/atlas/SRI24.nii.gz
+mask_path: /path/to/input/mask.nii.gz  # Optional
+output_dir: /path/to/output
+output_registered: registered.nii.gz
+output_mask: registered_mask.nii.gz
+output_transform_prefix: transform_
+
+# Registration parameters
+dimension: 3
+histogram_matching: true
+winsorize_lower_quantile: 0.005
+winsorize_upper_quantile: 0.995
+num_threads: 8
+verbose: true
+
+# Advanced registration parameters
+transforms: ["Rigid", "Affine", "SyN"]
+transform_parameters: 
+  - [0.1]
+  - [0.1]
+  - [0.1, 3.0, 0.0]
+iterations:
+  - [1000, 500, 250, 100]
+  - [1000, 500, 250, 100]
+  - [100, 70, 50, 20]
+shrink_factors:
+  - [8, 4, 2, 1]
+  - [8, 4, 2, 1]
+  - [8, 4, 2, 1]
+smoothing_sigmas:
+  - [3, 2, 1, 0]
+  - [3, 2, 1, 0]
+  - [3, 2, 1, 0]
+metrics: ["MI", "MI", "CC"]
+metric_weights: [1.0, 1.0, 1.0]
