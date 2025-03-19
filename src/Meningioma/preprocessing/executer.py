@@ -8,6 +8,9 @@ import collections
 
 from Meningioma.preprocessing.tools.remove_extra_channels import remove_first_channel
 from Meningioma.preprocessing.tools.nrrd_to_nifti import nifti_write_3d
+from Meningioma.preprocessing.tools.casting import cast_volume_and_mask
+from Meningioma.preprocessing.tools.reorient import reorient_images
+
 
 
 def load_plan(json_path):
@@ -91,6 +94,8 @@ def rm_pipeline(
     Implements the full RM preprocessing pipeline with steps including:
     - Channel removal
     - NIfTI export
+    - Volume casting
+    - Image reorientation
     
     Args:
         pulse_data: Dictionary containing pulse data and metadata
@@ -109,6 +114,7 @@ def rm_pipeline(
     processed_pulse = pulse_data.copy()
     current_image = None
     current_header = None
+    current_mask = None
     
     if verbose:
         print(f"\n[RM / {pulse_name}] Starting RM preprocessing pipeline")
@@ -151,7 +157,7 @@ def rm_pipeline(
             
             # If we have a current_image from a previous step, use it
             # Otherwise, use the original volume path
-            input_data: Union[str, Tuple[sitk.Image,collections.OrderedDict]] = (current_image, current_header) if current_image is not None else pulse_data["volume_path"] # type: ignore
+            input_data = (current_image, current_header) if current_image is not None else pulse_data["volume_path"]
             
             # Convert to NIfTI
             output_path = nifti_write_3d(
@@ -166,9 +172,97 @@ def rm_pipeline(
             if verbose:
                 print(f"[RM / NIFTI EXPORT] Saved to {output_path}")
             
+            # Load the exported NIfTI for further processing
+            current_image = sitk.ReadImage(output_path)
+            
         except Exception as e:
             print(f"[RM / NIFTI EXPORT] Error: {str(e)}")
             # Continue even if NIfTI export fails
+    
+    # 3. Load the segmentation mask if we have a current_image
+    if current_image is not None:
+        try:
+            if verbose:
+                print(f"[RM / MASK LOADING] Loading segmentation mask")
+            
+            current_mask = sitk.ReadImage(pulse_data["mask_path"])
+            
+            if verbose:
+                print(f"[RM / MASK LOADING] Mask loaded: size={current_mask.GetSize()}, "
+                      f"dimensions={current_mask.GetDimension()}")
+                
+        except Exception as e:
+            print(f"[RM / MASK LOADING] Error loading mask: {str(e)}")
+            # Continue processing even if mask loading fails
+    
+    # 4. cast_volume (if it exists in the plan)
+    if current_image is not None and current_mask is not None and "cast_volume" in preprocessing_plan and preprocessing_plan["cast_volume"]:
+        if verbose:
+            print(f"[RM / CAST VOLUME] Casting volume to float32 and mask to uint8")
+        
+        try:
+            # Cast volume to float32 and mask to uint8
+            current_image, current_mask = cast_volume_and_mask(
+                current_image, 
+                current_mask
+            )
+            
+            # Save the cast volume and mask
+            cast_volume_path = patient_output_dir / f"{pulse_name}_{patient_id.replace('P', '')}_cast.nii.gz"
+            cast_mask_path = patient_output_dir / f"{pulse_name}_{patient_id.replace('P', '')}_mask_cast.nii.gz"
+            
+            sitk.WriteImage(current_image, str(cast_volume_path))
+            sitk.WriteImage(current_mask, str(cast_mask_path))
+            
+            # Update the processed data with the new file paths
+            processed_pulse["cast_volume_path"] = str(cast_volume_path)
+            processed_pulse["cast_mask_path"] = str(cast_mask_path)
+            
+            if verbose:
+                print(f"[RM / CAST VOLUME] Volume cast to {current_image.GetPixelID()} and saved to {cast_volume_path}")
+                print(f"[RM / CAST VOLUME] Mask cast to {current_mask.GetPixelID()} and saved to {cast_mask_path}")
+            
+        except Exception as e:
+            print(f"[RM / CAST VOLUME] Error: {str(e)}")
+            # Continue even if casting fails
+    
+    # 5. reorientation (if it exists in the plan)
+    if current_image is not None and current_mask is not None and "reorientation" in preprocessing_plan:
+        if verbose:
+            print(f"[RM / REORIENTATION] Reorienting volume and mask")
+        
+        try:
+            # Get the desired orientation
+            orientation = preprocessing_plan["reorientation"].get("orientation", "LPS")
+            
+            if verbose:
+                print(f"[RM / REORIENTATION] Target orientation: {orientation}")
+            
+            # Reorient the volume and mask
+            current_image, current_mask = reorient_images(
+                current_image, 
+                current_mask, 
+                orientation
+            )
+            
+            # Save the reoriented volume and mask
+            reorient_volume_path = patient_output_dir / f"{pulse_name}_{patient_id.replace('P', '')}_reoriented.nii.gz"
+            reorient_mask_path = patient_output_dir / f"{pulse_name}_{patient_id.replace('P', '')}_mask_reoriented.nii.gz"
+            
+            sitk.WriteImage(current_image, str(reorient_volume_path))
+            sitk.WriteImage(current_mask, str(reorient_mask_path))
+            
+            # Update the processed data with the new file paths
+            processed_pulse["reoriented_volume_path"] = str(reorient_volume_path)
+            processed_pulse["reoriented_mask_path"] = str(reorient_mask_path)
+            
+            if verbose:
+                print(f"[RM / REORIENTATION] Volume reoriented to {orientation} and saved to {reorient_volume_path}")
+                print(f"[RM / REORIENTATION] Mask reoriented to {orientation} and saved to {reorient_mask_path}")
+            
+        except Exception as e:
+            print(f"[RM / REORIENTATION] Error: {str(e)}")
+            # Continue even if reorientation fails
     
     # Return the processed pulse data and success status
     return processed_pulse, True
