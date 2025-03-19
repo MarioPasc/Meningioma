@@ -49,9 +49,6 @@ preprocessing:
     registration:
       sri24:
         enable: true
-        pulse: "T1"
-        num_threads: 2
-        pulses_to_register: ["T1", "T2", "SUSC"]
         config_path: "/home/mariopasc/Python/Projects/Meningioma/src/Meningioma/preprocessing/configs/registration_sri24.yaml" 
     transpose:
       axis: [2, 1, 0]

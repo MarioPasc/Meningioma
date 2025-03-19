@@ -48,10 +48,9 @@ from typing import Optional, Tuple, Dict, Any, List, Union
 import SimpleITK as sitk
 from nipype.interfaces.ants import Registration, ApplyTransforms 
 
-
 def register_to_sri24(
     moving_image_sitk: sitk.Image,
-    fixed_image_sitk: sitk.Image,
+    atlas_path: str,
     output_dir: str,
     output_transform_prefix: str,
     output_image_path: str,
@@ -68,7 +67,15 @@ def register_to_sri24(
     smoothing_sigmas: Optional[List[List[float]]] = None,
     metrics: Optional[List[str]] = None,
     metric_weights: Optional[List[float]] = None,
+    sampling_strategy: Optional[List[str]] = None, 
+    sampling_percentage: Optional[List[float]] = None,
+    radius_or_number_of_bins: Optional[List[int]] = None,
+    convergence_threshold: Optional[List[float]] = None,
+    convergence_window_size: Optional[List[int]] = None,
+    sigma_units: Optional[List[str]] = None,
+    write_composite_transform: bool = True,
     verbose: bool = False,
+    cleanup: bool = True,
 ) -> Tuple[sitk.Image, Dict[str, Any]]:
     """
     Register a moving image (T1 or T2) to a reference atlas (SRI24)
@@ -112,6 +119,20 @@ def register_to_sri24(
             Similarity metrics for each stage. Default is ["MI", "MI", "CC"].
         metric_weights (List[float], optional):
             Weights for each metric. Default is [1.0, 1.0, 1.0].
+        sampling_strategy (List[str], optional):
+            Sampling strategy for each stage. Default is ["Regular", "Regular", "None"].
+        sampling_percentage (List[float], optional):
+            Sampling percentage for each stage. Default is [0.25, 0.25, None].
+        radius_or_number_of_bins (List[int], optional):
+            Radius or number of bins for each stage. Default is [32, 32, 4].
+        convergence_threshold (List[float], optional):
+            Convergence threshold for each stage. Default is [1e-6, 1e-6, 1e-6].
+        convergence_window_size (List[int], optional):
+            Convergence window size for each stage. Default is [10, 10, 10].
+        sigma_units (List[str], optional):
+            Sigma units for each stage. Default is ["vox", "vox", "vox"].
+        write_composite_transform (bool, optional):
+            Whether to write composite transform. Default is True.
         verbose (bool, optional):
             If True, prints debug info.
 
@@ -141,6 +162,25 @@ def register_to_sri24(
     
     if metric_weights is None:
         metric_weights = [1.0, 1.0, 1.0]
+        
+    if sampling_strategy is None:
+        sampling_strategy = ["Regular", "Regular", "None"]
+        
+    if sampling_percentage is None:
+        sampling_percentage = [0.25, 0.25, 0.0]
+        
+    if radius_or_number_of_bins is None:
+        radius_or_number_of_bins = [32, 32, 4]
+        
+    if convergence_threshold is None:
+        convergence_threshold = [1e-6, 1e-6, 1e-6]
+        
+    if convergence_window_size is None:
+        convergence_window_size = [10, 10, 10]
+        
+    if sigma_units is None:
+        sigma_units = ["vox", "vox", "vox"]
+    
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
 
@@ -150,16 +190,15 @@ def register_to_sri24(
         print(f"[ANTS REGISTRATION] Output directory: {output_dir}")
 
     # 1) Save input images as NIfTI
-    moving_nii_path = os.path.join(output_dir, "moving_input.nii.gz")
-    fixed_nii_path = os.path.join(output_dir, "fixed_atlas.nii.gz")
+    moving_nii_path = os.path.abspath(os.path.join(output_dir, "moving_input.nii.gz"))
+    fixed_nii_path = atlas_path
 
     if verbose:
         print(
-            f"[ANTS REGISTRATION] Saving input images to: {moving_nii_path} and {fixed_nii_path}"
+            f"[ANTS REGISTRATION] Temporarily Saving input images to: {moving_nii_path}"
         )
 
     sitk.WriteImage(moving_image_sitk, moving_nii_path)
-    sitk.WriteImage(fixed_image_sitk, fixed_nii_path)
 
     # 2) Configure Nipype ANTS Registration
     if verbose:
@@ -190,6 +229,15 @@ def register_to_sri24(
     reg.inputs.metric = metrics
     reg.inputs.metric_weight = metric_weights
 
+    # Set advanced registration parameters
+    reg.inputs.sampling_strategy = sampling_strategy
+    reg.inputs.sampling_percentage = sampling_percentage
+    reg.inputs.radius_or_number_of_bins = radius_or_number_of_bins
+    reg.inputs.convergence_threshold = convergence_threshold
+    reg.inputs.convergence_window_size = convergence_window_size
+    reg.inputs.sigma_units = sigma_units
+    reg.inputs.write_composite_transform = write_composite_transform
+
     if verbose:
         print(f"[ANTS REGISTRATION] Transform prefix set to: {transform_prefix}")
 
@@ -203,46 +251,6 @@ def register_to_sri24(
                 f"[ANTS REGISTRATION] Using initial transform: {initial_moving_transform}"
             )
         reg.inputs.initial_moving_transform = initial_moving_transform
-
-    # Registration stages: rigid, affine, and SyN (nonlinear)
-    reg.inputs.transforms = ["Rigid", "Affine", "SyN"]
-
-    # Number of iterations for each stage
-    reg.inputs.number_of_iterations = [
-        [1000, 500, 250, 100],
-        [1000, 500, 250, 100],
-        [100, 70, 50, 20],
-    ]
-
-    # Shrink factors for multi-resolution optimization
-    reg.inputs.shrink_factors = [[8, 4, 2, 1], [8, 4, 2, 1], [8, 4, 2, 1]]
-
-    # Smoothing sigmas for each level (in mm)
-    reg.inputs.smoothing_sigmas = [[3, 2, 1, 0], [3, 2, 1, 0], [3, 2, 1, 0]]
-
-    # Similarity metric for each stage
-    reg.inputs.metric = ["MI", "MI", "CC"]
-
-    # Fixed image for each stage
-    reg.inputs.metric_weight = [1.0, 1.0, 1.0]
-
-    # Sampling strategy and percentage
-    reg.inputs.sampling_strategy = ["Regular", "Regular", "None"]
-    reg.inputs.sampling_percentage = [0.25, 0.25, None]
-
-    # Radius or number of bins
-    reg.inputs.radius_or_number_of_bins = [32, 32, 4]
-
-    # Transform parameters
-    reg.inputs.transform_parameters = [(0.1,), (0.1,), (0.1, 3.0, 0.0)]
-
-    # Convergence threshold and window size
-    reg.inputs.convergence_threshold = [1e-6, 1e-6, 1e-6]
-    reg.inputs.convergence_window_size = [10, 10, 10]
-
-    # Additional parameters for SyN
-    reg.inputs.sigma_units = ["vox", "vox", "vox"]
-    reg.inputs.write_composite_transform = True
 
     if verbose:
         print(f"[ANTS REGISTRATION] Registration configuration complete")
@@ -272,9 +280,6 @@ def register_to_sri24(
         print(f"[ANTS REGISTRATION] Loading registered image from: {registered_path}")
 
     registered_sitk = sitk.ReadImage(registered_path)
-
-    # Keep original metadata
-    registered_sitk.CopyInformation(fixed_image_sitk)
 
     # Collect transform files
     transform_params = {
@@ -322,14 +327,27 @@ def register_to_sri24(
         print("[ANTS REGISTRATION] Transform files:")
         for k, v in transform_params.items():
             print(f"[ANTS REGISTRATION]   {k}: {v}")
-
+    # Clean up temporary files
+    if cleanup and verbose:
+        print("[ANTS REGISTRATION] Cleaning up temporary files...")
+        
+    if cleanup:
+        temp_files = [moving_nii_path]
+        for temp_file in temp_files:
+            if os.path.exists(temp_file):
+                try:
+                    os.remove(temp_file)
+                    if verbose:
+                        print(f"[ANTS REGISTRATION] Removed temporary file: {temp_file}")
+                except Exception as e:
+                    if verbose:
+                        print(f"[ANTS REGISTRATION] Failed to remove temporary file {temp_file}: {e}")
     return registered_sitk, transform_params
-
 
 def register_to_sri24_with_mask(
     moving_image_sitk: sitk.Image,
     moving_mask_sitk: sitk.Image,
-    fixed_image_sitk: sitk.Image,
+    atlas_path: str,
     output_dir: str,
     output_transform_prefix: str,
     output_image_prefix: str,
@@ -347,7 +365,15 @@ def register_to_sri24_with_mask(
     smoothing_sigmas: Optional[List[List[float]]] = None,
     metrics: Optional[List[str]] = None,
     metric_weights: Optional[List[float]] = None,
+    sampling_strategy: Optional[List[str]] = None, 
+    sampling_percentage: Optional[List[float]] = None,
+    radius_or_number_of_bins: Optional[List[int]] = None,
+    convergence_threshold: Optional[List[float]] = None,
+    convergence_window_size: Optional[List[int]] = None,
+    sigma_units: Optional[List[str]] = None,
+    write_composite_transform: bool = True,
     verbose: bool = False,
+    cleanup: bool = True
 ) -> Tuple[sitk.Image, sitk.Image, Dict[str, Any]]:
     """
     Register a moving image (T1) and its corresponding mask to a reference atlas (SRI24)
@@ -359,8 +385,8 @@ def register_to_sri24_with_mask(
             The input 3D MRI volume (T1) as a SimpleITK image to be registered.
         moving_mask_sitk (sitk.Image):
             The corresponding mask for the moving image as a SimpleITK image.
-        fixed_image_sitk (sitk.Image):
-            The reference atlas (SRI24) as a SimpleITK image.
+        atlas_path (str):
+            The reference atlas (SRI24) as a path.
         output_dir (str):
             Directory to save all output files.
         output_transform_prefix (str):
@@ -395,6 +421,20 @@ def register_to_sri24_with_mask(
             Similarity metrics for each stage. Default is ["MI", "MI", "CC"].
         metric_weights (List[float], optional):
             Weights for each metric. Default is [1.0, 1.0, 1.0].
+        sampling_strategy (List[str], optional):
+            Sampling strategy for each stage. Default is ["Regular", "Regular", "None"].
+        sampling_percentage (List[float], optional):
+            Sampling percentage for each stage. Default is [0.25, 0.25, None].
+        radius_or_number_of_bins (List[int], optional):
+            Radius or number of bins for each stage. Default is [32, 32, 4].
+        convergence_threshold (List[float], optional):
+            Convergence threshold for each stage. Default is [1e-6, 1e-6, 1e-6].
+        convergence_window_size (List[int], optional):
+            Convergence window size for each stage. Default is [10, 10, 10].
+        sigma_units (List[str], optional):
+            Sigma units for each stage. Default is ["vox", "vox", "vox"].
+        write_composite_transform (bool, optional):
+            Whether to write composite transform. Default is True.
         verbose (bool, optional):
             If True, prints debug info.
 
@@ -422,13 +462,6 @@ def register_to_sri24_with_mask(
         else os.path.join(output_dir, output_image_prefix + ".nii.gz")
     )
 
-    # Build output paths
-    output_image_path = (
-        os.path.join(output_dir, output_image_prefix)
-        if output_image_prefix.endswith(".nii.gz")
-        else os.path.join(output_dir, output_image_prefix + ".nii.gz")
-    )
-
     if verbose:
         print(f"[ANTS REGISTRATION] Saved input mask to: {mask_path}")
         print("[ANTS REGISTRATION] Starting registration of image volume")
@@ -436,7 +469,7 @@ def register_to_sri24_with_mask(
     # First, register the image
     registered_image, transform_params = register_to_sri24(
         moving_image_sitk=moving_image_sitk,
-        fixed_image_sitk=fixed_image_sitk,
+        atlas_path=atlas_path,
         output_dir=output_dir,
         output_transform_prefix=output_transform_prefix,
         output_image_path=output_image_path,
@@ -453,7 +486,15 @@ def register_to_sri24_with_mask(
         smoothing_sigmas=smoothing_sigmas,
         metrics=metrics,
         metric_weights=metric_weights,
+        sampling_strategy=sampling_strategy,
+        sampling_percentage=sampling_percentage,
+        radius_or_number_of_bins=radius_or_number_of_bins,
+        convergence_threshold=convergence_threshold,
+        convergence_window_size=convergence_window_size,
+        sigma_units=sigma_units,
+        write_composite_transform=write_composite_transform,
         verbose=verbose,
+        cleanup=cleanup
     )
 
     # Now, apply the same transformation to the mask
@@ -498,7 +539,8 @@ def register_to_sri24_with_mask(
 
     # Load the transformed mask
     registered_mask = sitk.ReadImage(at_result.outputs.output_image)
-    registered_mask.CopyInformation(fixed_image_sitk)
+    fixed_image = sitk.ReadImage(atlas_path)  # Read the atlas image
+    registered_mask.CopyInformation(fixed_image)
 
     # Update transform_params to include mask paths
     transform_params["input_mask_path"] = mask_path
@@ -517,108 +559,90 @@ def register_to_sri24_with_mask(
         print(
             f"[ANTS REGISTRATION] Updated transform parameters saved to: {transform_params_path}"
         )
-
+    # Clean up temporary files
+    if cleanup and verbose:
+        print("[ANTS REGISTRATION] Cleaning up temporary files...")
+        
+    if cleanup:
+        temp_files = [mask_path]
+        for temp_file in temp_files:
+            if os.path.exists(temp_file):
+                try:
+                    os.remove(temp_file)
+                    if verbose:
+                        print(f"[ANTS REGISTRATION] Removed temporary file: {temp_file}")
+                except Exception as e:
+                    if verbose:
+                        print(f"[ANTS REGISTRATION] Failed to remove temporary file {temp_file}: {e}")
     return registered_image, registered_mask, transform_params
 
 def register_image_to_sri24(
-    input_image_path: str,
-    mask_path: Optional[str] = None,
-    output_dir: str = './registration_output',
-    output_registered: Optional[str] = None,
-    output_mask: Optional[str] = None,
-    transform_prefix: str = 'transform_',
-    config_path: Optional[str] = None,
+    moving_image: sitk.Image,
+    moving_mask: Optional[sitk.Image] = None,
+    config_path: str = "../../configs/registration_sri24.yaml",
     verbose: bool = False,
-    number_threads: int = 1,
-    **kwargs
+    cleanup:bool = True,
 ) -> Union[Tuple[sitk.Image, Dict[str, Any]], Tuple[sitk.Image, sitk.Image, Dict[str, Any]]]:
     """
-    Register an image to the SRI24 atlas with optional mask, allowing for both direct parameters
-    and YAML configuration.
+    Register a SimpleITK image to the SRI24 atlas with optional mask using a YAML configuration file.
     
     Args:
-        input_image_path (str):
-            Path to the input image to be registered
-        atlas_path (str):
-            Path to the SRI24 atlas
-        mask_path (Optional[str]):
-            Path to the input mask (optional)
-        output_dir (str):
-            Directory to save outputs
-        output_registered (Optional[str]):
-            Path for the registered output image
-        output_mask (Optional[str]):
-            Path for the registered output mask
-        transform_prefix (str):
-            Prefix for transform files
-        config_path (Optional[str]):
-            Path to YAML config file for advanced parameters
+        moving_image (sitk.Image):
+            The input image to be registered as a SimpleITK image
+        moving_mask (Optional[sitk.Image]):
+            The input mask as a SimpleITK image (optional)
+        config_path (str):
+            Path to YAML config file containing registration parameters
         verbose (bool):
             Enable verbose output
-        number_threads (int):
-            Number of threads to use
-        **kwargs:
-            Additional registration parameters to override defaults
     
     Returns:
-        Tuple[sitk.Image, Dict[str, Any]]: Registered image and transform parameters
+        If mask is provided:
+            Tuple[sitk.Image, sitk.Image, Dict[str, Any]]: Registered image, registered mask, and transform parameters
+        Otherwise:
+            Tuple[sitk.Image, Dict[str, Any]]: Registered image and transform parameters
     """
-
-    # Create config dictionary from parameters
-    config = {
-        'input_image': input_image_path,
-        'output_dir': output_dir,
-        'output_transform_prefix': transform_prefix,
-        'num_threads': number_threads,
-        'verbose': verbose
-    }
-    
-    # Add optional parameters
-    if mask_path:
-        config['mask_path'] = mask_path
-    
-    if output_registered:
-        config['output_registered'] = output_registered
-        
-    if output_mask:
-        config['output_mask'] = output_mask
-    
-    # Load YAML config if provided and merge with parameters
-    if config_path:
-        try:
-            with open(config_path, 'r') as f:
-                yaml_config = yaml.safe_load(f)
-                # Update config but keep explicit parameters
-                for k, v in yaml_config.items():
-                    if k not in config or config[k] is None:
-                        config[k] = v
-        except Exception as e:
-            if verbose:
-                print(f"Warning: Could not load configuration file: {e}")
-    
-    # Add any additional kwargs as registration parameters
-    config.update(kwargs)
-    
-    # Create output directory
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # Get the atlas
-    atlas_path = config.get('atlas_path')
-    if not atlas_path:
-        raise ValueError("Missing required parameter: atlas_path")
-
-    # Load input images
-    if verbose:
-        print(f"[ANTS REGISTRATION] Loading input image: {input_image_path}")
-        print(f"[ANTS REGISTRATION] Loading atlas image: {atlas_path}")
+    # Load configuration file
+    if not config_path:
+        raise ValueError("Missing required parameter: config_path")
     
     try:
-        moving_image = sitk.ReadImage(input_image_path)
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+    except Exception as e:
+        raise RuntimeError(f"Error loading configuration file: {e}")
+    
+    # Override verbose setting if provided
+    config['verbose'] = verbose
+    
+    # Create output directory
+    output_dir = config.get('output_dir', './registration_output')
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Load atlas
+    atlas_path = config.get('atlas_path')
+    if not atlas_path:
+        raise ValueError("Missing required parameter in config: atlas_path")
+    
+    try:
         fixed_image = sitk.ReadImage(str(atlas_path))
     except Exception as e:
-        raise RuntimeError(f"Error loading images: {e}")
+        raise RuntimeError(f"Error loading atlas image: {e}")
     
-    # Build registration parameters
+    # Set up output paths
+    output_registered_path = config.get('output_registered')
+    if not output_registered_path:
+        output_registered_path = os.path.join(output_dir, "registered.nii.gz")
+    elif not os.path.isabs(str(output_registered_path)):
+        output_registered_path = os.path.join(output_dir, str(output_registered_path))
+    
+    # Convert convergence_threshold from strings to floats 
+    if config.get('convergence_threshold'):
+        convergence_threshold = [float(threshold) for threshold in config.get('convergence_threshold')]
+    else:
+        convergence_threshold = None
+
+    # Extract registration parameters from config
     reg_params = {
         'output_dir': output_dir,
         'output_transform_prefix': config.get('output_transform_prefix', 'transform_'),
@@ -627,7 +651,7 @@ def register_image_to_sri24(
         'dimension': config.get('dimension', 3),
         'winsorize_lower_quantile': config.get('winsorize_lower_quantile', 0.005),
         'winsorize_upper_quantile': config.get('winsorize_upper_quantile', 0.995),
-        'number_threads': config.get('num_threads', 1),
+        'number_threads': config.get('number_threads', 1),
         'transforms': config.get('transforms'),
         'transform_parameters': config.get('transform_parameters'),
         'iterations': config.get('iterations'),
@@ -635,48 +659,60 @@ def register_image_to_sri24(
         'smoothing_sigmas': config.get('smoothing_sigmas'),
         'metrics': config.get('metrics'),
         'metric_weights': config.get('metric_weights'),
-        'verbose': verbose
+        'sampling_strategy': config.get('sampling_strategy'),
+        'sampling_percentage': config.get('sampling_percentage'),
+        'radius_or_number_of_bins': config.get('radius_or_number_of_bins'),
+        'convergence_threshold': convergence_threshold,
+        'convergence_window_size': config.get('convergence_window_size'),
+        'sigma_units': config.get('sigma_units'),
+        'write_composite_transform': config.get('write_composite_transform', True),
+        'verbose': verbose,
+        'cleanup': cleanup
     }
-    
-    # Set output paths
-    output_registered_path = config.get('output_registered')
-    if not output_registered_path:
-        output_registered_path = os.path.join(output_dir, "registered.nii.gz")
-    elif not os.path.isabs(str(output_registered_path)):
-        output_registered_path = os.path.join(output_dir, str(output_registered_path))
-    
-    reg_params['output_image_path'] = output_registered_path
+      
+    if verbose:
+        print(f"[ANTS REGISTRATION] Moving image size: {moving_image.GetSize()}")
+        print(f"[ANTS REGISTRATION] Fixed image size: {fixed_image.GetSize()}")
+        print(f"[ANTS REGISTRATION] Output directory: {output_dir}")
+        print(f"[ANTS REGISTRATION] Output registered image: {output_registered_path}")
     
     # Process with mask if provided
-    if mask_path:
+    if moving_mask is not None:
         output_mask_path = config.get('output_mask')
         if not output_mask_path:
             output_mask_path = os.path.join(output_dir, "registered_mask.nii.gz")
         elif not os.path.isabs(str(output_mask_path)):
             output_mask_path = os.path.join(output_dir, str(output_mask_path))
         
-        try:
-            moving_mask = sitk.ReadImage(mask_path)
-        except Exception as e:
-            raise RuntimeError(f"Error loading mask image: {e}")
+        # Save mask temporarily
+        mask_nii_path = os.path.join(output_dir, "moving_mask_input.nii.gz")
+        sitk.WriteImage(moving_mask, mask_nii_path)
+        
+        if verbose:
+            print(f"[ANTS REGISTRATION] Mask image size: {moving_mask.GetSize()}")
+            print(f"[ANTS REGISTRATION] Output registered mask: {output_mask_path}")
+            print("[ANTS REGISTRATION] Performing registration with mask...")
         
         # Perform registration with mask
         registered_image, registered_mask, transform_params = register_to_sri24_with_mask(
             moving_image_sitk=moving_image,
             moving_mask_sitk=moving_mask,
-            fixed_image_sitk=fixed_image,
+            atlas_path=atlas_path,
             output_image_prefix=os.path.basename(str(output_registered_path)),
-            output_mask_path=str(output_mask_path),
-            **reg_params # type: ignore
+            output_mask_path=output_mask_path,
+            **reg_params
         )
         
         return registered_image, registered_mask, transform_params
     else:
         # Perform registration without mask
+        if verbose:
+            print("[ANTS REGISTRATION] Performing registration without mask...")
+        
         registered_image, transform_params = register_to_sri24(
             moving_image_sitk=moving_image,
-            fixed_image_sitk=fixed_image,
-            **reg_params # type: ignore
+            atlas_path=atlas_path,
+            **reg_params
         )
         
         return registered_image, transform_params
