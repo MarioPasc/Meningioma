@@ -12,16 +12,21 @@ modalities:
   RM: ["T1", "T2", "SUSC"]
   TC: ["TC"]
 
+
+#     reorientation:
+#      orientation: "LPS"
+#    resample:
+#      spacing: [1.0, 1.0, 1.0]
+#
+#    transpose:
+#      axis: [2, 1, 0]
+
 preprocessing:
   RM:
     remove_channel:
       channel: 0
     export_nifti: true
     cast_volume: true
-    reorientation:
-      orientation: "LPS"
-    resample:
-      spacing: [1.0, 1.0, 1.0]
     denoise:
       enable: false
       susan:
@@ -50,8 +55,6 @@ preprocessing:
       sri24:
         enable: true
         config_path: "/home/mariopasc/Python/Projects/Meningioma/src/Meningioma/preprocessing/configs/registration_sri24.yaml" 
-    transpose:
-      axis: [2, 1, 0]
     
   TC:
     export_nifti: true

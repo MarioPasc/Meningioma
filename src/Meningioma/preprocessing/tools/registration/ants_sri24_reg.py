@@ -48,6 +48,142 @@ from typing import Optional, Tuple, Dict, Any, List, Union
 import SimpleITK as sitk
 from nipype.interfaces.ants import Registration, ApplyTransforms 
 
+def apply_composed_transforms(
+    input_image: sitk.Image,
+    t1_to_atlas_transform_params: Dict[str, Any],
+    secondary_to_t1_transform_params: Dict[str, Any],
+    output_path: str,
+    interpolation: str = "Linear",
+    dimension: int = 3,
+    invert_secondary_to_t1: bool = False,
+    number_threads: int = 1,
+    verbose: bool = False,
+    cleanup: bool = True
+) -> sitk.Image:
+    """
+    Apply a composition of transforms to register a secondary modality (T2, SUSC, etc.) 
+    to the atlas space in a two-step process:
+    1. Apply the transform from secondary modality to T1 in subject's native space
+    2. Apply the transform from T1 to atlas space
+    
+    This approach preserves the inherent alignment advantages of subject-level multimodal 
+    registration before a global warp to template space.
+    
+    Args:
+        input_image (sitk.Image):
+            The secondary modality image (T2, SUSC, etc.) to be transformed.
+        t1_to_atlas_transform_params (Dict[str, Any]):
+            Transform parameters from T1 to atlas, typically from register_to_sri24().
+        secondary_to_t1_transform_params (Dict[str, Any]):
+            Transform parameters from secondary modality to T1.
+        output_path (str):
+            Path to save the transformed image.
+        interpolation (str, optional):
+            Interpolation method. Default is "Linear". Options include:
+            - "Linear": For intensity images (default)
+            - "NearestNeighbor": For label/mask images
+            - "BSpline": For smoother results
+            - "GenericLabel": For label images with smoother results
+        dimension (int, optional):
+            Dimension of the image transformation problem. Default is 3.
+        invert_secondary_to_t1 (bool, optional):
+            Whether to invert the secondary-to-T1 transform. Default is False.
+        number_threads (int, optional):
+            Number of CPU threads to use. Default is 1.
+        verbose (bool, optional):
+            If True, prints debug info.
+        cleanup (bool, optional):
+            If True, removes temporary files after processing.
+            
+    Returns:
+        sitk.Image: The transformed secondary modality image in atlas space
+    """
+    if verbose:
+        print("[ANTS TRANSFORM] Starting composed transform application process")
+        start_time = time.time()
+    
+    # Create output directory if needed
+    output_dir = os.path.dirname(output_path)
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Save input image temporarily
+    temp_input_path = os.path.join(output_dir, "temp_secondary_input.nii.gz")
+    sitk.WriteImage(input_image, temp_input_path)
+    
+    if verbose:
+        print(f"[ANTS TRANSFORM] Input image saved to {temp_input_path}")
+        print(f"[ANTS TRANSFORM] Applying composition of transforms to {output_path}")
+    
+    # Get transform files
+    if invert_secondary_to_t1:
+        secondary_to_t1_transform = secondary_to_t1_transform_params["inverse_composite_transform"]
+        if verbose:
+            print(f"[ANTS TRANSFORM] Using inverted secondary-to-T1 transform: {secondary_to_t1_transform}")
+    else:
+        secondary_to_t1_transform = secondary_to_t1_transform_params["composite_transform"]
+        if verbose:
+            print(f"[ANTS TRANSFORM] Using secondary-to-T1 transform: {secondary_to_t1_transform}")
+    
+    t1_to_atlas_transform = t1_to_atlas_transform_params["composite_transform"]
+    
+    if verbose:
+        print(f"[ANTS TRANSFORM] Using T1-to-atlas transform: {t1_to_atlas_transform}")
+        print(f"[ANTS TRANSFORM] Using interpolation method: {interpolation}")
+    
+    # Set up Nipype ApplyTransforms interface
+    at = ApplyTransforms()
+    at.inputs.dimension = dimension
+    at.inputs.input_image = temp_input_path
+    at.inputs.reference_image = t1_to_atlas_transform_params["fixed_image_path"]
+    at.inputs.output_image = output_path
+    
+    # ANTs applies transforms in reverse order, so the second in the list
+    # (secondary_to_t1_transform) is applied FIRST, and the first in the list
+    # (t1_to_atlas_transform) is applied SECOND.
+    at.inputs.transforms = [t1_to_atlas_transform, secondary_to_t1_transform]
+    at.inputs.interpolation = interpolation
+    at.inputs.num_threads = number_threads
+    
+    if verbose:
+        print("[ANTS TRANSFORM] Applying transforms - this may take a moment...")
+        stage_start = time.time()
+        at.terminal_output = "stream"
+    
+    # Run the transform application
+    at_result = at.run()
+    
+    if verbose:
+        stage_end = time.time()
+        print(f"[ANTS TRANSFORM] Transform application completed in {stage_end - stage_start:.2f} seconds")
+        print(f"[ANTS TRANSFORM] Transformed image saved to: {at_result.outputs.output_image}")
+    
+    # Load the transformed image
+    registered_image = sitk.ReadImage(at_result.outputs.output_image)
+    atlas_image = sitk.ReadImage(t1_to_atlas_transform_params["fixed_image_path"])
+    registered_image.CopyInformation(atlas_image)
+    
+    # Clean up temporary files
+    if cleanup and verbose:
+        print("[ANTS TRANSFORM] Cleaning up temporary files...")
+    
+    if cleanup:
+        temp_files = [temp_input_path]
+        for temp_file in temp_files:
+            if os.path.exists(temp_file):
+                try:
+                    os.remove(temp_file)
+                    if verbose:
+                        print(f"[ANTS TRANSFORM] Removed temporary file: {temp_file}")
+                except Exception as e:
+                    if verbose:
+                        print(f"[ANTS TRANSFORM] Failed to remove temporary file {temp_file}: {e}")
+    
+    if verbose:
+        end_time = time.time()
+        print(f"[ANTS TRANSFORM] Total transform process completed in {end_time - start_time:.2f} seconds")
+    
+    return registered_image
+
 def register_to_sri24(
     moving_image_sitk: sitk.Image,
     atlas_path: str,
@@ -280,6 +416,8 @@ def register_to_sri24(
         print(f"[ANTS REGISTRATION] Loading registered image from: {registered_path}")
 
     registered_sitk = sitk.ReadImage(registered_path)
+    fixed_image = sitk.ReadImage(atlas_path)
+    registered_sitk.CopyInformation(fixed_image)
 
     # Collect transform files
     transform_params = {
@@ -579,6 +717,7 @@ def register_to_sri24_with_mask(
 def register_image_to_sri24(
     moving_image: sitk.Image,
     moving_mask: Optional[sitk.Image] = None,
+    fixed_image: Optional[sitk.Image] = None,
     config_path: str = "../../configs/registration_sri24.yaml",
     verbose: bool = False,
     cleanup:bool = True,
@@ -619,11 +758,20 @@ def register_image_to_sri24(
     output_dir = config.get('output_dir', './registration_output')
     os.makedirs(output_dir, exist_ok=True)
     
-    # Load atlas
-    atlas_path = config.get('atlas_path')
-    if not atlas_path:
-        raise ValueError("Missing required parameter in config: atlas_path")
-    
+    # Here, if an ATLAS is passed, then we temporarily save it to the output directory
+    # if an ATLAS is not passed, then we are going to use the ATLAS stored in the config
+    # path
+
+    if fixed_image is None:
+        # Load atlas
+        atlas_path = config.get('atlas_path')
+        if not atlas_path:
+            raise ValueError("Missing required parameter in config: atlas_path, or input you atlas sitk.Image object")
+    else:
+        # Save fixed image temporarily
+        atlas_path = os.path.join(output_dir, "fixed_image.nii.gz")
+        sitk.WriteImage(fixed_image, atlas_path)
+
     try:
         fixed_image = sitk.ReadImage(str(atlas_path))
     except Exception as e:

@@ -5,6 +5,7 @@ import os
 import json
 import argparse
 import numpy as np
+import logging
 
 from Meningioma.preprocessing.tools.remove_extra_channels import remove_first_channel
 from Meningioma.preprocessing.tools.nrrd_to_nifti import nifti_write_3d
@@ -16,7 +17,16 @@ from Meningioma.preprocessing.tools.bias_field_corr_n4 import generate_brain_mas
 from Meningioma.preprocessing.tools.skull_stripping.fsl_bet import fsl_bet_brain_extraction
 from Meningioma.preprocessing.tools.registration.ants_sri24_reg import register_image_to_sri24
 
-
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO, 
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('meningioma_preprocessing.log')
+    ]
+)
+logger = logging.getLogger('meningioma_preprocessing')
 
 
 def load_plan(json_path):
@@ -36,7 +46,7 @@ def extract_patient_data(plan, patient_ids):
         
         # Check if patient exists in the plan
         if patient_key not in plan["data"]:
-            print(f"Warning: Patient {patient_id} not found in the plan")
+            logger.warning(f"Patient {patient_id} not found in the plan")
             continue
         
         patient_data = plan["data"][patient_key]
@@ -46,7 +56,7 @@ def extract_patient_data(plan, patient_ids):
         for pulse_name, pulse_info in patient_data["pulses"].items():
             # Skip if there's an error with this pulse
             if pulse_info.get("error", True):
-                print(f"Skipping {patient_key} {pulse_name} due to error flag")
+                logger.info(f"Skipping {patient_key} {pulse_name} due to error flag")
                 continue
             
             # Extract volume and mask paths
@@ -63,9 +73,9 @@ def extract_patient_data(plan, patient_ids):
                 
                 # Verify files exist
                 if not os.path.exists(volume_path):
-                    print(f"Warning: Volume file not found: {volume_path}")
+                    logger.warning(f"Volume file not found: {volume_path}")
                 if not os.path.exists(mask_path):
-                    print(f"Warning: Mask file not found: {mask_path}")
+                    logger.warning(f"Mask file not found: {mask_path}")
         
         # Add patient data to results if we have any valid pulses
         if pulses_data:
@@ -92,8 +102,9 @@ def rm_pipeline(
     patient_output_dir: Path,
     patient_id: str,
     pulse_name: str,
-    verbose: bool = True
-) -> None:
+    verbose: bool = True,
+    save_intermediate: bool = False
+) -> Dict[str, Any]:
     """
     Apply RM-specific preprocessing steps to a pulse sequence.
     
@@ -115,30 +126,40 @@ def rm_pipeline(
         patient_id: Patient identifier (e.g., 'P1')
         pulse_name: Name of the pulse sequence (e.g., 'T1', 'T2', 'SUSC')
         verbose: Whether to print detailed processing information
+        save_intermediate: If True, save intermediate processing files to 'others' directory
     
     Returns:
-        Tuple containing:
-            - The processed pulse data with updated file paths
-            - A boolean indicating success (True) or failure (False)
+        Dictionary containing the processed pulse data with updated file paths
     """
     # Create a working dictionary for this pulse
     processed_pulse = pulse_data.copy()
     current_image = None
     current_header = None
     current_mask = None
+    brain_mask = None  # Initialize brain_mask to None
+    
+    # Create main patient output directory and "others" subdirectory for intermediate files
+    patient_output_dir.mkdir(exist_ok=True)
+    
+    # Create "others" directory for intermediate files if needed
+    if save_intermediate:
+        others_dir = patient_output_dir / "others"
+        others_dir.mkdir(exist_ok=True)
+    else:
+        others_dir = None  # No separate directory for intermediates
     
     if verbose:
-        print(f"\n[RM / {pulse_name}] Starting RM preprocessing pipeline")
+        logger.info(f"\n[RM / {pulse_name}] Starting RM preprocessing pipeline")
     
     # 1. remove_channel (if it exists in the plan)
     if "remove_channel" in preprocessing_plan:
         if verbose:
-            print(f"[RM / CHANNEL REMOVAL] Processing {Path(pulse_data['volume_path']).name}")
+            logger.info(f"[RM / CHANNEL REMOVAL] Processing {Path(pulse_data['volume_path']).name}")
         
         try:
             channel = preprocessing_plan["remove_channel"].get("channel", 0)
             if verbose:
-                print(f"[RM / CHANNEL REMOVAL] Extracting channel {channel}")
+                logger.info(f"[RM / CHANNEL REMOVAL] Extracting channel {channel}")
             
             # Apply remove_channel function to the volume
             current_image, current_header = remove_first_channel(
@@ -148,21 +169,21 @@ def rm_pipeline(
             )
             
             if verbose:
-                print(f"[RM / CHANNEL REMOVAL] Completed: size={current_image.GetSize()}, "
+                logger.info(f"[RM / CHANNEL REMOVAL] Completed: size={current_image.GetSize()}, "
                       f"dimensions={current_image.GetDimension()}, "
                       f"spacing={current_image.GetSpacing()}")
             
         except Exception as e:
-            print(f"[RM / CHANNEL REMOVAL] Error: {str(e)}")
+            logger.error(f"[RM / CHANNEL REMOVAL] Error: {str(e)}")
             
     
     # 2. export_nifti (if it exists in the plan)
     if "export_nifti" in preprocessing_plan and preprocessing_plan["export_nifti"]:
         if verbose:
-            print(f"[RM / NIFTI EXPORT] Converting to NIfTI format")
+            logger.info(f"[RM / NIFTI EXPORT] Converting to NIfTI format")
         
         try:
-            # Output path for the NIfTI file
+            # Output path for the NIfTI file - This is a main output file, not an intermediate
             nifti_filename = f"{pulse_name}_{patient_id.replace('P', '')}.nii.gz"
             nifti_path = patient_output_dir / nifti_filename
             
@@ -181,35 +202,35 @@ def rm_pipeline(
             processed_pulse["nifti_path"] = output_path
             
             if verbose:
-                print(f"[RM / NIFTI EXPORT] Saved to {output_path}")
+                logger.info(f"[RM / NIFTI EXPORT] Saved to {output_path}")
             
             # Load the exported NIfTI for further processing
             current_image = sitk.ReadImage(output_path)
             
         except Exception as e:
-            print(f"[RM / NIFTI EXPORT] Error: {str(e)}")
+            logger.error(f"[RM / NIFTI EXPORT] Error: {str(e)}")
             # Continue even if NIfTI export fails
     
     # 3. Load the segmentation mask if we have a current_image
     if current_image is not None:
         try:
             if verbose:
-                print(f"[RM / MASK LOADING] Loading segmentation mask")
+                logger.info(f"[RM / MASK LOADING] Loading segmentation mask")
             
             current_mask = sitk.ReadImage(pulse_data["mask_path"])
             
             if verbose:
-                print(f"[RM / MASK LOADING] Mask loaded: size={current_mask.GetSize()}, "
+                logger.info(f"[RM / MASK LOADING] Mask loaded: size={current_mask.GetSize()}, "
                       f"dimensions={current_mask.GetDimension()}")
                 
         except Exception as e:
-            print(f"[RM / MASK LOADING] Error loading mask: {str(e)}")
+            logger.error(f"[RM / MASK LOADING] Error loading mask: {str(e)}")
             # Continue processing even if mask loading fails
     
     # 4. cast_volume (if it exists in the plan)
     if current_image is not None and current_mask is not None and "cast_volume" in preprocessing_plan and preprocessing_plan["cast_volume"]:
         if verbose:
-            print(f"[RM / CAST VOLUME] Casting volume to float32 and mask to uint8")
+            logger.info(f"[RM / CAST VOLUME] Casting volume to float32 and mask to uint8")
         
         try:
             # Cast volume to float32 and mask to uint8
@@ -218,100 +239,25 @@ def rm_pipeline(
                 current_mask
             )
             
-            # Save the cast volume and mask
-            cast_volume_path = patient_output_dir / f"{pulse_name}_{patient_id.replace('P', '')}_cast.nii.gz"
-            cast_mask_path = patient_output_dir / f"{pulse_name}_{patient_id.replace('P', '')}_mask_cast.nii.gz"
-            
-            sitk.WriteImage(current_image, str(cast_volume_path))
-            sitk.WriteImage(current_mask, str(cast_mask_path))
-            
-            # Update the processed data with the new file paths
-            processed_pulse["cast_volume_path"] = str(cast_volume_path)
-            processed_pulse["cast_mask_path"] = str(cast_mask_path)
-            
-            if verbose:
-                print(f"[RM / CAST VOLUME] Volume cast to {current_image.GetPixelID()} and saved to {cast_volume_path}")
-                print(f"[RM / CAST VOLUME] Mask cast to {current_mask.GetPixelID()} and saved to {cast_mask_path}")
+            # Save the cast volume and mask if requested
+            if save_intermediate and others_dir:
+                cast_volume_path = others_dir / f"{pulse_name}_{patient_id.replace('P', '')}_cast.nii.gz"
+                cast_mask_path = others_dir / f"{pulse_name}_{patient_id.replace('P', '')}_mask_cast.nii.gz"
+                
+                sitk.WriteImage(current_image, str(cast_volume_path))
+                sitk.WriteImage(current_mask, str(cast_mask_path))
+                
+                # Update the processed data with the new file paths
+                processed_pulse["cast_volume_path"] = str(cast_volume_path)
+                processed_pulse["cast_mask_path"] = str(cast_mask_path)
+                
+                if verbose:
+                    logger.info(f"[RM / CAST VOLUME] Volume cast to {current_image.GetPixelID()} and saved to {cast_volume_path}")
+                    logger.info(f"[RM / CAST VOLUME] Mask cast to {current_mask.GetPixelID()} and saved to {cast_mask_path}")
             
         except Exception as e:
-            print(f"[RM / CAST VOLUME] Error: {str(e)}")
+            logger.error(f"[RM / CAST VOLUME] Error: {str(e)}")
             # Continue even if casting fails
-    
-    # 5. reorientation (if it exists in the plan)
-    if current_image is not None and current_mask is not None and "reorientation" in preprocessing_plan:
-        if verbose:
-            print(f"[RM / REORIENTATION] Reorienting volume and mask")
-        
-        try:
-            # Get the desired orientation
-            orientation = preprocessing_plan["reorientation"].get("orientation", "LPS")
-            
-            if verbose:
-                print(f"[RM / REORIENTATION] Target orientation: {orientation}")
-            
-            # Reorient the volume and mask
-            current_image, current_mask = reorient_images(
-                current_image, 
-                current_mask, 
-                orientation
-            )
-            
-            # Save the reoriented volume and mask
-            reorient_volume_path = patient_output_dir / f"{pulse_name}_{patient_id.replace('P', '')}_reoriented.nii.gz"
-            reorient_mask_path = patient_output_dir / f"{pulse_name}_{patient_id.replace('P', '')}_mask_reoriented.nii.gz"
-            
-            sitk.WriteImage(current_image, str(reorient_volume_path))
-            sitk.WriteImage(current_mask, str(reorient_mask_path))
-            
-            # Update the processed data with the new file paths
-            processed_pulse["reoriented_volume_path"] = str(reorient_volume_path)
-            processed_pulse["reoriented_mask_path"] = str(reorient_mask_path)
-            
-            if verbose:
-                print(f"[RM / REORIENTATION] Volume reoriented to {orientation} and saved to {reorient_volume_path}")
-                print(f"[RM / REORIENTATION] Mask reoriented to {orientation} and saved to {reorient_mask_path}")
-            
-        except Exception as e:
-            print(f"[RM / REORIENTATION] Error: {str(e)}")
-            # Continue even if reorientation fails
-    
-    # 6. resample (if it exists in the plan)
-    if current_image is not None and current_mask is not None and "resample" in preprocessing_plan:
-        if verbose:
-            print(f"[RM / RESAMPLE] Resampling volume and mask")
-            
-        try:
-            # Get the desired spacing
-            spacing = tuple(preprocessing_plan["resample"].get("spacing", (1.0, 1.0, 1.0)))
-            
-            if verbose:
-                print(f"[RM / RESAMPLE] Target spacing: {spacing}")
-            
-            # Resample the volume and mask
-            current_image, current_mask = resample_images(
-                current_image,
-                current_mask,
-                new_spacing=spacing
-            )
-            
-            # Save the resampled volume and mask
-            resample_volume_path = patient_output_dir / f"{pulse_name}_{patient_id.replace('P', '')}_resampled.nii.gz"
-            resample_mask_path = patient_output_dir / f"{pulse_name}_{patient_id.replace('P', '')}_mask_resampled.nii.gz"
-            
-            sitk.WriteImage(current_image, str(resample_volume_path))
-            sitk.WriteImage(current_mask, str(resample_mask_path))
-            
-            # Update the processed data with the new file paths
-            processed_pulse["resampled_volume_path"] = str(resample_volume_path)
-            processed_pulse["resampled_mask_path"] = str(resample_mask_path)
-            
-            if verbose:
-                print(f"[RM / RESAMPLE] Volume resampled to spacing {current_image.GetSpacing()} and saved to {resample_volume_path}")
-                print(f"[RM / RESAMPLE] Mask resampled and saved to {resample_mask_path}")
-            
-        except Exception as e:
-            print(f"[RM / RESAMPLE] Error: {str(e)}")
-            # Continue even if resampling fails
     
     # 7. denoise (if it exists and is enabled in the plan)
     if current_image is not None and "denoise" in preprocessing_plan:
@@ -320,7 +266,7 @@ def rm_pipeline(
         
         if denoise_enabled:
             if verbose:
-                print(f"[RM / DENOISE] Applying SUSAN denoising to volume")
+                logger.info(f"[RM / DENOISE] Applying SUSAN denoising to volume")
             
             try:
                 # Get denoise parameters
@@ -330,7 +276,7 @@ def rm_pipeline(
                 dimension = susan_params.get("dimension", 3)
                 
                 if verbose:
-                    print(f"[RM / DENOISE] SUSAN parameters: brightness_threshold={brightness_threshold}, fwhm={fwhm}, dimension={dimension}")
+                    logger.info(f"[RM / DENOISE] SUSAN parameters: brightness_threshold={brightness_threshold}, fwhm={fwhm}, dimension={dimension}")
                 
                 # Apply denoising to the volume
                 current_image = denoise_susan(
@@ -342,27 +288,28 @@ def rm_pipeline(
                     verbose=verbose
                 )
                 
-                # Save the denoised volume
-                denoised_volume_path = patient_output_dir / f"{pulse_name}_{patient_id.replace('P', '')}_denoised.nii.gz"
-                sitk.WriteImage(current_image, str(denoised_volume_path))
-                
-                # Update the processed data with the new file path
-                processed_pulse["denoised_volume_path"] = str(denoised_volume_path)
-                
-                if verbose:
-                    print(f"[RM / DENOISE] Volume denoised and saved to {denoised_volume_path}")
+                # Save the denoised volume if requested
+                if save_intermediate and others_dir:
+                    denoised_volume_path = others_dir / f"{pulse_name}_{patient_id.replace('P', '')}_denoised.nii.gz"
+                    sitk.WriteImage(current_image, str(denoised_volume_path))
+                    
+                    # Update the processed data with the new file path
+                    processed_pulse["denoised_volume_path"] = str(denoised_volume_path)
+                    
+                    if verbose:
+                        logger.info(f"[RM / DENOISE] Volume denoised and saved to {denoised_volume_path}")
                 
             except Exception as e:
-                print(f"[RM / DENOISE] Error: {str(e)}")
+                logger.error(f"[RM / DENOISE] Error: {str(e)}")
                 # Continue even if denoising fails
         else:
             if verbose:
-                print(f"[RM / DENOISE] Denoising is disabled in the preprocessing plan, skipping")
+                logger.info(f"[RM / DENOISE] Denoising is disabled in the preprocessing plan, skipping")
     
     # 8. brain_mask (if it exists in the plan)
     if current_image is not None and "brain_mask" in preprocessing_plan:
         if verbose:
-            print(f"[RM / BRAIN MASK] Generating brain mask")
+            logger.info(f"[RM / BRAIN MASK] Generating brain mask")
         
         try:
             # Get brain mask parameters
@@ -374,7 +321,7 @@ def rm_pipeline(
             iterations_3d = brain_mask_params.get("iterations_3d", 1)
             
             if verbose:
-                print(f"[RM / BRAIN MASK] Parameters: threshold_method={threshold_method}, "
+                logger.info(f"[RM / BRAIN MASK] Parameters: threshold_method={threshold_method}, "
                       f"structure_size_2d={structure_size_2d}, iterations_2d={iterations_2d}, "
                       f"structure_size_3d={structure_size_3d}, iterations_3d={iterations_3d}")
             
@@ -388,25 +335,26 @@ def rm_pipeline(
                 iterations_3d=iterations_3d
             )
             
-            # Save the brain mask
-            brain_mask_path = patient_output_dir / f"{pulse_name}_{patient_id.replace('P', '')}_brain_mask.nii.gz"
-            sitk.WriteImage(brain_mask, str(brain_mask_path))
-            
-            # Update the processed data with the new file path
-            processed_pulse["brain_mask_path"] = str(brain_mask_path)
-            
-            if verbose:
-                print(f"[RM / BRAIN MASK] Brain mask generated and saved to {brain_mask_path}")
+            # Save the brain mask if requested
+            if save_intermediate and others_dir:
+                brain_mask_path = others_dir / f"{pulse_name}_{patient_id.replace('P', '')}_brain_mask.nii.gz"
+                sitk.WriteImage(brain_mask, str(brain_mask_path))
+                
+                # Update the processed data with the new file path
+                processed_pulse["brain_mask_path"] = str(brain_mask_path)
+                
+                if verbose:
+                    logger.info(f"[RM / BRAIN MASK] Brain mask generated and saved to {brain_mask_path}")
             
         except Exception as e:
-            print(f"[RM / BRAIN MASK] Error: {str(e)}")
+            logger.error(f"[RM / BRAIN MASK] Error: {str(e)}")
             # Continue even if brain mask generation fails
     
     # 9. bias_field_correction (if it exists in the plan and we have a brain mask)
     if current_image is not None and "bias_field_correction" in preprocessing_plan and brain_mask is not None:
         if "n4" in preprocessing_plan["bias_field_correction"]:
             if verbose:
-                print(f"[RM / BIAS CORRECTION] Applying N4 bias field correction")
+                logger.info(f"[RM / BIAS CORRECTION] Applying N4 bias field correction")
             
             try:
                 # Get N4 parameters
@@ -417,7 +365,7 @@ def rm_pipeline(
                 bias_field_fwhm = n4_params.get("bias_field_fwhm", 0.1)
                 
                 if verbose:
-                    print(f"[RM / BIAS CORRECTION] N4 parameters: shrink_factor={shrink_factor}, "
+                    logger.info(f"[RM / BIAS CORRECTION] N4 parameters: shrink_factor={shrink_factor}, "
                           f"max_iterations={max_iterations}, control_points={control_points}, "
                           f"bias_field_fwhm={bias_field_fwhm}")
                 
@@ -435,29 +383,30 @@ def rm_pipeline(
                 # Update the current image with the bias-corrected one
                 current_image = corrected_image
                 
-                # Save the bias-corrected image
-                bias_corrected_path = patient_output_dir / f"{pulse_name}_{patient_id.replace('P', '')}_bias_corrected.nii.gz"
-                sitk.WriteImage(current_image, str(bias_corrected_path))
-                
-                # Update the processed data with the new file path
-                processed_pulse["bias_corrected_path"] = str(bias_corrected_path)
-                
-                if verbose:
-                    print(f"[RM / BIAS CORRECTION] Image bias-corrected and saved to {bias_corrected_path}")
+                # Save the bias-corrected image if requested
+                if save_intermediate and others_dir:
+                    bias_corrected_path = others_dir / f"{pulse_name}_{patient_id.replace('P', '')}_bias_corrected.nii.gz"
+                    sitk.WriteImage(current_image, str(bias_corrected_path))
+                    
+                    # Update the processed data with the new file path
+                    processed_pulse["bias_corrected_path"] = str(bias_corrected_path)
+                    
+                    if verbose:
+                        logger.info(f"[RM / BIAS CORRECTION] Image bias-corrected and saved to {bias_corrected_path}")
                 
             except Exception as e:
-                print(f"[RM / BIAS CORRECTION] Error: {str(e)}")
+                logger.error(f"[RM / BIAS CORRECTION] Error: {str(e)}")
                 # Continue even if bias correction fails
         else:
             if verbose:
-                print(f"[RM / BIAS CORRECTION] Only N4 bias field correction is supported, skipping")
+                logger.info(f"[RM / BIAS CORRECTION] Only N4 bias field correction is supported, skipping")
     
     # 10. brain_extraction (if it exists in the plan)
     if current_image is not None and "brain_extraction" in preprocessing_plan:
         # Check for fsl_bet method
         if "fsl_bet" in preprocessing_plan["brain_extraction"]:
             if verbose:
-                print(f"[RM / BRAIN EXTRACTION] Applying FSL BET brain extraction")
+                logger.info(f"[RM / BRAIN EXTRACTION] Applying FSL BET brain extraction")
             
             try:
                 # Get FSL BET parameters
@@ -468,7 +417,7 @@ def rm_pipeline(
                 skull = bet_params.get("skull", False)
                 
                 if verbose:
-                    print(f"[RM / BRAIN EXTRACTION] FSL BET parameters: frac={frac}, "
+                    logger.info(f"[RM / BRAIN EXTRACTION] FSL BET parameters: frac={frac}, "
                           f"robust={robust}, vertical_gradient={vertical_gradient}, "
                           f"skull={skull}")
                 
@@ -485,27 +434,28 @@ def rm_pipeline(
                 # Update the current image with the brain-extracted one
                 current_image = extracted_brain
                 
-                # Save the brain-extracted image and mask
-                brain_extracted_path = patient_output_dir / f"{pulse_name}_{patient_id.replace('P', '')}_brain_extracted.nii.gz"
-                brain_extraction_mask_path = patient_output_dir / f"{pulse_name}_{patient_id.replace('P', '')}_brain_extraction_mask.nii.gz"
-                
-                sitk.WriteImage(current_image, str(brain_extracted_path))
-                sitk.WriteImage(brain_mask, str(brain_extraction_mask_path))
-                
-                # Update the processed data with the new file paths
-                processed_pulse["brain_extracted_path"] = str(brain_extracted_path)
-                processed_pulse["brain_extraction_mask_path"] = str(brain_extraction_mask_path)
-                
-                if verbose:
-                    print(f"[RM / BRAIN EXTRACTION] Brain extracted and saved to {brain_extracted_path}")
-                    print(f"[RM / BRAIN EXTRACTION] Brain extraction mask saved to {brain_extraction_mask_path}")
+                # Save the brain-extracted image and mask if requested
+                if save_intermediate and others_dir:
+                    brain_extracted_path = others_dir / f"{pulse_name}_{patient_id.replace('P', '')}_brain_extracted.nii.gz"
+                    brain_extraction_mask_path = others_dir / f"{pulse_name}_{patient_id.replace('P', '')}_brain_extraction_mask.nii.gz"
+                    
+                    sitk.WriteImage(current_image, str(brain_extracted_path))
+                    sitk.WriteImage(brain_mask, str(brain_extraction_mask_path))
+                    
+                    # Update the processed data with the new file paths
+                    processed_pulse["brain_extracted_path"] = str(brain_extracted_path)
+                    processed_pulse["brain_extraction_mask_path"] = str(brain_extraction_mask_path)
+                    
+                    if verbose:
+                        logger.info(f"[RM / BRAIN EXTRACTION] Brain extracted and saved to {brain_extracted_path}")
+                        logger.info(f"[RM / BRAIN EXTRACTION] Brain extraction mask saved to {brain_extraction_mask_path}")
                 
             except Exception as e:
-                print(f"[RM / BRAIN EXTRACTION] Error: {str(e)}")
+                logger.error(f"[RM / BRAIN EXTRACTION] Error: {str(e)}")
                 # Continue even if brain extraction fails
         else:
             if verbose:
-                print(f"[RM / BRAIN EXTRACTION] Only FSL BET brain extraction is supported, skipping")
+                logger.info(f"[RM / BRAIN EXTRACTION] Only FSL BET brain extraction is supported, skipping")
     
     # 11. registration (if it exists in the plan)
     if current_image is not None and "registration" in preprocessing_plan:
@@ -516,36 +466,22 @@ def rm_pipeline(
             # Check if registration is enabled
             if sri24_config.get("enable", False):
                 if verbose:
-                    print(f"[RM / REGISTRATION] Applying SRI24 atlas registration")
+                    logger.info(f"[RM / REGISTRATION] Applying SRI24 atlas registration")
                 
                 try:
                     # Get configuration file path
                     config_path = sri24_config.get("config_path")
                     
                     if not config_path or not os.path.exists(config_path):
-                        print(f"[RM / REGISTRATION] Warning: Config file not found at {config_path}")
-                        print(f"[RM / REGISTRATION] Using default registration parameters")
+                        logger.warning(f"[RM / REGISTRATION] Config file not found at {config_path}")
+                        logger.warning(f"[RM / REGISTRATION] Using default registration parameters")
                     
-                    # Create registration output subdirectory
-                    registration_output_dir = patient_output_dir / f"{pulse_name}_registration"
-                    registration_output_dir.mkdir(exist_ok=True)
-                    
-                    # Prepare output paths
-                    reg_image_path = registration_output_dir / f"{pulse_name}_{patient_id.replace('P', '')}_registered.nii.gz"
-                    reg_mask_path = registration_output_dir / f"{pulse_name}_{patient_id.replace('P', '')}_mask_registered.nii.gz"
-                    
-                    if verbose:
-                        print(f"[RM / REGISTRATION] Config path: {config_path}")
-                        print(f"[RM / REGISTRATION] Registration output directory: {registration_output_dir}")
-                        print(f"[RM / REGISTRATION] Output registered image: {reg_image_path}")
-                        print(f"[RM / REGISTRATION] Output registered mask: {reg_mask_path}")
-                    
-                    # Save current image and mask to temporary files for registration
-                    temp_img_path = registration_output_dir / f"{pulse_name}_{patient_id.replace('P', '')}_for_registration.nii.gz"
-                    temp_mask_path = registration_output_dir / f"{pulse_name}_{patient_id.replace('P', '')}_mask_for_registration.nii.gz"
-                    
-                    sitk.WriteImage(current_image, str(temp_img_path))
-                    sitk.WriteImage(current_mask, str(temp_mask_path)) # type: ignore
+                    # Create registration output subdirectory if saving intermediates
+                    if save_intermediate and others_dir:
+                        registration_output_dir = others_dir / f"{pulse_name}_registration"
+                        registration_output_dir.mkdir(exist_ok=True)
+                    else:
+                        registration_output_dir = patient_output_dir
                     
                     # Call registration function with mask
                     registered_image, registered_mask, transform_params = register_image_to_sri24( #type: ignore
@@ -559,115 +495,49 @@ def rm_pipeline(
                     current_image = registered_image
                     current_mask = registered_mask
                     
+                    # Final registered images - these are main output files
+                    reg_image_path = patient_output_dir / f"{pulse_name}_{patient_id.replace('P', '')}_registered_sri24.nii.gz"
+                    reg_mask_path = patient_output_dir / f"{pulse_name}_{patient_id.replace('P', '')}_mask_registered_sri24.nii.gz"
+                    
+                    sitk.WriteImage(current_image, str(reg_image_path))
+                    sitk.WriteImage(current_mask, str(reg_mask_path))
+                    
+                    # Save transform parameters
+                    transform_json_path = patient_output_dir / f"transform_params_{pulse_name}.json"
+                    with open(transform_json_path, "w") as f:
+                        json.dump(transform_params, f, indent=2)
+                    
                     # Update the processed data with the new file paths
                     processed_pulse["registered_image_path"] = str(reg_image_path)
                     processed_pulse["registered_mask_path"] = str(reg_mask_path)
                     processed_pulse["registration_transform_params"] = transform_params
                     
                     if verbose:
-                        print(f"[RM / REGISTRATION] Volume registered to SRI24 atlas and saved to {reg_image_path}")
-                        print(f"[RM / REGISTRATION] Mask registered to SRI24 atlas and saved to {reg_mask_path}")
-                        print(f"[RM / REGISTRATION] Transform parameters saved to {registration_output_dir / 'transform_params.json'}")
+                        logger.info(f"[RM / REGISTRATION] Volume registered to SRI24 atlas and saved to {reg_image_path}")
+                        logger.info(f"[RM / REGISTRATION] Mask registered to SRI24 atlas and saved to {reg_mask_path}")
+                        logger.info(f"[RM / REGISTRATION] Transform parameters saved to {transform_json_path}")
                 
                 except Exception as e:
-                    print(f"[RM / REGISTRATION] Error: {str(e)}")
+                    logger.error(f"[RM / REGISTRATION] Error: {str(e)}")
                     # Continue even if registration fails
             else:
                 if verbose:
-                    print(f"[RM / REGISTRATION] SRI24 registration is disabled in the preprocessing plan, skipping")
+                    logger.info(f"[RM / REGISTRATION] SRI24 registration is disabled in the preprocessing plan, skipping")
         else:
             if verbose:
-                print(f"[RM / REGISTRATION] Only SRI24 atlas registration is supported, skipping")
-    
-    # 12. transpose (if it exists in the plan)
-    if current_image is not None and current_mask is not None and "transpose" in preprocessing_plan:
-        if verbose:
-            print(f"[RM / TRANSPOSE] Applying transpose to volume and mask")
-        
-        try:
-            # Get the axis order for transposing
-            axis_order = preprocessing_plan["transpose"].get("axis", [2, 1, 0])
-            
-            if verbose:
-                print(f"[RM / TRANSPOSE] Transposing with axis order: {axis_order}")
-            
-            # Convert SimpleITK images to numpy arrays for transposing
-            volume_array = sitk.GetArrayFromImage(current_image)
-            mask_array = sitk.GetArrayFromImage(current_mask)
-            
-            # Transpose the arrays
-            transposed_volume = np.transpose(volume_array, axis_order)
-            transposed_mask = np.transpose(mask_array, axis_order)
-            
-            # Create new SimpleITK images from the transposed arrays
-            # Note: We need to handle spacing and direction appropriately
-            original_spacing = current_image.GetSpacing()
-            original_direction = current_image.GetDirection()
-            
-            # Reorder spacing according to the transpose axis
-            new_spacing = [original_spacing[i] for i in axis_order]
-            
-            # Create new SimpleITK images
-            transposed_image = sitk.GetImageFromArray(transposed_volume)
-            transposed_image.SetSpacing(new_spacing)
-            
-            transposed_mask_img = sitk.GetImageFromArray(transposed_mask)
-            transposed_mask_img.SetSpacing(new_spacing)
-            
-            # Save the final processed volume and mask with the standard naming convention
-            final_volume_path = patient_output_dir / f"P{patient_id.replace('P', '')}_{pulse_name}.nii.gz"
-            final_mask_path = patient_output_dir / f"P{patient_id.replace('P', '')}_{pulse_name}_seg.nii.gz"
-            
-            sitk.WriteImage(transposed_image, str(final_volume_path))
-            sitk.WriteImage(transposed_mask_img, str(final_mask_path))
-            
-            # Update the processed data with the final file paths
-            processed_pulse["final_volume_path"] = str(final_volume_path)
-            processed_pulse["final_mask_path"] = str(final_mask_path)
-            
-            if verbose:
-                print(f"[RM / TRANSPOSE] Final processed volume saved to {final_volume_path}")
-                print(f"[RM / TRANSPOSE] Final processed mask saved to {final_mask_path}")
-            
-        except Exception as e:
-            print(f"[RM / TRANSPOSE] Error: {str(e)}")
-            # Continue even if transpose fails, but use the current images as final outputs
-            
-            # Save the current images as final outputs with the standard naming convention
-            final_volume_path = patient_output_dir / f"P{patient_id.replace('P', '')}_{pulse_name}.nii.gz"
-            final_mask_path = patient_output_dir / f"P{patient_id.replace('P', '')}_{pulse_name}_seg.nii.gz"
-            
-            sitk.WriteImage(current_image, str(final_volume_path))
-            sitk.WriteImage(current_mask, str(final_mask_path))
-            
-            processed_pulse["final_volume_path"] = str(final_volume_path)
-            processed_pulse["final_mask_path"] = str(final_mask_path)
-            
-            if verbose:
-                print(f"[RM / TRANSPOSE] Error during transposing, saving untransposed images instead")
-                print(f"[RM / TRANSPOSE] Final processed volume saved to {final_volume_path}")
-                print(f"[RM / TRANSPOSE] Final processed mask saved to {final_mask_path}")
-    elif current_image is not None and current_mask is not None:
-        # Even if no transpose step is specified, save the final outputs with standard naming
-        final_volume_path = patient_output_dir / f"P{patient_id.replace('P', '')}_{pulse_name}.nii.gz"
-        final_mask_path = patient_output_dir / f"P{patient_id.replace('P', '')}_{pulse_name}_seg.nii.gz"
-        
-        sitk.WriteImage(current_image, str(final_volume_path))
-        sitk.WriteImage(current_mask, str(final_mask_path))
-        
-        processed_pulse["final_volume_path"] = str(final_volume_path)
-        processed_pulse["final_mask_path"] = str(final_mask_path)
-        
-        if verbose:
-            print(f"[RM / FINAL] Final processed volume saved to {final_volume_path}")
-            print(f"[RM / FINAL] Final processed mask saved to {final_mask_path}")
+                logger.info(f"[RM / REGISTRATION] Only SRI24 atlas registration is supported, skipping")
+    sitk.WriteImage(current_image, str(patient_output_dir / f"{pulse_name}_{patient_id.replace('P', '')}_final.nii.gz"))
+    sitk.WriteImage(current_mask, str(patient_output_dir / f"{pulse_name}_{patient_id.replace('P', '')}_mask_final.nii.gz"))
+    # Return the processed pulse data
+    return processed_pulse
 
 
 def apply_preprocessing_steps(
     plan: Dict[str, Any], 
     patient_data: Dict[str, Dict[str, Dict[str, Any]]], 
     output_dir: Path,
-    verbose: bool = True
+    verbose: bool = True,
+    save_intermediate: bool = False
 ) -> None:
     """
     Apply preprocessing steps to patient data according to the preprocessing plan.
@@ -681,6 +551,7 @@ def apply_preprocessing_steps(
         patient_data: Dictionary of patient data containing pulse sequences and their metadata
         output_dir: Base output directory for storing preprocessed files
         verbose: Whether to print detailed processing information
+        save_intermediate: If True, save intermediate processing files to 'others' directory
     
     Returns:
         Dictionary containing the updated patient data with processed file paths
@@ -689,11 +560,10 @@ def apply_preprocessing_steps(
     rm_preprocessing = plan.get("preprocessing_plan", {}).get("RM", {})
     tc_preprocessing = plan.get("preprocessing_plan", {}).get("TC", {})
     
-    
     # Iterate through patients and their pulses
     for patient_id, pulses in patient_data.items():
         if verbose:
-            print(f"\n[PATIENT] Processing {patient_id}")
+            logger.info(f"\n[PATIENT] Processing {patient_id}")
         
         patient_output_dir = output_dir / patient_id
         
@@ -701,31 +571,30 @@ def apply_preprocessing_steps(
             modality = pulse_data.get("modality", "")
             
             if verbose:
-                print(f"\n[{modality} / {pulse_name}] Starting preprocessing")
+                logger.info(f"\n[{modality} / {pulse_name}] Starting preprocessing")
             
             # Process based on modality
             if modality == "RM":
                 # Apply RM preprocessing pipeline
-                rm_pipeline(
+                processed_pulse = rm_pipeline(
                     pulse_data,
                     rm_preprocessing,
                     patient_output_dir,
                     patient_id,
                     pulse_name,
-                    verbose
+                    verbose,
+                    save_intermediate
                 )
-                
                 
             elif modality == "TC":
                 # In the future, we would call a tc_pipeline function here
                 # For now, just add the original pulse data
-                
                 if verbose:
-                    print(f"[TC / {pulse_name}] TC processing not yet implemented")
+                    logger.info(f"[TC / {pulse_name}] TC processing not yet implemented")
             
             else:
                 if verbose:
-                    print(f"[UNKNOWN / {pulse_name}] Unknown modality: {modality}")
+                    logger.info(f"[UNKNOWN / {pulse_name}] Unknown modality: {modality}")
 
 
 def main():
@@ -742,7 +611,22 @@ def main():
                         default="/home/mariopasc/Python/Datasets/Meningiomas",
                         type=str,  
                         help='Output directory for preprocessed files')
+    parser.add_argument('--verbose', 
+                        action='store_true',
+                        help='Print verbose output')
+    parser.add_argument('--save-intermediate', 
+                        action='store_true',
+                        help='Save intermediate processing files')
+    
     args = parser.parse_args()
+    
+    # Configure logging based on verbosity
+    if args.verbose:
+        logger.setLevel(logging.INFO)
+    else:
+        logger.setLevel(logging.WARNING)
+    
+    logger.info(f"Starting meningioma preprocessing with plan: {args.plan}")
     
     # Convert patient IDs to list of integers
     patient_ids = [int(p.strip()) for p in args.patients.split(',')]
@@ -755,10 +639,18 @@ def main():
     
     # Create output directories
     output_base_dir = create_output_directories(args.output, patient_ids)
-    print(f"\nCreated output directories in: {output_base_dir}")
+    logger.info(f"\nCreated output directories in: {output_base_dir}")
     
     # Apply preprocessing steps
-    apply_preprocessing_steps(plan, patient_data, output_base_dir)
+    apply_preprocessing_steps(
+        plan, 
+        patient_data, 
+        output_base_dir, 
+        args.verbose, 
+        args.save_intermediate
+    )
+    
+    logger.info("Preprocessing completed successfully")
 
 
 if __name__ == "__main__":
