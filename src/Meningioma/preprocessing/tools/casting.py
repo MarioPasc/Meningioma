@@ -11,13 +11,6 @@ def cast_volume_and_mask(
     Casts the input volume to float32 and the input mask to uint8 entirely using
     SimpleITK filters.
 
-    If squeeze=True:
-      - Volume is min–max normalized to [0,1] via RescaleIntensityImageFilter.
-      - Mask is clamped to [0,255] via ClampImageFilter (helpful if mask might exceed 255).
-
-    If squeeze=False:
-      - We only cast the volume to float32 and the mask to uint8, with no intensity transformations.
-
     Args:
         volume_img (sitk.Image):
             The input volume (any float or integer type).
@@ -32,7 +25,7 @@ def cast_volume_and_mask(
         >>> import SimpleITK as sitk
         >>> vol = sitk.ReadImage('volume.nii.gz')
         >>> msk = sitk.ReadImage('mask.nrrd')
-        >>> vol_out, msk_out = cast_volume_and_mask_sitk(vol, msk, squeeze=True)
+        >>> vol_out, msk_out = cast_volume_and_mask_sitk(vol, msk)
         >>> sitk.WriteImage(vol_out, 'volume_float32.nii.gz')
         >>> sitk.WriteImage(msk_out, 'mask_uint8.nrrd')
     """
