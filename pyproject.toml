@@ -25,6 +25,7 @@ keywords = [
   'medical image segmentation',
 ]
 dependencies = [
+    "setuptools",
     "opencv-python-headless",
     "pynrrd",
     "SciencePlots",
@@ -58,7 +59,10 @@ dependencies = [
     "yacs",
     "batchgeneratorsv2>=0.2",
     "einops",
-    "blosc2>=3.0.0b1"
+    "blosc2>=3.0.0b1",
+    # SynthMorph dependencies
+    "tensorflow>=2.5.0",
+    "tensorflow-addons",
 ]
 
 [build-system]

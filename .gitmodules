@@ -1,12 +1,12 @@
 [submodule "src/Meningioma/external/nnUNet/nnUNet"]
-	path = src/Meningioma/external/nnUNet/nnUNet
-	url = https://github.com/MarioPasc/nnUNet
-[submodule "src/Meningioma/external/external/neurite"]
-	path = src/Meningioma/external/external/neurite
+    path = src/Meningioma/external/nnUNet/nnUNet
+    url = https://github.com/MarioPasc/nnUNet
+[submodule "src/Meningioma/external/neurite"]
+	path = src/Meningioma/external/neurite
 	url = https://github.com/adalca/neurite.git
-[submodule "src/Meningioma/external/external/surfa"]
-	path = src/Meningioma/external/external/surfa
+[submodule "src/Meningioma/external/surfa"]
+	path = src/Meningioma/external/surfa
 	url = https://github.com/freesurfer/surfa.git
-[submodule "src/Meningioma/external/external/voxelmorph"]
-	path = src/Meningioma/external/external/voxelmorph
+[submodule "src/Meningioma/external/voxelmorph"]
+	path = src/Meningioma/external/voxelmorph
 	url = https://github.com/voxelmorph/voxelmorph.git

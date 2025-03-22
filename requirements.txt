@@ -3,3 +3,8 @@
 
 # Install nnUNet in editable mode
 -e src/Meningioma/external/nnUNet/nnUNet
+
+# Install SynthMorph dependencies in editable mode
+-e src/Meningioma/external/neurite
+-e src/Meningioma/external/surfa
+-e src/Meningioma/external/voxelmorph
