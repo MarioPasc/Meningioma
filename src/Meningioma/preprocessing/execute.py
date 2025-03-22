@@ -15,7 +15,7 @@ from Meningioma.preprocessing.tools.resample import resample_images
 from Meningioma.preprocessing.tools.denoise_susan import denoise_susan
 from Meningioma.preprocessing.tools.bias_field_corr_n4 import generate_brain_mask_sitk, n4_bias_field_correction
 from Meningioma.preprocessing.tools.skull_stripping.fsl_bet import fsl_bet_brain_extraction
-from Meningioma.preprocessing.tools.registration.ants_sri24_reg import register_image_to_sri24
+from Meningioma.preprocessing.tools.registration.ants_registration import register_image_to_sri24
 
 # Setup logging
 logging.basicConfig(

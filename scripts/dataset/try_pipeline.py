@@ -16,7 +16,7 @@ from Meningioma.preprocessing.tools.skull_stripping.fsl_bet import (
     fsl_bet_brain_extraction,
 )
 from Meningioma.preprocessing.tools.padding import pad_in_plane
-from Meningioma.preprocessing.tools.registration.ants_sri24_reg import (
+from Meningioma.preprocessing.tools.registration.ants_registration import (
     register_to_sri24_with_mask,
 )
 
