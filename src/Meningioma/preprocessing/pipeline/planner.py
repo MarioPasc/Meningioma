@@ -11,7 +11,7 @@ from tqdm import tqdm  # type: ignore
 from natsort import natsorted
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-from Meningioma.preprocessing.metadata import (
+from Meningioma.preprocessing.pipeline.metadata import (
     create_json_from_csv,
     apply_hardcoded_codification,
 )

@@ -10,8 +10,6 @@ import logging
 from Meningioma.preprocessing.tools.remove_extra_channels import remove_first_channel
 from Meningioma.preprocessing.tools.nrrd_to_nifti import nifti_write_3d
 from Meningioma.preprocessing.tools.casting import cast_volume_and_mask
-from Meningioma.preprocessing.tools.reorient import reorient_images
-from Meningioma.preprocessing.tools.resample import resample_images
 from Meningioma.preprocessing.tools.denoise_susan import denoise_susan
 from Meningioma.preprocessing.tools.bias_field_corr_n4 import generate_brain_mask_sitk, n4_bias_field_correction
 from Meningioma.preprocessing.tools.skull_stripping.fsl_bet import fsl_bet_brain_extraction
@@ -401,62 +399,6 @@ def rm_pipeline(
             if verbose:
                 logger.info(f"[RM / BIAS CORRECTION] Only N4 bias field correction is supported, skipping")
     
-    # 10. brain_extraction (if it exists in the plan)
-    if current_image is not None and "brain_extraction" in preprocessing_plan:
-        # Check for fsl_bet method
-        if "fsl_bet" in preprocessing_plan["brain_extraction"]:
-            if verbose:
-                logger.info(f"[RM / BRAIN EXTRACTION] Applying FSL BET brain extraction")
-            
-            try:
-                # Get FSL BET parameters
-                bet_params = preprocessing_plan["brain_extraction"]["fsl_bet"]
-                frac = bet_params.get("frac", 0.5)
-                robust = bet_params.get("robust", True)
-                vertical_gradient = bet_params.get("vertical_gradient", 0.0)
-                skull = bet_params.get("skull", False)
-                
-                if verbose:
-                    logger.info(f"[RM / BRAIN EXTRACTION] FSL BET parameters: frac={frac}, "
-                          f"robust={robust}, vertical_gradient={vertical_gradient}, "
-                          f"skull={skull}")
-                
-                # Apply FSL BET brain extraction
-                extracted_brain, brain_mask = fsl_bet_brain_extraction(
-                    current_image,
-                    frac=frac,
-                    robust=robust,
-                    vertical_gradient=vertical_gradient,
-                    skull=skull,
-                    verbose=verbose
-                )
-                
-                # Update the current image with the brain-extracted one
-                current_image = extracted_brain
-                
-                # Save the brain-extracted image and mask if requested
-                if save_intermediate and others_dir:
-                    brain_extracted_path = others_dir / f"{pulse_name}_{patient_id.replace('P', '')}_brain_extracted.nii.gz"
-                    brain_extraction_mask_path = others_dir / f"{pulse_name}_{patient_id.replace('P', '')}_brain_extraction_mask.nii.gz"
-                    
-                    sitk.WriteImage(current_image, str(brain_extracted_path))
-                    sitk.WriteImage(brain_mask, str(brain_extraction_mask_path))
-                    
-                    # Update the processed data with the new file paths
-                    processed_pulse["brain_extracted_path"] = str(brain_extracted_path)
-                    processed_pulse["brain_extraction_mask_path"] = str(brain_extraction_mask_path)
-                    
-                    if verbose:
-                        logger.info(f"[RM / BRAIN EXTRACTION] Brain extracted and saved to {brain_extracted_path}")
-                        logger.info(f"[RM / BRAIN EXTRACTION] Brain extraction mask saved to {brain_extraction_mask_path}")
-                
-            except Exception as e:
-                logger.error(f"[RM / BRAIN EXTRACTION] Error: {str(e)}")
-                # Continue even if brain extraction fails
-        else:
-            if verbose:
-                logger.info(f"[RM / BRAIN EXTRACTION] Only FSL BET brain extraction is supported, skipping")
-    
     # 11. registration (if it exists in the plan)
     if current_image is not None and "registration" in preprocessing_plan:
         # Check for sri24 registration
@@ -526,9 +468,64 @@ def rm_pipeline(
         else:
             if verbose:
                 logger.info(f"[RM / REGISTRATION] Only SRI24 atlas registration is supported, skipping")
+    # 10. brain_extraction (if it exists in the plan)
+    if current_image is not None and "brain_extraction" in preprocessing_plan:
+        # Check for fsl_bet method
+        if "fsl_bet" in preprocessing_plan["brain_extraction"]:
+            if verbose:
+                logger.info(f"[RM / BRAIN EXTRACTION] Applying FSL BET brain extraction")
+            
+            try:
+                # Get FSL BET parameters
+                bet_params = preprocessing_plan["brain_extraction"]["fsl_bet"]
+                frac = bet_params.get("frac", 0.5)
+                robust = bet_params.get("robust", True)
+                vertical_gradient = bet_params.get("vertical_gradient", 0.0)
+                skull = bet_params.get("skull", False)
+                
+                if verbose:
+                    logger.info(f"[RM / BRAIN EXTRACTION] FSL BET parameters: frac={frac}, "
+                          f"robust={robust}, vertical_gradient={vertical_gradient}, "
+                          f"skull={skull}")
+                
+                # Apply FSL BET brain extraction
+                extracted_brain, brain_mask = fsl_bet_brain_extraction(
+                    current_image,
+                    frac=frac,
+                    robust=robust,
+                    vertical_gradient=vertical_gradient,
+                    skull=skull,
+                    verbose=verbose
+                )
+                
+                # Update the current image with the brain-extracted one
+                current_image = extracted_brain
+                
+                # Save the brain-extracted image and mask if requested
+                if save_intermediate and others_dir:
+                    brain_extracted_path = others_dir / f"{pulse_name}_{patient_id.replace('P', '')}_brain_extracted.nii.gz"
+                    brain_extraction_mask_path = others_dir / f"{pulse_name}_{patient_id.replace('P', '')}_brain_extraction_mask.nii.gz"
+                    
+                    sitk.WriteImage(current_image, str(brain_extracted_path))
+                    sitk.WriteImage(brain_mask, str(brain_extraction_mask_path))
+                    
+                    # Update the processed data with the new file paths
+                    processed_pulse["brain_extracted_path"] = str(brain_extracted_path)
+                    processed_pulse["brain_extraction_mask_path"] = str(brain_extraction_mask_path)
+                    
+                    if verbose:
+                        logger.info(f"[RM / BRAIN EXTRACTION] Brain extracted and saved to {brain_extracted_path}")
+                        logger.info(f"[RM / BRAIN EXTRACTION] Brain extraction mask saved to {brain_extraction_mask_path}")
+                
+            except Exception as e:
+                logger.error(f"[RM / BRAIN EXTRACTION] Error: {str(e)}")
+                # Continue even if brain extraction fails
+        else:
+            if verbose:
+                logger.info(f"[RM / BRAIN EXTRACTION] Only FSL BET brain extraction is supported, skipping")
     sitk.WriteImage(current_image, str(patient_output_dir / f"{pulse_name}_{patient_id.replace('P', '')}_final.nii.gz"))
     sitk.WriteImage(current_mask, str(patient_output_dir / f"{pulse_name}_{patient_id.replace('P', '')}_mask_final.nii.gz"))
-    # Return the processed pulse data
+
     return processed_pulse
 
 
@@ -538,13 +535,13 @@ def apply_preprocessing_steps(
     output_dir: Path,
     verbose: bool = True,
     save_intermediate: bool = False
-) -> None:
+) -> Dict[str, Dict[str, Dict[str, Any]]]:
     """
     Apply preprocessing steps to patient data according to the preprocessing plan.
     
     The function processes each patient's pulse sequences, applying the appropriate
     preprocessing steps based on the modality (RM or TC). It delegates to specific
-    pipeline functions for each modality.
+    pipeline functions for each modality. T1 pulse is always processed first.
     
     Args:
         plan: The preprocessing plan dictionary containing steps for each modality
@@ -560,6 +557,9 @@ def apply_preprocessing_steps(
     rm_preprocessing = plan.get("preprocessing_plan", {}).get("RM", {})
     tc_preprocessing = plan.get("preprocessing_plan", {}).get("TC", {})
     
+    # Dictionary to store updated patient data
+    updated_patient_data = {}
+    
     # Iterate through patients and their pulses
     for patient_id, pulses in patient_data.items():
         if verbose:
@@ -567,10 +567,38 @@ def apply_preprocessing_steps(
         
         patient_output_dir = output_dir / patient_id
         
+        # Check if this patient has a T1 pulse
+        has_t1 = False
+        for pulse_name in pulses.keys():
+            if pulse_name == "T1":
+                has_t1 = True
+                break
+        
+        # Skip the entire patient if no T1 pulse is found
+        if not has_t1:
+            logger.warning(f"[PATIENT] {patient_id} - No T1 pulse found. Skipping this patient.")
+            continue
+        
+        # Store pulses for this patient in updated data
+        updated_patient_data[patient_id] = {}
+        
+        # Create an ordered dictionary of pulses with T1 first, then all other pulses
+        ordered_pulses = {}
+        if "T1" in pulses:
+            ordered_pulses["T1"] = pulses["T1"]
+            
+        # Add all other pulses in their original order
         for pulse_name, pulse_data in pulses.items():
+            if pulse_name != "T1":
+                ordered_pulses[pulse_name] = pulse_data
+        
+        # Process all pulses in the new order (T1 will be first)
+        for pulse_name, pulse_data in ordered_pulses.items():
             modality = pulse_data.get("modality", "")
             
-            if verbose:
+            if pulse_name == "T1" and verbose:
+                logger.info(f"\n[{modality} / {pulse_name}] Starting preprocessing (T1 priority)")
+            elif verbose:
                 logger.info(f"\n[{modality} / {pulse_name}] Starting preprocessing")
             
             # Process based on modality
@@ -585,16 +613,20 @@ def apply_preprocessing_steps(
                     verbose,
                     save_intermediate
                 )
+                updated_patient_data[patient_id][pulse_name] = processed_pulse
                 
             elif modality == "TC":
                 # In the future, we would call a tc_pipeline function here
-                # For now, just add the original pulse data
                 if verbose:
                     logger.info(f"[TC / {pulse_name}] TC processing not yet implemented")
+                updated_patient_data[patient_id][pulse_name] = pulse_data
             
             else:
                 if verbose:
                     logger.info(f"[UNKNOWN / {pulse_name}] Unknown modality: {modality}")
+                updated_patient_data[patient_id][pulse_name] = pulse_data
+    
+    return updated_patient_data
 
 
 def main():
