@@ -56,7 +56,13 @@ preprocessing:
       sri24:
         enable: true
         config_path: "/home/mariopasc/Python/Projects/Meningioma/src/Meningioma/preprocessing/configs/registration_sri24.yaml" 
-    
+    brain_extraction:
+      fsl_bet:
+        frac: 0.5
+        robust: true
+        vertical_gradient: 0
+        skull: false  
+
   TC:
     export_nifti: true
     cast_volume: true
