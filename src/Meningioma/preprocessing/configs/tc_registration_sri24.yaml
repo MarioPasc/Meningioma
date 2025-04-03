@@ -1,7 +1,7 @@
 # YAML configuration for ANTs registration to SRI24 atlas
 
 # Input and output paths
-atlas_path: /home/mariopasc/Python/Datasets/Meningiomas/ATLAS/sri24_spm8/templates/T1.nii #_brain
+atlas_path: /home/mariopasc/Python/Datasets/Meningiomas/ATLAS/sri24_spm8/templates/T1_brain.nii #_brain
 output_dir: /home/mariopasc/Python/Datasets/Meningiomas/ATLAS/temp_dir_registration # temp dir, will be removed
 output_registered: registered.nii.gz
 output_mask: registered_mask.nii.gz
@@ -10,7 +10,7 @@ initial_transform: null  # Can be set to a path to initialize from previous tran
 
 # Basic registration parameters
 dimension: 3
-histogram_matching: true
+histogram_matching: false
 winsorize_lower_quantile: 0.005
 winsorize_upper_quantile: 0.995
 number_threads: 5
