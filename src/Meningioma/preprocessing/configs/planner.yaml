@@ -9,7 +9,7 @@ processing:
 
 # "T1SIN" excluded
 modalities:
-  RM: ["T1", "T2", "T1SIN", "SUSC"]
+  RM: ["T1", "T2", "SUSC"] # T1SIN
   TC: ["TC"]
 
 
@@ -57,11 +57,14 @@ preprocessing:
         enable: true
         config_path: "/home/mariopasc/Python/Projects/Meningioma/src/Meningioma/preprocessing/configs/registration_sri24.yaml" 
     brain_extraction:
+      universal_mask:
+        path: "/home/mariopasc/Python/Datasets/Meningiomas/ATLAS/sri24_spm8/templates/T1_brain.nii"
       fsl_bet:
         frac: 0.5
         robust: true
         vertical_gradient: 0
         skull: false  
+      
 
   TC:
     export_nifti: true

@@ -11,6 +11,8 @@ from tqdm import tqdm  # type: ignore
 from natsort import natsorted
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
+from typing import Optional, Dict, Any
+
 from Meningioma.preprocessing.pipeline.metadata import (
     create_json_from_csv,
     apply_hardcoded_codification,
@@ -135,25 +137,22 @@ def process_pulse(pulse, pulse_folder, output_folder, modality):
     return (pulse, pulse_results)
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Generate patient-based preprocessing plan JSON with parallel pulse processing."
-    )
-    parser.add_argument(
-        "-c", "--config", 
-        type=str, 
-        default="./src/Meningioma/preprocessing/configs/planner.yaml",
-        help="Path to YAML configuration file"
-    )
-    args = parser.parse_args()
-    
+def plan(yaml_path: str) -> Optional[str]:
+    """
+    Execute the preprocessing pipeline.
+    Loads configuration from a YAML file, processes patient data, and saves the results to a JSON file.
+    Args:
+        yaml_path (str): Path to the YAML configuration file.
+    Returns:
+        Optional[str]: Path to the output JSON file.
+    """
     # Load configuration from YAML file
     try:
-        with open(args.config, 'r') as file:
+        with open(yaml_path, 'r') as file:
             config = yaml.safe_load(file)
     except Exception as e:
         logger.error(f"Error reading config file: {e}")
-        return
+        return ""
 
     # Extract configuration parameters
     ROOT = config.get("paths", {}).get("root", "/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_Adquisition")
@@ -184,7 +183,7 @@ def main():
     # Validate threads
     if threads < 1 or threads > 4:
         logger.error("Number of threads must be between 1 and 4.")
-        return
+        return ""
 
     xlsx_path = os.path.join(ROOT, "metadata.xlsx")
     csv_path = os.path.join(OUTPUT_FOLDER, "metadata_recodified.csv")
@@ -202,7 +201,7 @@ def main():
         metadata_dict = {}
 
     # Global dictionary to collect patient data
-    patients = {}
+    patients: Dict[Any, Any] = {}
 
     # Define modalities and their respective pulses from config
     modalities = config.get("modalities", {
@@ -275,7 +274,4 @@ def main():
     with open(output_json, "w") as outfile:
         json.dump(result, outfile, indent=2, default=numpy_converter)
     logger.info(f"Preprocessing plan JSON saved to '{output_json}'.")
-
-
-if __name__ == "__main__":
-    main()
+    return output_json

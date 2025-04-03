@@ -15,6 +15,9 @@ from Meningioma.preprocessing.tools.bias_field_corr_n4 import generate_brain_mas
 from Meningioma.preprocessing.tools.skull_stripping.fsl_bet import fsl_bet_brain_extraction
 from Meningioma.preprocessing.tools.registration.ants_registration import register_image_to_sri24
 
+# Global configuration, only has debudding pourposes
+SAVE_INTERMEDIATE: bool = False
+
 # Setup logging
 logging.basicConfig(
     level=logging.INFO, 
@@ -26,6 +29,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger('rm_preprocessing')
 
+
 def rm_pipeline(
     pulse_data: Dict[str, Any],
     preprocessing_plan: Dict[str, Any],
@@ -33,7 +37,6 @@ def rm_pipeline(
     patient_id: str,
     pulse_name: str,
     verbose: bool = True,
-    save_intermediate: bool = False,
     t1_brain_mask_path: Optional[str] = None
 ) -> Dict[str, Any]:
     """
@@ -66,7 +69,7 @@ def rm_pipeline(
     """
     # Create a working dictionary for this pulse
     processed_pulse = pulse_data.copy()
-    
+
     # Initialize processing state dictionary
     state = {
         "current_image": None,
@@ -123,7 +126,7 @@ def rm_pipeline(
                 "patient_id": patient_id,
                 "pulse_name": pulse_name,
                 "verbose": verbose,
-                "save_intermediate": True,  # Always save intermediate files
+                "save_intermediate": SAVE_INTERMEDIATE,  # Always save intermediate files
                 "others_dir": other_dir,  # Always use other_dir
                 "t1_brain_mask_path": t1_brain_mask_path
             }
@@ -147,20 +150,14 @@ def rm_pipeline(
     
     # Save final images to the main patient directory
     if state["current_image"] is not None:
-        final_image_path = patient_output_dir / f"{pulse_name}_{patient_id.replace('P', '')}.nii.gz"
+        final_image_path = patient_output_dir / f"{pulse_name}_{patient_id}.nii.gz"
         sitk.WriteImage(state["current_image"], str(final_image_path))
         processed_pulse["final_image_path"] = str(final_image_path)
         
     if state["current_mask"] is not None:
-        final_mask_path = patient_output_dir / f"{pulse_name}_{patient_id.replace('P', '')}_seg.nii.gz"
+        final_mask_path = patient_output_dir / f"{pulse_name}_{patient_id}_seg.nii.gz"
         sitk.WriteImage(state["current_mask"], str(final_mask_path))
         processed_pulse["final_mask_path"] = str(final_mask_path)
-    
-    # If this is T1, make sure we return the brain extraction mask path
-    if pulse_name == "T1" and "brain_extraction_mask_path" in processed_pulse:
-        # Just ensure it's in the processed_pulse to be passed to other pulses
-        # It should already be there from the _process_brain_extraction function
-        pass
 
     return processed_pulse
 
@@ -254,7 +251,7 @@ def _process_export_nifti(
         logger.info(f"[RM / NIFTI EXPORT] Converting to NIfTI format")
     
     # Output path for the NIfTI file - This is a main output file, not an intermediate
-    nifti_filename = f"{pulse_name}_{patient_id.replace('P', '')}.nii.gz"
+    nifti_filename = f"{pulse_name}_{patient_id}.nii.gz"
     nifti_path = patient_output_dir / nifti_filename
     
     # If we have a current_image from a previous step, use it
@@ -382,8 +379,8 @@ def _process_cast_volume(
         
         # Save the cast volume and mask if requested
         if save_intermediate and others_dir:
-            cast_volume_path = others_dir / f"{pulse_name}_{patient_id.replace('P', '')}_cast.nii.gz"
-            cast_mask_path = others_dir / f"{pulse_name}_{patient_id.replace('P', '')}_mask_cast.nii.gz"
+            cast_volume_path = others_dir / f"{pulse_name}_{patient_id}_cast.nii.gz"
+            cast_mask_path = others_dir / f"{pulse_name}_{patient_id}_mask_cast.nii.gz"
             
             sitk.WriteImage(cast_image, str(cast_volume_path))
             sitk.WriteImage(cast_mask, str(cast_mask_path))
@@ -476,7 +473,7 @@ def _process_denoise(
         
         # Save the denoised volume if requested
         if save_intermediate and others_dir:
-            denoised_volume_path = others_dir / f"{pulse_name}_{patient_id.replace('P', '')}_denoised.nii.gz"
+            denoised_volume_path = others_dir / f"{pulse_name}_{patient_id}_denoised.nii.gz"
             sitk.WriteImage(denoised_image, str(denoised_volume_path))
             
             # Update the processed data with the new file path
@@ -559,7 +556,7 @@ def _process_brain_mask(
         
         # Save the brain mask if requested
         if save_intermediate and others_dir:
-            brain_mask_path = others_dir / f"{pulse_name}_{patient_id.replace('P', '')}_brain_mask.nii.gz"
+            brain_mask_path = others_dir / f"{pulse_name}_{patient_id}_brain_mask.nii.gz"
             sitk.WriteImage(new_brain_mask, str(brain_mask_path))
             
             # Update the processed data with the new file path
@@ -649,7 +646,7 @@ def _process_bias_correction(
         
         # Save the bias-corrected image if requested
         if save_intermediate and others_dir:
-            bias_corrected_path = others_dir / f"{pulse_name}_{patient_id.replace('P', '')}_bias_corrected.nii.gz"
+            bias_corrected_path = others_dir / f"{pulse_name}_{patient_id}_bias_corrected.nii.gz"
             sitk.WriteImage(corrected_image, str(bias_corrected_path))
             
             # Update the processed data with the new file path
@@ -748,11 +745,12 @@ def _process_registration(
         result["current_mask"] = registered_mask
         
         # Final registered images - these are main output files
-        reg_image_path = patient_output_dir / f"{pulse_name}_{patient_id.replace('P', '')}_registered_sri24.nii.gz"
-        reg_mask_path = patient_output_dir / f"{pulse_name}_{patient_id.replace('P', '')}_mask_registered_sri24.nii.gz"
+        reg_image_path = patient_output_dir / f"{pulse_name}_{patient_id}_registered_sri24.nii.gz"
+        reg_mask_path = patient_output_dir / f"{pulse_name}_{patient_id}_mask_registered_sri24.nii.gz"
         
-        sitk.WriteImage(registered_image, str(reg_image_path))
-        sitk.WriteImage(registered_mask, str(reg_mask_path))
+        if save_intermediate:
+            sitk.WriteImage(registered_image, str(reg_image_path))
+            sitk.WriteImage(registered_mask, str(reg_mask_path))
         
         # Save transform parameters
         transform_json_path = patient_output_dir / f"transform_params_{pulse_name}.json"
@@ -786,7 +784,7 @@ def _process_brain_extraction(
     **kwargs
 ) -> Dict[str, Any]:
     """
-    Apply FSL BET brain extraction to the current image.
+    Apply brain extraction to the current image using either FSL BET or a universal mask template.
     
     Args:
         current_image: Current SimpleITK image object or None
@@ -811,59 +809,120 @@ def _process_brain_extraction(
     if current_image is None:
         return result
     
-    # Check if FSL BET method is configured
-    if "fsl_bet" not in preprocessing_plan:
+    # Check if using universal mask from SRI24 atlas
+    if "universal_mask" in preprocessing_plan:
         if verbose:
-            logger.info(f"[RM / BRAIN EXTRACTION] Only FSL BET brain extraction is supported, skipping")
-        return result
-    
-    if verbose:
-        logger.info(f"[RM / BRAIN EXTRACTION] Applying FSL BET brain extraction")
-    
-    try:
-        # Get FSL BET parameters
-        bet_params = preprocessing_plan["fsl_bet"]
-        frac = bet_params.get("frac", 0.5)
-        robust = bet_params.get("robust", True)
-        vertical_gradient = bet_params.get("vertical_gradient", 0.0)
-        skull = bet_params.get("skull", False)
+            logger.info(f"[RM / BRAIN EXTRACTION] Using universal mask template from SRI24 atlas")
         
-        if verbose:
-            logger.info(f"[RM / BRAIN EXTRACTION] FSL BET parameters: frac={frac}, "
-                  f"robust={robust}, vertical_gradient={vertical_gradient}, "
-                  f"skull={skull}")
-        
-        # Apply FSL BET brain extraction
-        extracted_brain, brain_mask = fsl_bet_brain_extraction(
-            current_image,
-            frac=frac,
-            robust=robust,
-            vertical_gradient=vertical_gradient,
-            skull=skull,
-            verbose=verbose
-        )
-        
-        result["current_image"] = extracted_brain
-        result["brain_mask"] = brain_mask
-        
-        # Always save the brain mask for T1, even if save_intermediate is False
-        if others_dir:
-            brain_extracted_path = others_dir / f"{pulse_name}_{patient_id.replace('P', '')}_brain_extracted.nii.gz"
-            brain_extraction_mask_path = others_dir / f"{pulse_name}_{patient_id.replace('P', '')}_brain_extraction_mask.nii.gz"
-            
-            sitk.WriteImage(extracted_brain, str(brain_extracted_path))
-            sitk.WriteImage(brain_mask, str(brain_extraction_mask_path))
-            
-            # Update the processed data with the new file paths
-            result["processed_data"]["brain_extracted_path"] = str(brain_extracted_path)
-            result["processed_data"]["brain_extraction_mask_path"] = str(brain_extraction_mask_path)
+        try:
+            # Get path to template brain mask
+            mask_path = preprocessing_plan["universal_mask"].get("path")
+            if not mask_path or not os.path.exists(mask_path):
+                logger.error(f"[RM / BRAIN EXTRACTION] Universal mask template not found at {mask_path}")
+                return result
             
             if verbose:
-                logger.info(f"[RM / BRAIN EXTRACTION] Brain extracted and saved to {brain_extracted_path}")
-                logger.info(f"[RM / BRAIN EXTRACTION] Brain extraction mask saved to {brain_extraction_mask_path}")
+                logger.info(f"[RM / BRAIN EXTRACTION] Loading brain template from {mask_path}")
+            
+            # Load the template brain image (this is already skull-stripped)
+            template_brain = sitk.ReadImage(mask_path)
+            
+            # Create a binary mask from the brain template (1 where brain tissue exists)
+            binary_threshold = sitk.BinaryThreshold(
+                template_brain, 
+                lowerThreshold=0.01,  # Small positive threshold to avoid numerical issues
+                upperThreshold=float('inf'),
+                insideValue=0,
+                outsideValue=1
+            )
+            
+            # Ensure mask is of correct type
+            brain_mask = sitk.Cast(binary_threshold, sitk.sitkUInt8)
+            
+            # Resample mask to match the input image dimensions and orientation
+            resampler = sitk.ResampleImageFilter()
+            resampler.SetReferenceImage(current_image)
+            resampler.SetInterpolator(sitk.sitkNearestNeighbor)  # Use nearest neighbor for binary masks
+            brain_mask = resampler.Execute(brain_mask)
+            
+            # Apply the brain mask to the current image (retains only brain tissue)
+            extracted_brain = sitk.Mask(current_image, brain_mask)
+            
+            # Store results
+            result["current_image"] = extracted_brain  # This now contains only the brain tissue
+            result["brain_mask"] = brain_mask
+            
+            # Always save the brain mask, even if save_intermediate is False
+            if others_dir and save_intermediate:
+                brain_extracted_path = others_dir / f"{pulse_name}_{patient_id}_brain_extracted.nii.gz"
+                brain_extraction_mask_path = others_dir / f"{pulse_name}_{patient_id}_brain_extraction_mask.nii.gz"
+                
+                sitk.WriteImage(extracted_brain, str(brain_extracted_path))
+                sitk.WriteImage(brain_mask, str(brain_extraction_mask_path))
+                
+                # Update the processed data with the new file paths
+                result["processed_data"]["brain_extracted_path"] = str(brain_extracted_path)
+                result["processed_data"]["brain_extraction_mask_path"] = str(brain_extraction_mask_path)
+                
+                if verbose:
+                    logger.info(f"[RM / BRAIN EXTRACTION] Brain extracted using SRI24 template and saved to {brain_extracted_path}")
+                    logger.info(f"[RM / BRAIN EXTRACTION] Brain mask saved to {brain_extraction_mask_path}")
+                
+        except Exception as e:
+            logger.error(f"[RM / BRAIN EXTRACTION] Error applying universal mask: {str(e)}")
+            
+    # Fall back to FSL BET if universal mask is not specified or failed
+    elif "fsl_bet" in preprocessing_plan:
+        if verbose:
+            logger.info(f"[RM / BRAIN EXTRACTION] Applying FSL BET brain extraction")
         
-    except Exception as e:
-        logger.error(f"[RM / BRAIN EXTRACTION] Error: {str(e)}")
+        try:
+            # Get FSL BET parameters
+            bet_params = preprocessing_plan["fsl_bet"]
+            frac = bet_params.get("frac", 0.5)
+            robust = bet_params.get("robust", True)
+            vertical_gradient = bet_params.get("vertical_gradient", 0.0)
+            skull = bet_params.get("skull", False)
+            
+            if verbose:
+                logger.info(f"[RM / BRAIN EXTRACTION] FSL BET parameters: frac={frac}, "
+                      f"robust={robust}, vertical_gradient={vertical_gradient}, "
+                      f"skull={skull}")
+            
+            # Apply FSL BET brain extraction
+            extracted_brain, brain_mask = fsl_bet_brain_extraction(
+                current_image,
+                frac=frac,
+                robust=robust,
+                vertical_gradient=vertical_gradient,
+                skull=skull,
+                verbose=verbose
+            )
+            
+            result["current_image"] = extracted_brain
+            result["brain_mask"] = brain_mask
+            
+            # Always save the brain mask for T1, even if save_intermediate is False
+            if others_dir:
+                brain_extracted_path = others_dir / f"{pulse_name}_{patient_id}_brain_extracted.nii.gz"
+                brain_extraction_mask_path = others_dir / f"{pulse_name}_{patient_id}_brain_extraction_mask.nii.gz"
+                
+                sitk.WriteImage(extracted_brain, str(brain_extracted_path))
+                sitk.WriteImage(brain_mask, str(brain_extraction_mask_path))
+                
+                # Update the processed data with the new file paths
+                result["processed_data"]["brain_extracted_path"] = str(brain_extracted_path)
+                result["processed_data"]["brain_extraction_mask_path"] = str(brain_extraction_mask_path)
+                
+                if verbose:
+                    logger.info(f"[RM / BRAIN EXTRACTION] Brain extracted and saved to {brain_extracted_path}")
+                    logger.info(f"[RM / BRAIN EXTRACTION] Brain extraction mask saved to {brain_extraction_mask_path}")
+            
+        except Exception as e:
+            logger.error(f"[RM / BRAIN EXTRACTION] Error with FSL BET: {str(e)}")
+    else:
+        if verbose:
+            logger.info(f"[RM / BRAIN EXTRACTION] No brain extraction method specified, skipping")
     
     return result
 
@@ -921,7 +980,7 @@ def _process_brain_extraction_with_t1_mask(
         
         # Save the brain-extracted image and mask if requested
         if save_intermediate and others_dir:
-            brain_extracted_path = others_dir / f"{pulse_name}_{patient_id.replace('P', '')}_brain_extracted_t1mask.nii.gz"
+            brain_extracted_path = others_dir / f"{pulse_name}_{patient_id}_brain_extracted_t1mask.nii.gz"
             
             sitk.WriteImage(extracted_brain, str(brain_extracted_path))
             

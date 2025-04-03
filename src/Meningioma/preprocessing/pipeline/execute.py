@@ -1,4 +1,4 @@
-from typing import Dict, Any
+from typing import Dict, Any, List, Union
 from pathlib import Path
 import os
 import json
@@ -85,10 +85,11 @@ def create_output_directories(output_dir, patient_ids):
     return base_dir
 
 
-def apply_preprocessing_steps(
+def preprocess(
     plan: Dict[str, Any], 
-    patient_data: Dict[str, Dict[str, Dict[str, Any]]], 
-    output_dir: Path,
+    output_dir: Union[str, Path],
+    patient_data: Dict[str, Dict[str, Dict[str, Any]]] = None, 
+    patient_ids: str = None,
     verbose: bool = True,
     save_intermediate: bool = False
 ) -> Dict[str, Dict[str, Dict[str, Any]]]:
@@ -109,6 +110,28 @@ def apply_preprocessing_steps(
     Returns:
         Dictionary containing the updated patient data with processed file paths
     """
+
+    if patient_data is None and patient_ids is None:
+        raise ValueError("Either patient_data or patient_ids must be provided.")
+
+    # Configure logging based on verbosity
+    if verbose:
+        logger.setLevel(logging.INFO)
+    else:
+        logger.setLevel(logging.WARNING)
+
+    if type(plan) is str:
+        plan = load_plan(plan)
+
+    if patient_ids is not None:
+        patient_ids = [int(p.strip(" P")) for p in patient_ids.split(',')]
+        patient_data = extract_patient_data(plan, patient_ids)
+
+    if type(output_dir) is str:
+        output_base_dir = create_output_directories(output_dir, patient_ids)
+        output_dir = Path(output_dir)
+        logger.info(f"\nCreated output directories in: {output_base_dir}")
+
     # Get preprocessing steps for RM and TC
     rm_preprocessing = plan.get("preprocessing_plan", {}).get("RM", {})
     tc_preprocessing = plan.get("preprocessing_plan", {}).get("TC", {})
@@ -170,7 +193,6 @@ def apply_preprocessing_steps(
                     patient_id,
                     pulse_name,
                     verbose,
-                    save_intermediate,
                     t1_brain_mask_path
                 )
                 updated_patient_data[patient_id][pulse_name] = processed_pulse
@@ -240,7 +262,7 @@ def main():
     logger.info(f"\nCreated output directories in: {output_base_dir}")
     
     # Apply preprocessing steps
-    apply_preprocessing_steps(
+    preprocess(
         plan, 
         patient_data, 
         output_base_dir, 
