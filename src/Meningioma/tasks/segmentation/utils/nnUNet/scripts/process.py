@@ -4,10 +4,10 @@ from pathlib import Path
 import time
 import os
 
-from Meningioma.dataset_formatting.nnUNet.tools.merge_and_convert import copy_and_rename_cases
-from Meningioma.dataset_formatting.nnUNet.tools.create_metadata_json  import generate_dataset_json
-from Meningioma.dataset_formatting.nnUNet.tools.plan_and_preprocess_dataset import plan_and_preprocess
-from Meningioma.dataset_formatting.nnUNet.tools.setup_folders import setup_folders
+from Meningioma.tasks.segmentation.utils.nnUNet.tools.merge_and_convert import copy_and_rename_cases
+from Meningioma.tasks.segmentation.utils.nnUNet.tools.create_metadata_json  import generate_dataset_json
+from Meningioma.tasks.segmentation.utils.nnUNet.tools.plan_and_preprocess_dataset import plan_and_preprocess
+from Meningioma.tasks.segmentation.utils.nnUNet.tools.setup_folders import setup_folders
 
 # User-defined variables
 

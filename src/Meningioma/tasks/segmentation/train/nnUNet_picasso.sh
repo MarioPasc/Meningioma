@@ -4,7 +4,7 @@
 #SBATCH --cpus-per-task=40  # Increased for multi-GPU job
 #SBATCH --gres=gpu:5        # Request 5 GPUs in a single job
 #SBATCH --mem=160gb         # Increased for multi-GPU job
-##SBATCH --constraint=cal    # Use nodes with the 'cal' feature
+#SBATCH --constraint=dgx
 #SBATCH --time=00:01:00     # Adjust based on expected training time
 #SBATCH --error=nnunet_training_%j.err
 #SBATCH --output=nnunet_training_%j.out
