@@ -1,5 +1,5 @@
 [project]
-name = "Meningioma"
+name = "mgmGrowth"
 version = "1.0.0"
 requires-python = ">=3.10"
 description = "Meningioma package harbors every tools used for meningioma characterization and growth prediction."

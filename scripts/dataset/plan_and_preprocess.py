@@ -1,4 +1,4 @@
-from Meningioma.preprocessing.pipeline import ( # type: ignore
+from mgmGrowth.preprocessing.pipeline import ( # type: ignore
     planner,
     execute
 ) 

@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import os
 
-from Meningioma.image_processing.nrrd_processing import open_nrrd  # type: ignore
+from mgmGrowth.image_processing.nrrd_processing import open_nrrd  # type: ignore
 
 PULSE_LABELS = ["T1", "T1SIN", "T2", "SUSC"]
 
