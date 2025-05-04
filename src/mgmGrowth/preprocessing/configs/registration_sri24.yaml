@@ -11,9 +11,9 @@ initial_transform: null  # Can be set to a path to initialize from previous tran
 # Basic registration parameters
 dimension: 3
 histogram_matching: true
-winsorize_lower_quantile: 0.005
-winsorize_upper_quantile: 0.995
-number_threads: 5
+winsorize_lower_quantile: 0.001
+winsorize_upper_quantile: 0.999
+number_threads: 7
 verbose: true
 
 # Transform stages

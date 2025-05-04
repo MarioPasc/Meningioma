@@ -7,9 +7,10 @@ import argparse
 import numpy as np
 import logging
 
+from mgmGrowth.preprocessing import LOGGER
 from mgmGrowth.preprocessing.tools.remove_extra_channels import remove_first_channel
 from mgmGrowth.preprocessing.tools.nrrd_to_nifti import nifti_write_3d
-from mgmGrowth.preprocessing.tools.casting import cast_volume_and_mask
+from mgmGrowth.preprocessing.tools.casting import cast_volume_and_optional_mask
 from mgmGrowth.preprocessing.tools.denoise_susan import denoise_susan
 from mgmGrowth.preprocessing.tools.bias_field_corr_n4 import generate_brain_mask_sitk, n4_bias_field_correction
 from mgmGrowth.preprocessing.tools.skull_stripping.fsl_bet import fsl_bet_brain_extraction
@@ -18,17 +19,6 @@ from mgmGrowth.preprocessing.tools.registration.ants_registration import registe
 # Global configuration, only has debudding pourposes
 SAVE_INTERMEDIATE: bool = False
 
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO, 
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('rm_preprocessing.log')
-    ]
-)
-logger = logging.getLogger('rm_preprocessing')
-
 
 def rm_pipeline(
     pulse_data: Dict[str, Any],
@@ -36,7 +26,7 @@ def rm_pipeline(
     patient_output_dir: Path,
     patient_id: str,
     pulse_name: str,
-    verbose: bool = True,
+    verbose: bool = False,
     t1_brain_mask_path: Optional[str] = None
 ) -> Dict[str, Any]:
     """
@@ -87,7 +77,7 @@ def rm_pipeline(
     other_dir.mkdir(exist_ok=True)
     
     if verbose:
-        logger.info(f"\n[RM / {pulse_name}] Starting RM preprocessing pipeline")
+        LOGGER.info(f"\n[RM / {pulse_name}] Starting RM preprocessing pipeline")
     
     # Define pipeline steps with corresponding processing functions
     pipeline_steps = [
@@ -115,7 +105,7 @@ def rm_pipeline(
         # Special case for load_segmentation_mask which is always executed if possible
         if step_name in preprocessing_plan or step_name == "load_segmentation_mask":
             if verbose and step_name != "load_segmentation_mask":
-                logger.info(f"[RM / {step_name.upper()}] Processing step: {step_name}")
+                LOGGER.info(f"[RM / {step_name.upper()}] Processing step: {step_name}")
             
             # Create kwargs for the step function
             kwargs = {
@@ -145,7 +135,7 @@ def rm_pipeline(
                         processed_pulse[key] = value
                 
             except Exception as e:
-                logger.error(f"[RM / {step_name.upper()}] Error: {str(e)}")
+                LOGGER.error(f"[RM / {step_name.upper()}] Error: {str(e)}")
                 # Continue to next step even if this one fails
     
     # Save final images to the main patient directory
@@ -166,7 +156,7 @@ def _process_remove_channel(
     current_header: Optional[Dict[str, Any]],
     pulse_data: Dict[str, Any],
     preprocessing_plan: Dict[str, Any],
-    verbose: bool = True,
+    verbose: bool = False,
     **kwargs
 ) -> Dict[str, Any]:
     """
@@ -189,11 +179,11 @@ def _process_remove_channel(
     }
     
     if verbose:
-        logger.info(f"[RM / CHANNEL REMOVAL] Processing {Path(pulse_data['volume_path']).name}")
+        LOGGER.info(f"[RM / CHANNEL REMOVAL] Processing {Path(pulse_data['volume_path']).name}")
     
     channel = preprocessing_plan.get("channel", 0)
     if verbose:
-        logger.info(f"[RM / CHANNEL REMOVAL] Extracting channel {channel}")
+        LOGGER.info(f"[RM / CHANNEL REMOVAL] Extracting channel {channel}")
     
     # Apply remove_channel function to the volume
     current_image, current_header = remove_first_channel(
@@ -203,7 +193,7 @@ def _process_remove_channel(
     )
     
     if verbose:
-        logger.info(f"[RM / CHANNEL REMOVAL] Completed: size={current_image.GetSize()}, "
+        LOGGER.info(f"[RM / CHANNEL REMOVAL] Completed: size={current_image.GetSize()}, "
               f"dimensions={current_image.GetDimension()}, "
               f"spacing={current_image.GetSpacing()}")
     
@@ -221,7 +211,7 @@ def _process_export_nifti(
     patient_output_dir: Path,
     patient_id: str,
     pulse_name: str,
-    verbose: bool = True,
+    verbose: bool = False,
     **kwargs
 ) -> Dict[str, Any]:
     """
@@ -248,7 +238,7 @@ def _process_export_nifti(
     }
     
     if verbose:
-        logger.info(f"[RM / NIFTI EXPORT] Converting to NIfTI format")
+        LOGGER.info(f"[RM / NIFTI EXPORT] Converting to NIfTI format")
     
     # Output path for the NIfTI file - This is a main output file, not an intermediate
     nifti_filename = f"{pulse_name}_{patient_id}.nii.gz"
@@ -269,7 +259,7 @@ def _process_export_nifti(
     result["processed_data"]["nifti_path"] = output_path
     
     if verbose:
-        logger.info(f"[RM / NIFTI EXPORT] Saved to {output_path}")
+        LOGGER.info(f"[RM / NIFTI EXPORT] Saved to {output_path}")
     
     # Load the exported NIfTI for further processing
     result["current_image"] = sitk.ReadImage(output_path)
@@ -281,7 +271,7 @@ def _process_load_mask(
     current_image: Optional[sitk.Image],
     current_mask: Optional[sitk.Image],
     pulse_data: Dict[str, Any],
-    verbose: bool = True,
+    verbose: bool = False,
     **kwargs
 ) -> Dict[str, Any]:
     """
@@ -308,18 +298,18 @@ def _process_load_mask(
     
     try:
         if verbose:
-            logger.info(f"[RM / MASK LOADING] Loading segmentation mask")
+            LOGGER.info(f"[RM / MASK LOADING] Loading segmentation mask")
         
         current_mask = sitk.ReadImage(pulse_data["mask_path"])
         
         if verbose:
-            logger.info(f"[RM / MASK LOADING] Mask loaded: size={current_mask.GetSize()}, "
+            LOGGER.info(f"[RM / MASK LOADING] Mask loaded: size={current_mask.GetSize()}, "
                   f"dimensions={current_mask.GetDimension()}")
         
         result["current_mask"] = current_mask
             
     except Exception as e:
-        logger.error(f"[RM / MASK LOADING] Error loading mask: {str(e)}")
+        LOGGER.error(f"[RM / MASK LOADING] Error loading mask: {str(e)}")
     
     return result
 
@@ -331,7 +321,7 @@ def _process_cast_volume(
     preprocessing_plan: Dict[str, Any],
     patient_id: str,
     pulse_name: str,
-    verbose: bool = True,
+    verbose: bool = False,
     save_intermediate: bool = False,
     others_dir: Optional[Path] = None,
     **kwargs
@@ -365,11 +355,11 @@ def _process_cast_volume(
         return result
     
     if verbose:
-        logger.info(f"[RM / CAST VOLUME] Casting volume to float32 and mask to uint8")
+        LOGGER.info(f"[RM / CAST VOLUME] Casting volume to float32 and mask to uint8")
     
     try:
         # Cast volume to float32 and mask to uint8
-        cast_image, cast_mask = cast_volume_and_mask(
+        cast_image, cast_mask = cast_volume_and_optional_mask(
             current_image, 
             current_mask
         )
@@ -390,11 +380,11 @@ def _process_cast_volume(
             result["processed_data"]["cast_mask_path"] = str(cast_mask_path)
             
             if verbose:
-                logger.info(f"[RM / CAST VOLUME] Volume cast to {cast_image.GetPixelID()} and saved to {cast_volume_path}")
-                logger.info(f"[RM / CAST VOLUME] Mask cast to {cast_mask.GetPixelID()} and saved to {cast_mask_path}")
+                LOGGER.info(f"[RM / CAST VOLUME] Volume cast to {cast_image.GetPixelID()} and saved to {cast_volume_path}")
+                LOGGER.info(f"[RM / CAST VOLUME] Mask cast to {cast_mask.GetPixelID()} and saved to {cast_mask_path}")
         
     except Exception as e:
-        logger.error(f"[RM / CAST VOLUME] Error: {str(e)}")
+        LOGGER.error(f"[RM / CAST VOLUME] Error: {str(e)}")
     
     return result
 
@@ -405,7 +395,7 @@ def _process_denoise(
     preprocessing_plan: Dict[str, Any],
     patient_id: str,
     pulse_name: str,
-    verbose: bool = True,
+    verbose: bool = False,
     save_intermediate: bool = False,
     others_dir: Optional[Path] = None,
     **kwargs
@@ -442,11 +432,11 @@ def _process_denoise(
     
     if not denoise_enabled:
         if verbose:
-            logger.info(f"[RM / DENOISE] Denoising is disabled in the preprocessing plan, skipping")
+            LOGGER.info(f"[RM / DENOISE] Denoising is disabled in the preprocessing plan, skipping")
         return result
     
     if verbose:
-        logger.info(f"[RM / DENOISE] Applying SUSAN denoising to volume")
+        LOGGER.info(f"[RM / DENOISE] Applying SUSAN denoising to volume")
     
     try:
         # Get denoise parameters
@@ -456,7 +446,7 @@ def _process_denoise(
         dimension = susan_params.get("dimension", 3)
         
         if verbose:
-            logger.info(f"[RM / DENOISE] SUSAN parameters: brightness_threshold={brightness_threshold}, "
+            LOGGER.info(f"[RM / DENOISE] SUSAN parameters: brightness_threshold={brightness_threshold}, "
                   f"fwhm={fwhm}, dimension={dimension}")
         
         # Apply denoising to the volume
@@ -480,10 +470,10 @@ def _process_denoise(
             result["processed_data"]["denoised_volume_path"] = str(denoised_volume_path)
             
             if verbose:
-                logger.info(f"[RM / DENOISE] Volume denoised and saved to {denoised_volume_path}")
+                LOGGER.info(f"[RM / DENOISE] Volume denoised and saved to {denoised_volume_path}")
         
     except Exception as e:
-        logger.error(f"[RM / DENOISE] Error: {str(e)}")
+        LOGGER.error(f"[RM / DENOISE] Error: {str(e)}")
     
     return result
 
@@ -494,7 +484,7 @@ def _process_brain_mask(
     preprocessing_plan: Dict[str, Any],
     patient_id: str,
     pulse_name: str,
-    verbose: bool = True,
+    verbose: bool = False,
     save_intermediate: bool = False,
     others_dir: Optional[Path] = None,
     **kwargs
@@ -527,7 +517,7 @@ def _process_brain_mask(
         return result
     
     if verbose:
-        logger.info(f"[RM / BRAIN MASK] Generating brain mask")
+        LOGGER.info(f"[RM / BRAIN MASK] Generating brain mask")
     
     try:
         # Get brain mask parameters
@@ -538,7 +528,7 @@ def _process_brain_mask(
         iterations_3d = preprocessing_plan.get("iterations_3d", 1)
         
         if verbose:
-            logger.info(f"[RM / BRAIN MASK] Parameters: threshold_method={threshold_method}, "
+            LOGGER.info(f"[RM / BRAIN MASK] Parameters: threshold_method={threshold_method}, "
                   f"structure_size_2d={structure_size_2d}, iterations_2d={iterations_2d}, "
                   f"structure_size_3d={structure_size_3d}, iterations_3d={iterations_3d}")
         
@@ -563,10 +553,10 @@ def _process_brain_mask(
             result["processed_data"]["brain_mask_path"] = str(brain_mask_path)
             
             if verbose:
-                logger.info(f"[RM / BRAIN MASK] Brain mask generated and saved to {brain_mask_path}")
+                LOGGER.info(f"[RM / BRAIN MASK] Brain mask generated and saved to {brain_mask_path}")
         
     except Exception as e:
-        logger.error(f"[RM / BRAIN MASK] Error: {str(e)}")
+        LOGGER.error(f"[RM / BRAIN MASK] Error: {str(e)}")
     
     return result
 
@@ -577,7 +567,7 @@ def _process_bias_correction(
     preprocessing_plan: Dict[str, Any],
     patient_id: str,
     pulse_name: str,
-    verbose: bool = True,
+    verbose: bool = False,
     save_intermediate: bool = False,
     others_dir: Optional[Path] = None,
     **kwargs
@@ -612,11 +602,11 @@ def _process_bias_correction(
     # Check if N4 correction is configured
     if "n4" not in preprocessing_plan:
         if verbose:
-            logger.info(f"[RM / BIAS CORRECTION] Only N4 bias field correction is supported, skipping")
+            LOGGER.info(f"[RM / BIAS CORRECTION] Only N4 bias field correction is supported, skipping")
         return result
     
     if verbose:
-        logger.info(f"[RM / BIAS CORRECTION] Applying N4 bias field correction")
+        LOGGER.info(f"[RM / BIAS CORRECTION] Applying N4 bias field correction")
     
     try:
         # Get N4 parameters
@@ -627,7 +617,7 @@ def _process_bias_correction(
         bias_field_fwhm = n4_params.get("bias_field_fwhm", 0.1)
         
         if verbose:
-            logger.info(f"[RM / BIAS CORRECTION] N4 parameters: shrink_factor={shrink_factor}, "
+            LOGGER.info(f"[RM / BIAS CORRECTION] N4 parameters: shrink_factor={shrink_factor}, "
                   f"max_iterations={max_iterations}, control_points={control_points}, "
                   f"bias_field_fwhm={bias_field_fwhm}")
         
@@ -653,10 +643,10 @@ def _process_bias_correction(
             result["processed_data"]["bias_corrected_path"] = str(bias_corrected_path)
             
             if verbose:
-                logger.info(f"[RM / BIAS CORRECTION] Image bias-corrected and saved to {bias_corrected_path}")
+                LOGGER.info(f"[RM / BIAS CORRECTION] Image bias-corrected and saved to {bias_corrected_path}")
         
     except Exception as e:
-        logger.error(f"[RM / BIAS CORRECTION] Error: {str(e)}")
+        LOGGER.error(f"[RM / BIAS CORRECTION] Error: {str(e)}")
     
     return result
 
@@ -668,7 +658,7 @@ def _process_registration(
     patient_output_dir: Path,
     patient_id: str,
     pulse_name: str,
-    verbose: bool = True,
+    verbose: bool = False,
     save_intermediate: bool = False,
     others_dir: Optional[Path] = None,
     **kwargs
@@ -704,7 +694,7 @@ def _process_registration(
     # Check if SRI24 registration is configured and enabled
     if "sri24" not in preprocessing_plan:
         if verbose:
-            logger.info(f"[RM / REGISTRATION] Only SRI24 atlas registration is supported, skipping")
+            LOGGER.info(f"[RM / REGISTRATION] Only SRI24 atlas registration is supported, skipping")
         return result
     
     sri24_config = preprocessing_plan["sri24"]
@@ -712,19 +702,19 @@ def _process_registration(
     # Check if registration is enabled
     if not sri24_config.get("enable", False):
         if verbose:
-            logger.info(f"[RM / REGISTRATION] SRI24 registration is disabled in the preprocessing plan, skipping")
+            LOGGER.info(f"[RM / REGISTRATION] SRI24 registration is disabled in the preprocessing plan, skipping")
         return result
     
     if verbose:
-        logger.info(f"[RM / REGISTRATION] Applying SRI24 atlas registration")
+        LOGGER.info(f"[RM / REGISTRATION] Applying SRI24 atlas registration")
     
     try:
         # Get configuration file path
         config_path = sri24_config.get("config_path")
         
         if not config_path or not os.path.exists(config_path):
-            logger.warning(f"[RM / REGISTRATION] Config file not found at {config_path}")
-            logger.warning(f"[RM / REGISTRATION] Using default registration parameters")
+            LOGGER.warning(f"[RM / REGISTRATION] Config file not found at {config_path}")
+            LOGGER.warning(f"[RM / REGISTRATION] Using default registration parameters")
         
         # Create registration output subdirectory if saving intermediates
         registration_output_dir = patient_output_dir
@@ -763,12 +753,12 @@ def _process_registration(
         result["processed_data"]["registration_transform_params"] = transform_params
         
         if verbose:
-            logger.info(f"[RM / REGISTRATION] Volume registered to SRI24 atlas and saved to {reg_image_path}")
-            logger.info(f"[RM / REGISTRATION] Mask registered to SRI24 atlas and saved to {reg_mask_path}")
-            logger.info(f"[RM / REGISTRATION] Transform parameters saved to {transform_json_path}")
+            LOGGER.info(f"[RM / REGISTRATION] Volume registered to SRI24 atlas and saved to {reg_image_path}")
+            LOGGER.info(f"[RM / REGISTRATION] Mask registered to SRI24 atlas and saved to {reg_mask_path}")
+            LOGGER.info(f"[RM / REGISTRATION] Transform parameters saved to {transform_json_path}")
         
     except Exception as e:
-        logger.error(f"[RM / REGISTRATION] Error: {str(e)}")
+        LOGGER.error(f"[RM / REGISTRATION] Error: {str(e)}")
     
     return result
 
@@ -778,7 +768,7 @@ def _process_brain_extraction(
     preprocessing_plan: Dict[str, Any],
     patient_id: str,
     pulse_name: str,
-    verbose: bool = True,
+    verbose: bool = False,
     save_intermediate: bool = True,
     others_dir: Optional[Path] = None,
     **kwargs
@@ -812,17 +802,17 @@ def _process_brain_extraction(
     # Check if using universal mask from SRI24 atlas
     if "universal_mask" in preprocessing_plan:
         if verbose:
-            logger.info(f"[RM / BRAIN EXTRACTION] Using universal mask template from SRI24 atlas")
+            LOGGER.info(f"[RM / BRAIN EXTRACTION] Using universal mask template from SRI24 atlas")
         
         try:
             # Get path to template brain mask
             mask_path = preprocessing_plan["universal_mask"].get("path")
             if not mask_path or not os.path.exists(mask_path):
-                logger.error(f"[RM / BRAIN EXTRACTION] Universal mask template not found at {mask_path}")
+                LOGGER.error(f"[RM / BRAIN EXTRACTION] Universal mask template not found at {mask_path}")
                 return result
             
             if verbose:
-                logger.info(f"[RM / BRAIN EXTRACTION] Loading brain template from {mask_path}")
+                LOGGER.info(f"[RM / BRAIN EXTRACTION] Loading brain template from {mask_path}")
             
             # Load the template brain image (this is already skull-stripped)
             template_brain = sitk.ReadImage(mask_path)
@@ -865,16 +855,16 @@ def _process_brain_extraction(
                 result["processed_data"]["brain_extraction_mask_path"] = str(brain_extraction_mask_path)
                 
                 if verbose:
-                    logger.info(f"[RM / BRAIN EXTRACTION] Brain extracted using SRI24 template and saved to {brain_extracted_path}")
-                    logger.info(f"[RM / BRAIN EXTRACTION] Brain mask saved to {brain_extraction_mask_path}")
+                    LOGGER.info(f"[RM / BRAIN EXTRACTION] Brain extracted using SRI24 template and saved to {brain_extracted_path}")
+                    LOGGER.info(f"[RM / BRAIN EXTRACTION] Brain mask saved to {brain_extraction_mask_path}")
                 
         except Exception as e:
-            logger.error(f"[RM / BRAIN EXTRACTION] Error applying universal mask: {str(e)}")
+            LOGGER.error(f"[RM / BRAIN EXTRACTION] Error applying universal mask: {str(e)}")
             
     # Fall back to FSL BET if universal mask is not specified or failed
     elif "fsl_bet" in preprocessing_plan:
         if verbose:
-            logger.info(f"[RM / BRAIN EXTRACTION] Applying FSL BET brain extraction")
+            LOGGER.info(f"[RM / BRAIN EXTRACTION] Applying FSL BET brain extraction")
         
         try:
             # Get FSL BET parameters
@@ -885,7 +875,7 @@ def _process_brain_extraction(
             skull = bet_params.get("skull", False)
             
             if verbose:
-                logger.info(f"[RM / BRAIN EXTRACTION] FSL BET parameters: frac={frac}, "
+                LOGGER.info(f"[RM / BRAIN EXTRACTION] FSL BET parameters: frac={frac}, "
                       f"robust={robust}, vertical_gradient={vertical_gradient}, "
                       f"skull={skull}")
             
@@ -915,14 +905,14 @@ def _process_brain_extraction(
                 result["processed_data"]["brain_extraction_mask_path"] = str(brain_extraction_mask_path)
                 
                 if verbose:
-                    logger.info(f"[RM / BRAIN EXTRACTION] Brain extracted and saved to {brain_extracted_path}")
-                    logger.info(f"[RM / BRAIN EXTRACTION] Brain extraction mask saved to {brain_extraction_mask_path}")
+                    LOGGER.info(f"[RM / BRAIN EXTRACTION] Brain extracted and saved to {brain_extracted_path}")
+                    LOGGER.info(f"[RM / BRAIN EXTRACTION] Brain extraction mask saved to {brain_extraction_mask_path}")
             
         except Exception as e:
-            logger.error(f"[RM / BRAIN EXTRACTION] Error with FSL BET: {str(e)}")
+            LOGGER.error(f"[RM / BRAIN EXTRACTION] Error with FSL BET: {str(e)}")
     else:
         if verbose:
-            logger.info(f"[RM / BRAIN EXTRACTION] No brain extraction method specified, skipping")
+            LOGGER.info(f"[RM / BRAIN EXTRACTION] No brain extraction method specified, skipping")
     
     return result
 
@@ -932,7 +922,7 @@ def _process_brain_extraction_with_t1_mask(
     t1_brain_mask_path: Optional[str],
     patient_id: str,
     pulse_name: str,
-    verbose: bool = True,
+    verbose: bool = False,
     save_intermediate: bool = False,
     others_dir: Optional[Path] = None,
     **kwargs
@@ -962,11 +952,11 @@ def _process_brain_extraction_with_t1_mask(
     # Skip if necessary components are missing
     if current_image is None or t1_brain_mask_path is None:
         if verbose:
-            logger.warning(f"[RM / BRAIN EXTRACTION] Missing image or T1 brain mask path, skipping")
+            LOGGER.warning(f"[RM / BRAIN EXTRACTION] Missing image or T1 brain mask path, skipping")
         return result
     
     if verbose:
-        logger.info(f"[RM / BRAIN EXTRACTION] Using T1 brain mask for non-T1 pulse")
+        LOGGER.info(f"[RM / BRAIN EXTRACTION] Using T1 brain mask for non-T1 pulse")
     
     try:
         # Load the T1 brain mask
@@ -989,9 +979,9 @@ def _process_brain_extraction_with_t1_mask(
             result["processed_data"]["brain_extraction_mask_path"] = t1_brain_mask_path
             
             if verbose:
-                logger.info(f"[RM / BRAIN EXTRACTION] Brain extracted using T1 mask and saved to {brain_extracted_path}")
+                LOGGER.info(f"[RM / BRAIN EXTRACTION] Brain extracted using T1 mask and saved to {brain_extracted_path}")
         
     except Exception as e:
-        logger.error(f"[RM / BRAIN EXTRACTION] Error applying T1 brain mask: {str(e)}")
+        LOGGER.error(f"[RM / BRAIN EXTRACTION] Error applying T1 brain mask: {str(e)}")
     
     return result

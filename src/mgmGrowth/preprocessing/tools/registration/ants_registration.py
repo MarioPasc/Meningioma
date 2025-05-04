@@ -3,39 +3,6 @@
 Provides functions to perform registration (affine and nonlinear) to the SRI24 atlas 
 via Nipype's ANTS interface, returning SimpleITK images. Supports registering both 
 image volumes and their corresponding masks.
-
-Requires:
-  - Nipype
-  - ANTs installed on your system
-  - Python 3, SimpleITK, PyYAML
-
-Example usage from command line:
-  # Direct CLI parameters:
-  python ants_sri24_reg.py --input_image subject.nii.gz --atlas_path SRI24.nii.gz --output_dir ./output
-  
-  # Using a YAML config:
-  python ants_sri24_reg.py --config registration_config.yaml
-  
-  # Hybrid approach:
-  python ants_sri24_reg.py --input_image subject.nii.gz --atlas_path SRI24.nii.gz --config params.yaml
-
-Example Python usage:
-  from Meningioma.preprocessing.tools.registration import ants_sri24_reg
-  
-  # Basic usage:
-  img, params = ants_sri24_reg.register_image_to_sri24(
-      input_image_path='subject.nii.gz',
-      atlas_path='SRI24.nii.gz',
-      output_dir='./output'
-  )
-  
-  # With mask:
-  img, mask, params = ants_sri24_reg.register_image_to_sri24(
-      input_image_path='subject.nii.gz',
-      atlas_path='SRI24.nii.gz',
-      mask_path='subject_mask.nii.gz',
-      output_dir='./output'
-  )
 """
 
 import os
@@ -44,6 +11,8 @@ import json
 import time
 import yaml
 from typing import Optional, Tuple, Dict, Any, List, Union
+
+from mgmGrowth.preprocessing import LOGGER
 
 import SimpleITK as sitk
 from nipype.interfaces.ants import Registration, ApplyTransforms 
@@ -91,7 +60,7 @@ def apply_composed_transforms(
         number_threads (int, optional):
             Number of CPU threads to use. Default is 1.
         verbose (bool, optional):
-            If True, prints debug info.
+            If True, LOGGER.infos debug info.
         cleanup (bool, optional):
             If True, removes temporary files after processing.
             
@@ -99,7 +68,7 @@ def apply_composed_transforms(
         sitk.Image: The transformed secondary modality image in atlas space
     """
     if verbose:
-        print("[ANTS TRANSFORM] Starting composed transform application process")
+        LOGGER.info("[ANTS TRANSFORM] Starting composed transform application process")
         start_time = time.time()
     
     # Create output directory if needed
@@ -111,24 +80,24 @@ def apply_composed_transforms(
     sitk.WriteImage(input_image, temp_input_path)
     
     if verbose:
-        print(f"[ANTS TRANSFORM] Input image saved to {temp_input_path}")
-        print(f"[ANTS TRANSFORM] Applying composition of transforms to {output_path}")
+        LOGGER.info(f"[ANTS TRANSFORM] Input image saved to {temp_input_path}")
+        LOGGER.info(f"[ANTS TRANSFORM] Applying composition of transforms to {output_path}")
     
     # Get transform files
     if invert_secondary_to_t1:
         secondary_to_t1_transform = secondary_to_t1_transform_params["inverse_composite_transform"]
         if verbose:
-            print(f"[ANTS TRANSFORM] Using inverted secondary-to-T1 transform: {secondary_to_t1_transform}")
+            LOGGER.info(f"[ANTS TRANSFORM] Using inverted secondary-to-T1 transform: {secondary_to_t1_transform}")
     else:
         secondary_to_t1_transform = secondary_to_t1_transform_params["composite_transform"]
         if verbose:
-            print(f"[ANTS TRANSFORM] Using secondary-to-T1 transform: {secondary_to_t1_transform}")
+            LOGGER.info(f"[ANTS TRANSFORM] Using secondary-to-T1 transform: {secondary_to_t1_transform}")
     
     t1_to_atlas_transform = t1_to_atlas_transform_params["composite_transform"]
     
     if verbose:
-        print(f"[ANTS TRANSFORM] Using T1-to-atlas transform: {t1_to_atlas_transform}")
-        print(f"[ANTS TRANSFORM] Using interpolation method: {interpolation}")
+        LOGGER.info(f"[ANTS TRANSFORM] Using T1-to-atlas transform: {t1_to_atlas_transform}")
+        LOGGER.info(f"[ANTS TRANSFORM] Using interpolation method: {interpolation}")
     
     # Set up Nipype ApplyTransforms interface
     at = ApplyTransforms()
@@ -145,7 +114,7 @@ def apply_composed_transforms(
     at.inputs.num_threads = number_threads
     
     if verbose:
-        print("[ANTS TRANSFORM] Applying transforms - this may take a moment...")
+        LOGGER.info("[ANTS TRANSFORM] Applying transforms - this may take a moment...")
         stage_start = time.time()
         at.terminal_output = "stream"
     
@@ -154,8 +123,8 @@ def apply_composed_transforms(
     
     if verbose:
         stage_end = time.time()
-        print(f"[ANTS TRANSFORM] Transform application completed in {stage_end - stage_start:.2f} seconds")
-        print(f"[ANTS TRANSFORM] Transformed image saved to: {at_result.outputs.output_image}")
+        LOGGER.info(f"[ANTS TRANSFORM] Transform application completed in {stage_end - stage_start:.2f} seconds")
+        LOGGER.info(f"[ANTS TRANSFORM] Transformed image saved to: {at_result.outputs.output_image}")
     
     # Load the transformed image
     registered_image = sitk.ReadImage(at_result.outputs.output_image)
@@ -164,7 +133,7 @@ def apply_composed_transforms(
     
     # Clean up temporary files
     if cleanup and verbose:
-        print("[ANTS TRANSFORM] Cleaning up temporary files...")
+        LOGGER.info("[ANTS TRANSFORM] Cleaning up temporary files...")
     
     if cleanup:
         temp_files = [temp_input_path]
@@ -173,14 +142,14 @@ def apply_composed_transforms(
                 try:
                     os.remove(temp_file)
                     if verbose:
-                        print(f"[ANTS TRANSFORM] Removed temporary file: {temp_file}")
+                        LOGGER.info(f"[ANTS TRANSFORM] Removed temporary file: {temp_file}")
                 except Exception as e:
                     if verbose:
-                        print(f"[ANTS TRANSFORM] Failed to remove temporary file {temp_file}: {e}")
+                        LOGGER.info(f"[ANTS TRANSFORM] Failed to remove temporary file {temp_file}: {e}")
     
     if verbose:
         end_time = time.time()
-        print(f"[ANTS TRANSFORM] Total transform process completed in {end_time - start_time:.2f} seconds")
+        LOGGER.info(f"[ANTS TRANSFORM] Total transform process completed in {end_time - start_time:.2f} seconds")
     
     return registered_image
 
@@ -270,7 +239,7 @@ def register_to_sri24(
         write_composite_transform (bool, optional):
             Whether to write composite transform. Default is True.
         verbose (bool, optional):
-            If True, prints debug info.
+            If True, LOGGER.infos debug info.
 
     Returns:
         (registered_image, transform_params):
@@ -322,15 +291,15 @@ def register_to_sri24(
 
     start_time = time.time()
     if verbose:
-        print("[ANTS REGISTRATION] Starting registration process")
-        print(f"[ANTS REGISTRATION] Output directory: {output_dir}")
+        LOGGER.info("[ANTS REGISTRATION] Starting registration process")
+        LOGGER.info(f"[ANTS REGISTRATION] Output directory: {output_dir}")
 
     # 1) Save input images as NIfTI
     moving_nii_path = os.path.abspath(os.path.join(output_dir, "moving_input.nii.gz"))
     fixed_nii_path = atlas_path
 
     if verbose:
-        print(
+        LOGGER.info(
             f"[ANTS REGISTRATION] Temporarily Saving input images to: {moving_nii_path}"
         )
 
@@ -338,7 +307,7 @@ def register_to_sri24(
 
     # 2) Configure Nipype ANTS Registration
     if verbose:
-        print("[ANTS REGISTRATION] Configuring ANTS registration parameters")
+        LOGGER.info("[ANTS REGISTRATION] Configuring ANTS registration parameters")
 
     reg = Registration()
     reg.inputs.fixed_image = fixed_nii_path
@@ -375,7 +344,7 @@ def register_to_sri24(
     reg.inputs.write_composite_transform = write_composite_transform
 
     if verbose:
-        print(f"[ANTS REGISTRATION] Transform prefix set to: {transform_prefix}")
+        LOGGER.info(f"[ANTS REGISTRATION] Transform prefix set to: {transform_prefix}")
 
     reg.inputs.output_transform_prefix = transform_prefix
     reg.inputs.output_warped_image = output_image_path
@@ -383,20 +352,20 @@ def register_to_sri24(
     # Initial transform if provided
     if initial_moving_transform:
         if verbose:
-            print(
+            LOGGER.info(
                 f"[ANTS REGISTRATION] Using initial transform: {initial_moving_transform}"
             )
         reg.inputs.initial_moving_transform = initial_moving_transform
 
     if verbose:
-        print(f"[ANTS REGISTRATION] Registration configuration complete")
-        print(f"[ANTS REGISTRATION] Running with transforms: {reg.inputs.transforms}")
-        print(f"[ANTS REGISTRATION] Using histogram matching: {use_histogram_matching}")
+        LOGGER.info(f"[ANTS REGISTRATION] Registration configuration complete")
+        LOGGER.info(f"[ANTS REGISTRATION] Running with transforms: {reg.inputs.transforms}")
+        LOGGER.info(f"[ANTS REGISTRATION] Using histogram matching: {use_histogram_matching}")
         reg.terminal_output = "stream"
 
     # 3) Run Registration
     if verbose:
-        print(
+        LOGGER.info(
             "[ANTS REGISTRATION] Starting registration execution - this may take some time..."
         )
         stage_start = time.time()
@@ -405,7 +374,7 @@ def register_to_sri24(
 
     if verbose:
         stage_end = time.time()
-        print(
+        LOGGER.info(
             f"[ANTS REGISTRATION] Registration completed in {stage_end - stage_start:.2f} seconds"
         )
 
@@ -413,7 +382,7 @@ def register_to_sri24(
     registered_path = res.outputs.warped_image
 
     if verbose:
-        print(f"[ANTS REGISTRATION] Loading registered image from: {registered_path}")
+        LOGGER.info(f"[ANTS REGISTRATION] Loading registered image from: {registered_path}")
 
     registered_sitk = sitk.ReadImage(registered_path)
     fixed_image = sitk.ReadImage(atlas_path)
@@ -456,18 +425,18 @@ def register_to_sri24(
 
     if verbose:
         end_time = time.time()
-        print(
+        LOGGER.info(
             f"[ANTS REGISTRATION] Total registration process completed in {end_time - start_time:.2f} seconds"
         )
-        print(
+        LOGGER.info(
             f"[ANTS REGISTRATION] Transform parameters saved to: {transform_params_path}"
         )
-        print("[ANTS REGISTRATION] Transform files:")
+        LOGGER.info("[ANTS REGISTRATION] Transform files:")
         for k, v in transform_params.items():
-            print(f"[ANTS REGISTRATION]   {k}: {v}")
+            LOGGER.info(f"[ANTS REGISTRATION]   {k}: {v}")
     # Clean up temporary files
     if cleanup and verbose:
-        print("[ANTS REGISTRATION] Cleaning up temporary files...")
+        LOGGER.info("[ANTS REGISTRATION] Cleaning up temporary files...")
         
     if cleanup:
         temp_files = [moving_nii_path]
@@ -476,10 +445,10 @@ def register_to_sri24(
                 try:
                     os.remove(temp_file)
                     if verbose:
-                        print(f"[ANTS REGISTRATION] Removed temporary file: {temp_file}")
+                        LOGGER.info(f"[ANTS REGISTRATION] Removed temporary file: {temp_file}")
                 except Exception as e:
                     if verbose:
-                        print(f"[ANTS REGISTRATION] Failed to remove temporary file {temp_file}: {e}")
+                        LOGGER.info(f"[ANTS REGISTRATION] Failed to remove temporary file {temp_file}: {e}")
     return registered_sitk, transform_params
 
 def register_to_sri24_with_mask(
@@ -574,7 +543,7 @@ def register_to_sri24_with_mask(
         write_composite_transform (bool, optional):
             Whether to write composite transform. Default is True.
         verbose (bool, optional):
-            If True, prints debug info.
+            If True, LOGGER.infos debug info.
 
     Returns:
         (registered_image, registered_mask, transform_params):
@@ -586,8 +555,8 @@ def register_to_sri24_with_mask(
     os.makedirs(output_dir, exist_ok=True)
 
     if verbose:
-        print("[ANTS REGISTRATION] Creating output directory for entire process")
-        print(f"[ANTS REGISTRATION] Output directory path: {output_dir}")
+        LOGGER.info("[ANTS REGISTRATION] Creating output directory for entire process")
+        LOGGER.info(f"[ANTS REGISTRATION] Output directory path: {output_dir}")
 
     # Save the mask input to the output directory
     mask_path = os.path.join(output_dir, "moving_mask_input.nii.gz")
@@ -601,8 +570,8 @@ def register_to_sri24_with_mask(
     )
 
     if verbose:
-        print(f"[ANTS REGISTRATION] Saved input mask to: {mask_path}")
-        print("[ANTS REGISTRATION] Starting registration of image volume")
+        LOGGER.info(f"[ANTS REGISTRATION] Saved input mask to: {mask_path}")
+        LOGGER.info("[ANTS REGISTRATION] Starting registration of image volume")
 
     # First, register the image
     registered_image, transform_params = register_to_sri24(
@@ -637,13 +606,13 @@ def register_to_sri24_with_mask(
 
     # Now, apply the same transformation to the mask
     if verbose:
-        print("[ANTS REGISTRATION] Starting registration of mask volume")
+        LOGGER.info("[ANTS REGISTRATION] Starting registration of mask volume")
         start_time = time.time()
 
     # Use ANTs ApplyTransforms to transform the mask
     if verbose:
-        print("[ANTS REGISTRATION] Configuring ApplyTransforms for mask")
-        print(
+        LOGGER.info("[ANTS REGISTRATION] Configuring ApplyTransforms for mask")
+        LOGGER.info(
             f"[ANTS REGISTRATION] Using composite transform: {transform_params['composite_transform']}"
         )
 
@@ -658,7 +627,7 @@ def register_to_sri24_with_mask(
     )
 
     if verbose:
-        print(
+        LOGGER.info(
             "[ANTS REGISTRATION] Applying transformation to mask - this may take a moment..."
         )
         stage_start = time.time()
@@ -668,10 +637,10 @@ def register_to_sri24_with_mask(
 
     if verbose:
         stage_end = time.time()
-        print(
+        LOGGER.info(
             f"[ANTS REGISTRATION] Mask transformation completed in {stage_end - stage_start:.2f} seconds"
         )
-        print(
+        LOGGER.info(
             f"[ANTS REGISTRATION] Registered mask saved to: {at_result.outputs.output_image}"
         )
 
@@ -691,15 +660,15 @@ def register_to_sri24_with_mask(
 
     if verbose:
         end_time = time.time()
-        print(
+        LOGGER.info(
             f"[ANTS REGISTRATION] Total mask registration process completed in {end_time - start_time:.2f} seconds"
         )
-        print(
+        LOGGER.info(
             f"[ANTS REGISTRATION] Updated transform parameters saved to: {transform_params_path}"
         )
     # Clean up temporary files
     if cleanup and verbose:
-        print("[ANTS REGISTRATION] Cleaning up temporary files...")
+        LOGGER.info("[ANTS REGISTRATION] Cleaning up temporary files...")
         
     if cleanup:
         temp_files = [mask_path]
@@ -708,10 +677,10 @@ def register_to_sri24_with_mask(
                 try:
                     os.remove(temp_file)
                     if verbose:
-                        print(f"[ANTS REGISTRATION] Removed temporary file: {temp_file}")
+                        LOGGER.info(f"[ANTS REGISTRATION] Removed temporary file: {temp_file}")
                 except Exception as e:
                     if verbose:
-                        print(f"[ANTS REGISTRATION] Failed to remove temporary file {temp_file}: {e}")
+                        LOGGER.info(f"[ANTS REGISTRATION] Failed to remove temporary file {temp_file}: {e}")
     return registered_image, registered_mask, transform_params
 
 def register_image_to_sri24(
@@ -817,12 +786,12 @@ def register_image_to_sri24(
         'verbose': verbose,
         'cleanup': cleanup
     }
-      
+
     if verbose:
-        print(f"[ANTS REGISTRATION] Moving image size: {moving_image.GetSize()}")
-        print(f"[ANTS REGISTRATION] Fixed image size: {fixed_image.GetSize()}")
-        print(f"[ANTS REGISTRATION] Output directory: {output_dir}")
-        print(f"[ANTS REGISTRATION] Output registered image: {output_registered_path}")
+        LOGGER.info(f"[ANTS REGISTRATION] Moving image size: {moving_image.GetSize()}")
+        LOGGER.info(f"[ANTS REGISTRATION] Fixed image size: {fixed_image.GetSize()}")
+        LOGGER.info(f"[ANTS REGISTRATION] Output directory: {output_dir}")
+        LOGGER.info(f"[ANTS REGISTRATION] Output registered image: {output_registered_path}")
     
     # Process with mask if provided
     if moving_mask is not None:
@@ -837,9 +806,9 @@ def register_image_to_sri24(
         sitk.WriteImage(moving_mask, mask_nii_path)
         
         if verbose:
-            print(f"[ANTS REGISTRATION] Mask image size: {moving_mask.GetSize()}")
-            print(f"[ANTS REGISTRATION] Output registered mask: {output_mask_path}")
-            print("[ANTS REGISTRATION] Performing registration with mask...")
+            LOGGER.info(f"[ANTS REGISTRATION] Mask image size: {moving_mask.GetSize()}")
+            LOGGER.info(f"[ANTS REGISTRATION] Output registered mask: {output_mask_path}")
+            LOGGER.info("[ANTS REGISTRATION] Performing registration with mask...")
         
         # Perform registration with mask
         registered_image, registered_mask, transform_params = register_to_sri24_with_mask(
@@ -855,11 +824,18 @@ def register_image_to_sri24(
     else:
         # Perform registration without mask
         if verbose:
-            print("[ANTS REGISTRATION] Performing registration without mask...")
-        
+            LOGGER.info("[ANTS REGISTRATION] Performing registration without mask...")
+        output_image_prefix=os.path.basename(str(output_registered_path))
+        output_image_path = (
+            os.path.join(output_dir, output_image_prefix)
+            if output_image_prefix.endswith(".nii.gz")
+            else os.path.join(output_dir, output_image_prefix + ".nii.gz")
+        )
+
         registered_image, transform_params = register_to_sri24(
             moving_image_sitk=moving_image,
             atlas_path=atlas_path,
+            output_image_path=output_image_path,
             **reg_params
         )
         
@@ -903,7 +879,7 @@ def main():
                 yaml_config = yaml.safe_load(f)
                 config.update(yaml_config)  # Update with YAML values
         except Exception as e:
-            print(f"Error loading configuration file: {e}")
+            LOGGER.info(f"Error loading configuration file: {e}")
             return
     
     # Override with CLI arguments if provided
@@ -924,8 +900,8 @@ def main():
     
     # Check required parameters
     if not config.get('input_image') or not config.get('atlas_path'):
-        print("Error: Missing required parameters. Please provide input_image and atlas_path.")
-        parser.print_help()
+        LOGGER.info("Error: Missing required parameters. Please provide input_image and atlas_path.")
+        parser.LOGGER.info_help()
         return
     
     # Set up output directory
@@ -936,14 +912,14 @@ def main():
     
     # Load input images
     if verbose:
-        print(f"[ANTS REGISTRATION] Loading input image: {config['input_image']}")
-        print(f"[ANTS REGISTRATION] Loading atlas image: {config['atlas_path']}")
+        LOGGER.info(f"[ANTS REGISTRATION] Loading input image: {config['input_image']}")
+        LOGGER.info(f"[ANTS REGISTRATION] Loading atlas image: {config['atlas_path']}")
     
     try:
         moving_image = sitk.ReadImage(config['input_image'])
         fixed_image = sitk.ReadImage(config['atlas_path'])
     except Exception as e:
-        print(f"Error loading images: {e}")
+        LOGGER.info(f"Error loading images: {e}")
         return
     
     # Extract registration parameters from config
@@ -976,10 +952,10 @@ def main():
     reg_params['output_image_path'] = output_registered
     
     if verbose:
-        print(f"[ANTS REGISTRATION] Moving image size: {moving_image.GetSize()}")
-        print(f"[ANTS REGISTRATION] Fixed image size: {fixed_image.GetSize()}")
-        print(f"[ANTS REGISTRATION] Output directory: {output_dir}")
-        print(f"[ANTS REGISTRATION] Output registered image: {output_registered}")
+        LOGGER.info(f"[ANTS REGISTRATION] Moving image size: {moving_image.GetSize()}")
+        LOGGER.info(f"[ANTS REGISTRATION] Fixed image size: {fixed_image.GetSize()}")
+        LOGGER.info(f"[ANTS REGISTRATION] Output directory: {output_dir}")
+        LOGGER.info(f"[ANTS REGISTRATION] Output registered image: {output_registered}")
     
     # Check if we're processing a mask as well
     mask_path = config.get('mask_path')
@@ -991,18 +967,18 @@ def main():
             output_mask = os.path.join(output_dir, output_mask)
         
         if verbose:
-            print(f"[ANTS REGISTRATION] Loading mask image: {mask_path}")
-            print(f"[ANTS REGISTRATION] Output registered mask: {output_mask}")
+            LOGGER.info(f"[ANTS REGISTRATION] Loading mask image: {mask_path}")
+            LOGGER.info(f"[ANTS REGISTRATION] Output registered mask: {output_mask}")
         
         try:
             moving_mask = sitk.ReadImage(mask_path)
         except Exception as e:
-            print(f"Error loading mask image: {e}")
+            LOGGER.info(f"Error loading mask image: {e}")
             return
         
         if verbose:
-            print(f"[ANTS REGISTRATION] Mask image size: {moving_mask.GetSize()}")
-            print("[ANTS REGISTRATION] Performing registration with mask...")
+            LOGGER.info(f"[ANTS REGISTRATION] Mask image size: {moving_mask.GetSize()}")
+            LOGGER.info("[ANTS REGISTRATION] Performing registration with mask...")
         
         # Perform registration with mask
         registered_image, registered_mask, transform_params = register_to_sri24_with_mask(
@@ -1017,7 +993,7 @@ def main():
     else:
         # Perform registration without mask
         if verbose:
-            print("[ANTS REGISTRATION] Performing registration without mask...")
+            LOGGER.info("[ANTS REGISTRATION] Performing registration without mask...")
         
         registered_image, transform_params = register_to_sri24(
             moving_image_sitk=moving_image,
@@ -1026,10 +1002,10 @@ def main():
         )
     
     if verbose:
-        print("[ANTS REGISTRATION] Registration completed successfully")
-        print(f"[ANTS REGISTRATION] All outputs saved to directory: {output_dir}")
-        print(f"[ANTS REGISTRATION] Transform files saved with prefix: {reg_params['output_transform_prefix']}")
-        print(f"[ANTS REGISTRATION] Transform parameters saved to: {os.path.join(output_dir, 'transform_params.json')}")
+        LOGGER.info("[ANTS REGISTRATION] Registration completed successfully")
+        LOGGER.info(f"[ANTS REGISTRATION] All outputs saved to directory: {output_dir}")
+        LOGGER.info(f"[ANTS REGISTRATION] Transform files saved with prefix: {reg_params['output_transform_prefix']}")
+        LOGGER.info(f"[ANTS REGISTRATION] Transform parameters saved to: {os.path.join(output_dir, 'transform_params.json')}")
     
     return registered_image, transform_params
 if __name__ == "__main__":

@@ -73,7 +73,7 @@ import SimpleITK as sitk
 import numpy as np
 
 from mgmGrowth.utils.segmentation import get_3d_volume_segmentation
-
+from mgmGrowth.preprocessing.tools.casting import cast_volume_and_optional_mask
 
 def generate_brain_mask_sitk(
     volume_sitk: sitk.Image,
@@ -113,6 +113,7 @@ def generate_brain_mask_sitk(
     mask_3d = mask_3d.astype(np.uint8)  # 1=foreground, 0=background
     mask_sitk_np = np.moveaxis(mask_3d, -1, 0)  # shape => (S, H, W)
     mask_sitk = sitk.GetImageFromArray(mask_sitk_np)
+    mask_sitk = sitk.Cast(mask_sitk, sitk.sitkUInt8)
 
     # We want the mask to have the same origin/direction/spacing as the original volume:
     mask_sitk.CopyInformation(volume_sitk)
@@ -177,6 +178,17 @@ def n4_bias_field_correction(
     # convex hull algorithm with standard parameters
     if mask_sitk is None:
         _, mask_sitk = generate_brain_mask_sitk(volume_sitk=volume_sitk)
+
+    # Sanity check for image type
+    # https://simpleitk.org/SimpleITK-Notebooks/01_Image_Basics.html Check pixel type,
+    # sitkUint8 is 0, sitkFloat32 is 4
+    if volume_sitk.GetPixelIDValue() != 8 or mask_sitk.GetPixelIDValue() != 0:
+        print(
+            f"[N4] WARNING: Input volume is not float32 (sitk.PixelIDValueEnum: {volume_sitk.GetPixelID()}) "
+            f"or mask is not uint8 (sitk.PixelIDValueEnum: {mask_sitk.GetPixelID()}). "
+            "Converting them to the appropriate types."
+        )
+        volume_sitk, mask_sitk = cast_volume_and_optional_mask(volume_img=volume_sitk, mask_img=mask_sitk)
 
     if verbose:
         print("[N4] Starting bias field correction with the following params:")

@@ -1,7 +1,7 @@
 # Dataset configuration
 paths:
-  root: "/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_Adquisition"
-  output: "/home/mariopasc/Python/Datasets/Meningiomas/jsons"
+  root: "/home/mariopasc/Python/Datasets/Meningiomas/raw/Meningioma_Adquisition"
+  output: "/home/mariopasc/Python/Datasets/Meningiomas/processed/misc"
   atlas_root: "/home/mariopasc/Python/Datasets/Meningiomas/ATLAS/sri24_spm8/templates"
 
 processing:
@@ -9,30 +9,9 @@ processing:
 
 # "T1SIN" excluded
 modalities:
-  RM: ["T1", "T2", "SUSC"] # T1SIN
-  TC: ["TC"]
+  RM: ["T1", "T2", "SUSC", "FLAIR"] # T1SIN
+  # TC: ["TC"]
 
-
-#     reorientation:
-#      orientation: "LPS"
-#    resample:
-#      spacing: [1.0, 1.0, 1.0]
-#
-#     brain_mask:
-#      threshold_method: "li"
-#      structure_size_2d: 7
-#      iterations_2d: 3
-#      structure_size_3d: 3
-#      iterations_3d: 1
-#    brain_extraction:
-#      fsl_bet:
-#        frac: 0.5
-#        robust: true
-#        vertical_gradient: 0
-#        skull: false
-
-#    transpose:
-#      axis: [2, 1, 0]
 
 preprocessing:
   RM:
@@ -40,12 +19,6 @@ preprocessing:
       channel: 0
     export_nifti: true
     cast_volume: true
-    denoise:
-      enable: false
-      susan:
-        brightness_threshold: 0.001
-        fwhm: 0.5
-        dimension: 3
     bias_field_correction:
       n4:
         shrink_factor: 4
@@ -55,7 +28,7 @@ preprocessing:
     registration:
       sri24:
         enable: true
-        config_path: "/home/mariopasc/Python/Projects/Meningioma/src/Meningioma/preprocessing/configs/registration_sri24.yaml" 
+        config_path: "/home/mariopasc/Python/Projects/Meningioma/src/mgmGrowth/preprocessing/configs/registration_sri24.yaml" 
     brain_extraction:
       universal_mask:
         path: "/home/mariopasc/Python/Datasets/Meningiomas/ATLAS/sri24_spm8/templates/T1_brain.nii"
