@@ -1,6 +1,6 @@
 [project]
 name = "mgmGrowth"
-version = "1.0.0"
+version = "0.1.0"
 requires-python = ">=3.10"
 description = "Meningioma package harbors every tools used for meningioma characterization and growth prediction."
 readme = "README.md"
@@ -61,8 +61,8 @@ dependencies = [
     "einops",
     "blosc2>=3.0.0b1",
     # SynthMorph dependencies
-    "tensorflow>=2.5.0",
-    "tensorflow-addons",
+    # "tensorflow>=2.5.0",
+    # "tensorflow-addons",
 ]
 
 [build-system]

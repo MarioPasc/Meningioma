@@ -2,9 +2,9 @@
 -e .
 
 # Install nnUNet in editable mode
--e src/Meningioma/external/nnUNet/nnUNet
+-e src/mgmGrowth/external/nnUNet/nnUNet
 
 # Install SynthMorph dependencies in editable mode
--e src/Meningioma/external/neurite
--e src/Meningioma/external/surfa
--e src/Meningioma/external/voxelmorph
+# -e src/mgmGrowth/external/neurite
+# -e src/mgmGrowth/external/surfa
+# -e src/mgmGrowth/external/voxelmorph

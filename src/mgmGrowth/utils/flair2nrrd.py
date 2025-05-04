@@ -14,6 +14,7 @@ from pathlib import Path
 from typing   import Dict, List, Sequence, Tuple, Optional
 import logging
 import re
+import shutil
 
 import pydicom
 import pandas as pd
@@ -165,6 +166,27 @@ def determinant_direction(img: sitk.Image) -> float:
     )
     return det
 
+def copy_preexisting_nrrd(candidates: List[Path],
+                          dst: Path,
+                          overwrite: bool) -> Path:
+    """
+    Copy the 'best' NRRD from *candidates* to *dst*.
+
+    Selection rule
+    --------------
+    By descending file size (bytes) – largest first.
+    """
+    best = max(candidates, key=lambda p: p.stat().st_size)
+    if len(candidates) > 1:
+        logging.warning(f"{dst.parent.name}: {len(candidates)} NRRDs found, "
+                        f"copying largest → {best.name}")
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if dst.exists() and not overwrite:
+        logging.info(f"{dst} exists – keeping (overwrite=False)")
+        return dst
+    shutil.copy2(best, dst)
+    logging.info(f"{dst.parent.name}: copied existing → {dst.name}")
+    return dst
 
 # ---------------------------------------------------------------------
 # Public API ----------------------------------------------------------
@@ -186,15 +208,28 @@ def batch_convert_flair(dataset_root: Path,
 
     for pid, flair_path in patients.items():
         # --- pre-existing NRRD? --------------------------------------
-        existing = [p for p in flair_path.glob("*.nrrd")
-                    if re.search(r"flair", p.name, flags=re.I)]
-        if existing and not overwrite:
-            logging.info(f"{pid}: found existing NRRD → skip")
-            rows.append(dict(PatientID=pid,
-                             Written=False,
-                             Reason="already_exists",
-                             OutFile=str(existing[0])))
-            continue
+        nrrd_candidates = [p for p in flair_path.glob("*.nrrd")
+                           if re.search(r"flair", p.name, flags=re.I)]
+        out_path = (output_root / "FLAIR" / pid /
+                    f"FLAIR_{pid}.nrrd")
+
+        if nrrd_candidates:
+            try:
+                copy_preexisting_nrrd(nrrd_candidates, out_path, overwrite)
+                rows.append(dict(PatientID=pid,
+                                 Written=True,
+                                 Copied=True,
+                                 Reason="copied_existing",
+                                 OutFile=str(out_path)))
+            except Exception as e:
+                logging.exception(f"{pid}: copy failed")
+                rows.append(dict(PatientID=pid,
+                                 Written=False,
+                                 Copied=False,
+                                 Reason=str(e),
+                                 OutFile=str(out_path)))
+            continue  # nothing else to do for this patient
+
 
         # --- discover series ----------------------------------------
         series_map = collect_series_files(flair_path, duplicate_suffixes)
