@@ -300,7 +300,13 @@ def _process_load_mask(
         if verbose:
             LOGGER.info(f"[RM / MASK LOADING] Loading segmentation mask")
         
-        current_mask = sitk.ReadImage(pulse_data["mask_path"])
+        if os.path.exists(pulse_data["mask_path"]):
+            current_mask = sitk.ReadImage(pulse_data["mask_path"])
+        else:
+            # Generate a zero mask if the mask file does not exist
+            current_mask = sitk.Image(current_image.GetSize(), sitk.sitkUInt8)
+            current_mask.CopyInformation(current_image)
+            LOGGER.warning(f"[RM / MASK LOADING] Mask file not found, using zero mask")
         
         if verbose:
             LOGGER.info(f"[RM / MASK LOADING] Mask loaded: size={current_mask.GetSize()}, "

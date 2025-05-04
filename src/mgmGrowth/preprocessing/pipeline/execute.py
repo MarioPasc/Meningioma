@@ -6,17 +6,7 @@ import argparse
 import logging
 
 from mgmGrowth.preprocessing.pipeline.rm_pipeline import rm_pipeline
-
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO, 
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('preprocessing.log')
-    ]
-)
-logger = logging.getLogger('preprocessing')
+from mgmGrowth.preprocessing import LOGGER
 
 def load_plan(json_path):
     """Load preprocessing plan from JSON file."""
@@ -35,7 +25,7 @@ def extract_patient_data(plan, patient_ids):
         
         # Check if patient exists in the plan
         if patient_key not in plan["data"]:
-            logger.warning(f"Patient {patient_id} not found in the plan")
+            LOGGER.warning(f"Patient {patient_id} not found in the plan")
             continue
         
         patient_data = plan["data"][patient_key]
@@ -45,7 +35,7 @@ def extract_patient_data(plan, patient_ids):
         for pulse_name, pulse_info in patient_data["pulses"].items():
             # Skip if there's an error with this pulse
             if pulse_info.get("error", True):
-                logger.info(f"Skipping {patient_key} {pulse_name} due to error flag")
+                LOGGER.info(f"Skipping {patient_key} {pulse_name} due to error flag")
                 continue
             
             # Extract volume and mask paths
@@ -62,9 +52,9 @@ def extract_patient_data(plan, patient_ids):
                 
                 # Verify files exist
                 if not os.path.exists(volume_path):
-                    logger.warning(f"Volume file not found: {volume_path}")
+                    LOGGER.warning(f"Volume file not found: {volume_path}")
                 if not os.path.exists(mask_path):
-                    logger.warning(f"Mask file not found: {mask_path}")
+                    LOGGER.warning(f"Mask file not found: {mask_path}")
         
         # Add patient data to results if we have any valid pulses
         if pulses_data:
@@ -116,9 +106,9 @@ def preprocess(
 
     # Configure logging based on verbosity
     if verbose:
-        logger.setLevel(logging.INFO)
+        LOGGER.setLevel(logging.INFO)
     else:
-        logger.setLevel(logging.WARNING)
+        LOGGER.setLevel(logging.WARNING)
 
     if type(plan) is str:
         plan = load_plan(plan)
@@ -130,7 +120,7 @@ def preprocess(
     if type(output_dir) is str:
         output_base_dir = create_output_directories(output_dir, patient_ids)
         output_dir = Path(output_dir)
-        logger.info(f"\nCreated output directories in: {output_base_dir}")
+        LOGGER.info(f"\nCreated output directories in: {output_base_dir}")
 
     # Get preprocessing steps for RM and TC
     rm_preprocessing = plan.get("preprocessing_plan", {}).get("RM", {})
@@ -142,7 +132,7 @@ def preprocess(
     # Iterate through patients and their pulses
     for patient_id, pulses in patient_data.items():
         if verbose:
-            logger.info(f"\n[PATIENT] Processing {patient_id}")
+            LOGGER.info(f"\n[PATIENT] Processing {patient_id}")
         
         patient_output_dir = output_dir / patient_id
         
@@ -155,7 +145,7 @@ def preprocess(
         
         # Skip the entire patient if no T1 pulse is found
         if not has_t1:
-            logger.warning(f"[PATIENT] {patient_id} - No T1 pulse found. Skipping this patient.")
+            LOGGER.warning(f"[PATIENT] {patient_id} - No T1 pulse found. Skipping this patient.")
             continue
         
         # Store pulses for this patient in updated data
@@ -179,9 +169,9 @@ def preprocess(
             modality = pulse_data.get("modality", "")
             
             if pulse_name == "T1" and verbose:
-                logger.info(f"\n[{modality} / {pulse_name}] Starting preprocessing (T1 priority)")
+                LOGGER.info(f"\n[{modality} / {pulse_name}] Starting preprocessing (T1 priority)")
             elif verbose:
-                logger.info(f"\n[{modality} / {pulse_name}] Starting preprocessing")
+                LOGGER.info(f"\n[{modality} / {pulse_name}] Starting preprocessing")
             
             # Process based on modality
             if modality == "RM":
@@ -202,17 +192,17 @@ def preprocess(
                     # Get brain extraction mask path from T1 processing
                     t1_brain_mask_path = processed_pulse.get("brain_extraction_mask_path")
                     if verbose and t1_brain_mask_path:
-                        logger.info(f"[PATIENT] {patient_id} - T1 brain mask will be used for other pulses: {t1_brain_mask_path}")
+                        LOGGER.info(f"[PATIENT] {patient_id} - T1 brain mask will be used for other pulses: {t1_brain_mask_path}")
                 
             elif modality == "TC":
                 # In the future, we would call a tc_pipeline function here
                 if verbose:
-                    logger.info(f"[TC / {pulse_name}] TC processing not yet implemented")
+                    LOGGER.info(f"[TC / {pulse_name}] TC processing not yet implemented")
                 updated_patient_data[patient_id][pulse_name] = pulse_data
             
             else:
                 if verbose:
-                    logger.info(f"[UNKNOWN / {pulse_name}] Unknown modality: {modality}")
+                    LOGGER.info(f"[UNKNOWN / {pulse_name}] Unknown modality: {modality}")
                 updated_patient_data[patient_id][pulse_name] = pulse_data
     
     return updated_patient_data
@@ -242,11 +232,11 @@ def main():
     
     # Configure logging based on verbosity
     if args.verbose:
-        logger.setLevel(logging.INFO)
+        LOGGER.setLevel(logging.INFO)
     else:
-        logger.setLevel(logging.WARNING)
+        LOGGER.setLevel(logging.WARNING)
     
-    logger.info(f"Starting meningioma preprocessing with plan: {args.plan}")
+    LOGGER.info(f"Starting meningioma preprocessing with plan: {args.plan}")
     
     # Convert patient IDs to list of integers
     patient_ids = [int(p.strip()) for p in args.patients.split(',')]
@@ -259,7 +249,7 @@ def main():
     
     # Create output directories
     output_base_dir = create_output_directories(args.output, patient_ids)
-    logger.info(f"\nCreated output directories in: {output_base_dir}")
+    LOGGER.info(f"\nCreated output directories in: {output_base_dir}")
     
     # Apply preprocessing steps
     preprocess(
@@ -270,7 +260,7 @@ def main():
         args.save_intermediate
     )
     
-    logger.info("Preprocessing completed successfully")
+    LOGGER.info("Preprocessing completed successfully")
 
 
 if __name__ == "__main__":
