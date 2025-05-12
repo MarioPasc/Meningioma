@@ -12,6 +12,7 @@ OUTPUT_FOLDER: str = "/home/mariopasc/Python/Datasets/Meningiomas/processed/MenG
 VERBOSE: bool = True
  
 planner_json: str = planner.plan(yaml_path=PLANNER_CONFIG)
+#planner_json = "/home/mariopasc/Python/Datasets/Meningiomas/processed/misc/plan_meningioma.json"
 execute.preprocess(plan=planner_json,
                    patient_ids=PATIENTS,
                    output_dir=OUTPUT_FOLDER,

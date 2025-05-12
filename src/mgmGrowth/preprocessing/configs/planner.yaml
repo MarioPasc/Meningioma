@@ -28,6 +28,7 @@ preprocessing:
     registration:
       sri24:
         enable: true
+        apply_composite: true
         config_path: "/home/mariopasc/Python/Projects/Meningioma/src/mgmGrowth/preprocessing/configs/registration_sri24.yaml" 
     brain_extraction:
       universal_mask:

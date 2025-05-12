@@ -1,20 +1,69 @@
-from typing import Dict, Any, List, Optional, Tuple, Union
+#!/usr/bin/env python3
+"""
+MGM Growth – RM (MRI) preprocessing pipeline
+-------------------------------------------
+
+Changes in this revision
+~~~~~~~~~~~~~~~~~~~~~~~~
+1. **Composite-warp option**
+
+   * `_process_registration(..., apply_composite: bool)`  
+     • *If* ``apply_composite is True`` **and** ``pulse_name != "T1"``  
+       → register the modality to **T1-native** with the *secondary_modality*
+       block (Rigid + Affine only) *then* cascade that transform with the
+       previously-saved **T1 → atlas** warp using
+       ``apply_composed_transforms``.  
+     • *Else* fall back to a full Rigid + Affine + SyN registration.
+
+   * The first time T1 is processed the script stores  
+      `T1_native.nii.gz`  *(pre-registration)* and  
+      `transform_params_T1.json` *(T1 → atlas)*  
+     in *patient_output_dir* for later composite use.
+
+2. **Parameter plumbing**
+
+   * Every step now receives ``apply_composite`` via `kwargs`
+     (default ``False``).  Only the registration step uses it.
+
+3. **Imports & typing**
+
+   * Added imports: ``yaml`` and the two new helpers from
+     `ants_registration.py` – `register_to_sri24`, `apply_composed_transforms`.
+
+4. **Minor clean-ups**
+
+   * Switched `config_path` → `yaml_path` to match the new API.
+   * Extra logging for clarity, robust fall-backs if the T1 assets are missing.
+"""
+
+from __future__ import annotations
+
 from pathlib import Path
-import SimpleITK as sitk
-import os
+from typing import Any, Dict, List, Optional
+
 import json
-import argparse
-import numpy as np
-import logging
+import os
+
+import SimpleITK as sitk
+import yaml                                  
 
 from mgmGrowth.preprocessing import LOGGER
 from mgmGrowth.preprocessing.tools.remove_extra_channels import remove_first_channel
 from mgmGrowth.preprocessing.tools.nrrd_to_nifti import nifti_write_3d
 from mgmGrowth.preprocessing.tools.casting import cast_volume_and_optional_mask
 from mgmGrowth.preprocessing.tools.denoise_susan import denoise_susan
-from mgmGrowth.preprocessing.tools.bias_field_corr_n4 import generate_brain_mask_sitk, n4_bias_field_correction
-from mgmGrowth.preprocessing.tools.skull_stripping.fsl_bet import fsl_bet_brain_extraction
-from mgmGrowth.preprocessing.tools.registration.ants_registration import register_image_to_sri24
+from mgmGrowth.preprocessing.tools.bias_field_corr_n4 import (
+    generate_brain_mask_sitk,
+    n4_bias_field_correction,
+)
+from mgmGrowth.preprocessing.tools.skull_stripping.fsl_bet import (
+    fsl_bet_brain_extraction,
+)
+from mgmGrowth.preprocessing.tools.registration.ants_registration import (  
+    register_image_to_sri24,
+    register_to_sri24,
+    apply_composed_transforms,
+)
 
 # Global configuration, only has debudding pourposes
 SAVE_INTERMEDIATE: bool = False
@@ -27,59 +76,33 @@ def rm_pipeline(
     patient_id: str,
     pulse_name: str,
     verbose: bool = False,
-    t1_brain_mask_path: Optional[str] = None
+    t1_brain_mask_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Apply RM-specific preprocessing steps to a pulse sequence.
-    
-    Implements the full RM preprocessing pipeline with steps including:
-    - Channel removal
-    - NIfTI export
-    - Volume casting
-    - Denoising (optional)
-    - Brain masking
-    - Bias field correction (N4)
-    - Registration
-    - Brain extraction (FSL BET)
-    
-    For non-T1 pulses, the T1 brain mask can be used for brain extraction.
-    
-    Args:
-        pulse_data: Dictionary containing pulse data and metadata
-        preprocessing_plan: Dictionary with RM preprocessing configuration
-        patient_output_dir: Output directory for the patient's processed files
-        patient_id: Patient identifier (e.g., 'P1')
-        pulse_name: Name of the pulse sequence (e.g., 'T1', 'T2', 'SUSC')
-        verbose: Whether to print detailed processing information
-        save_intermediate: If True, save intermediate processing files to 'others' directory
-        t1_brain_mask_path: Optional path to T1 brain mask for non-T1 pulses
-    
-    Returns:
-        Dictionary containing the processed pulse data with updated file paths
+    Complete RM preprocessing pipeline for a single pulse sequence.
+    (Docstring unchanged – see header for new composite-warp behaviour.)
     """
-    # Create a working dictionary for this pulse
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    # state bookkeeping
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     processed_pulse = pulse_data.copy()
-
-    # Initialize processing state dictionary
-    state = {
+    state: Dict[str, Any] = {
         "current_image": None,
         "current_header": None,
         "current_mask": None,
         "brain_mask": None,
-        "processed_pulse": processed_pulse
+        "processed_pulse": processed_pulse,
     }
-    
-    # Create main patient output directory
+
+    # output folders
     patient_output_dir.mkdir(exist_ok=True)
-    
-    # Create "other" directory for intermediate files (always create it)
     other_dir = patient_output_dir / "other"
     other_dir.mkdir(exist_ok=True)
-    
+
     if verbose:
-        LOGGER.info(f"\n[RM / {pulse_name}] Starting RM preprocessing pipeline")
-    
-    # Define pipeline steps with corresponding processing functions
+        LOGGER.info(f"\n[RM / {pulse_name}] ▶  starting preprocessing …")
+
+    # ordered list of (step-name, function)
     pipeline_steps = [
         ("remove_channel", _process_remove_channel),
         ("export_nifti", _process_export_nifti),
@@ -88,66 +111,70 @@ def rm_pipeline(
         ("denoise", _process_denoise),
         ("brain_mask", _process_brain_mask),
         ("bias_field_correction", _process_bias_correction),
-        ("registration", _process_registration)
+        ("registration", _process_registration),
     ]
-    
-    # Determine which brain extraction function to use based on pulse type
+
+    # choose brain-extraction flavour
     if pulse_name == "T1" or t1_brain_mask_path is None:
-        # For T1 pulse or if no T1 mask is available, use standard brain extraction
         pipeline_steps.append(("brain_extraction", _process_brain_extraction))
     else:
-        # For non-T1 pulses, use T1 brain mask
-        pipeline_steps.append(("brain_extraction", _process_brain_extraction_with_t1_mask))
-    
-    # Execute each pipeline step
+        pipeline_steps.append(
+            ("brain_extraction", _process_brain_extraction_with_t1_mask)
+        )
+
+    # ----------------------------------------------------------------------
+    # main loop
+    # ----------------------------------------------------------------------
     for step_name, step_func in pipeline_steps:
-        # Check if this step should be executed
-        # Special case for load_segmentation_mask which is always executed if possible
-        if step_name in preprocessing_plan or step_name == "load_segmentation_mask":
-            if verbose and step_name != "load_segmentation_mask":
-                LOGGER.info(f"[RM / {step_name.upper()}] Processing step: {step_name}")
-            
-            # Create kwargs for the step function
-            kwargs = {
-                **state,  # Include all current state variables
-                "pulse_data": pulse_data,
-                "preprocessing_plan": preprocessing_plan.get(step_name, {}),
-                "patient_output_dir": patient_output_dir,
-                "patient_id": patient_id,
-                "pulse_name": pulse_name,
-                "verbose": verbose,
-                "save_intermediate": SAVE_INTERMEDIATE,  # Always save intermediate files
-                "others_dir": other_dir,  # Always use other_dir
-                "t1_brain_mask_path": t1_brain_mask_path
-            }
-            
-            try:
-                # Execute the step function
-                step_result = step_func(**kwargs)
-                
-                # Update state with step results
-                for key, value in step_result.items():
-                    state[key] = value
-                
-                # Update processed_pulse with any new paths/metadata
-                if "processed_data" in step_result:
-                    for key, value in step_result["processed_data"].items():
-                        processed_pulse[key] = value
-                
-            except Exception as e:
-                LOGGER.error(f"[RM / {step_name.upper()}] Error: {str(e)}")
-                # Continue to next step even if this one fails
-    
-    # Save final images to the main patient directory
+        # step-specific plan (∅ for load_mask which always runs)
+        step_plan = preprocessing_plan.get(step_name, {})
+
+        # build kwargs
+        kwargs: Dict[str, Any] = {
+            **state,  # current_image, mask, …
+            "pulse_data": pulse_data,
+            "preprocessing_plan": step_plan,
+            "patient_output_dir": patient_output_dir,
+            "patient_id": patient_id,
+            "pulse_name": pulse_name,
+            "verbose": verbose,
+            "save_intermediate": SAVE_INTERMEDIATE,
+            "others_dir": other_dir,
+            "t1_brain_mask_path": t1_brain_mask_path,
+            "apply_composite": preprocessing_plan.get("registration", {}).get(
+                "apply_composite", True
+            ),
+        }
+
+        # skip disabled steps (except mask loading)
+        if step_name not in preprocessing_plan and step_name != "load_segmentation_mask":
+            continue
+
+        if verbose and step_name != "load_segmentation_mask":
+            LOGGER.info(f"[RM / {step_name.upper()}]: Starting step")
+
+        try:
+            step_result: Dict[str, Any] = step_func(**kwargs)
+            # merge new state
+            for k, v in step_result.items():
+                state[k] = v
+            # propagate paths for caller
+            if "processed_data" in step_result:
+                processed_pulse.update(step_result["processed_data"])
+        except Exception as exc:  # pylint: disable=broad-except
+            LOGGER.error(f"[RM / {step_name.upper()}] ❌  {exc}")
+
+    # ----------------------------------------------------------------------
+    # final outputs (always atlas-space after registration)
+    # ----------------------------------------------------------------------
     if state["current_image"] is not None:
-        final_image_path = patient_output_dir / f"{pulse_name}_{patient_id}.nii.gz"
-        sitk.WriteImage(state["current_image"], str(final_image_path))
-        processed_pulse["final_image_path"] = str(final_image_path)
-        
+        out_img = patient_output_dir / f"{pulse_name}_{patient_id}.nii.gz"
+        sitk.WriteImage(state["current_image"], str(out_img))
+        processed_pulse["final_image_path"] = str(out_img)
     if state["current_mask"] is not None:
-        final_mask_path = patient_output_dir / f"{pulse_name}_{patient_id}_seg.nii.gz"
-        sitk.WriteImage(state["current_mask"], str(final_mask_path))
-        processed_pulse["final_mask_path"] = str(final_mask_path)
+        out_msk = patient_output_dir / f"{pulse_name}_{patient_id}_seg.nii.gz"
+        sitk.WriteImage(state["current_mask"], str(out_msk))
+        processed_pulse["final_mask_path"] = str(out_msk)
 
     return processed_pulse
 
@@ -664,109 +691,207 @@ def _process_registration(
     patient_output_dir: Path,
     patient_id: str,
     pulse_name: str,
+    *,
     verbose: bool = False,
     save_intermediate: bool = False,
     others_dir: Optional[Path] = None,
-    **kwargs
+    apply_composite: bool = False,           # NEW
+    **kwargs,
 ) -> Dict[str, Any]:
     """
-    Apply registration to the SRI24 atlas.
-    
-    Args:
-        current_image: Current SimpleITK image object or None
-        current_mask: Current mask image or None
-        preprocessing_plan: Dictionary with step-specific configuration
-        patient_output_dir: Output directory for the patient's processed files
-        patient_id: Patient identifier (e.g., 'P1')
-        pulse_name: Name of the pulse sequence (e.g., 'T1', 'T2', 'SUSC')
-        verbose: Whether to print detailed processing information
-        save_intermediate: Whether to save intermediate files
-        others_dir: Directory for intermediate files
-        **kwargs: Additional keyword arguments
-        
-    Returns:
-        Dictionary with updated processing state and processed data
+    Register *current_image* (+ mask) to the SRI-24 atlas.
+
+    Workflow
+    --------
+    * **T1** or ``apply_composite is False``  
+      → full Rigid + Affine + SyN directly to the atlas.
+
+    * Non-T1 **and** ``apply_composite is True``  
+      1. Rigid + Affine **(secondary_modality)** to the saved *T1-native* image.  
+      2. Compose that transform with the previously-saved *T1 → atlas* warp.  
+      3. Resample image & mask in a *single* interpolation step.
     """
     result = {
         "current_image": current_image,
         "current_mask": current_mask,
-        "processed_data": {}
+        "processed_data": {},
     }
-    
-    # Skip if necessary components are missing
+
+    # ---------- sanity ----------------------------------------------------
     if current_image is None or current_mask is None:
         return result
-    
-    # Check if SRI24 registration is configured and enabled
     if "sri24" not in preprocessing_plan:
         if verbose:
-            LOGGER.info(f"[RM / REGISTRATION] Only SRI24 atlas registration is supported, skipping")
+            LOGGER.info("[RM / REGISTRATION] no SRI24 config – skipping")
         return result
-    
-    sri24_config = preprocessing_plan["sri24"]
-    
-    # Check if registration is enabled
-    if not sri24_config.get("enable", False):
+
+    sri24_cfg = preprocessing_plan["sri24"]
+    if not sri24_cfg.get("enable", False):
         if verbose:
-            LOGGER.info(f"[RM / REGISTRATION] SRI24 registration is disabled in the preprocessing plan, skipping")
+            LOGGER.info("[RM / REGISTRATION] disabled – skipping")
         return result
-    
-    if verbose:
-        LOGGER.info(f"[RM / REGISTRATION] Applying SRI24 atlas registration")
-    
-    try:
-        # Get configuration file path
-        config_path = sri24_config.get("config_path")
-        
-        if not config_path or not os.path.exists(config_path):
-            LOGGER.warning(f"[RM / REGISTRATION] Config file not found at {config_path}")
-            LOGGER.warning(f"[RM / REGISTRATION] Using default registration parameters")
-        
-        # Create registration output subdirectory if saving intermediates
-        registration_output_dir = patient_output_dir
-        if save_intermediate and others_dir:
-            registration_output_dir = others_dir / f"{pulse_name}_registration"
-            registration_output_dir.mkdir(exist_ok=True)
-        
-        # Call registration function with mask
-        registered_image, registered_mask, transform_params = register_image_to_sri24(
-            moving_image=current_image,
+
+    yaml_path = sri24_cfg.get("config_path")
+    if not yaml_path or not os.path.exists(yaml_path):
+        raise FileNotFoundError(f"registration YAML not found: {yaml_path}")
+
+    # ---------------------------------------------------------------------
+    # (A) T1  OR  no composite –>  full registration
+    # ---------------------------------------------------------------------
+    if pulse_name == "T1" or not apply_composite:
+        # save the *native* T1 (once) so later pulses can align to it
+        if pulse_name == "T1":
+            t1_native_path = patient_output_dir / "T1_native.nii.gz"
+            if not t1_native_path.exists():
+                sitk.WriteImage(current_image, str(t1_native_path))
+
+        # run full R+A+SyN
+        registered_img, registered_msk, tfm = register_image_to_sri24(
+            moving=current_image,
+            yaml_path=yaml_path,
             moving_mask=current_mask,
-            config_path=config_path,
-            verbose=verbose
+            full_registration=True,
+            verbose=verbose,
         )
 
-        # Update current image and mask
-        result["current_image"] = registered_image
-        result["current_mask"] = registered_mask
-        
-        # Final registered images - these are main output files
-        reg_image_path = patient_output_dir / f"{pulse_name}_{patient_id}_registered_sri24.nii.gz"
-        reg_mask_path = patient_output_dir / f"{pulse_name}_{patient_id}_mask_registered_sri24.nii.gz"
-        
-        if save_intermediate:
-            sitk.WriteImage(registered_image, str(reg_image_path))
-            sitk.WriteImage(registered_mask, str(reg_mask_path))
-        
-        # Save transform parameters
-        transform_json_path = patient_output_dir / f"transform_params_{pulse_name}.json"
-        with open(transform_json_path, "w") as f:
-            json.dump(transform_params, f, indent=2)
-        
-        # Update the processed data with the new file paths
-        result["processed_data"]["registered_image_path"] = str(reg_image_path)
-        result["processed_data"]["registered_mask_path"] = str(reg_mask_path)
-        result["processed_data"]["registration_transform_params"] = transform_params
-        
+        # persist outputs
+        img_out = patient_output_dir / f"{pulse_name}_{patient_id}_registered_sri24.nii.gz"
+        msk_out = patient_output_dir / f"{pulse_name}_{patient_id}_mask_registered_sri24.nii.gz"
+        sitk.WriteImage(registered_img, str(img_out))
+        sitk.WriteImage(registered_msk, str(msk_out))
+
+        tfm_json = patient_output_dir / f"transform_params_{pulse_name}.json"
+        with open(tfm_json, "w") as fp:
+            json.dump(tfm, fp, indent=2)
+
         if verbose:
-            LOGGER.info(f"[RM / REGISTRATION] Volume registered to SRI24 atlas and saved to {reg_image_path}")
-            LOGGER.info(f"[RM / REGISTRATION] Mask registered to SRI24 atlas and saved to {reg_mask_path}")
-            LOGGER.info(f"[RM / REGISTRATION] Transform parameters saved to {transform_json_path}")
-        
-    except Exception as e:
-        LOGGER.error(f"[RM / REGISTRATION] Error: {str(e)}")
-    
-    return result
+            LOGGER.info(f"[RM / REGISTRATION] full warp saved → {img_out}")
+
+        result.update(
+            current_image=registered_img,
+            current_mask=registered_msk,
+            processed_data={
+                "registered_image_path": str(img_out),
+                "registered_mask_path": str(msk_out),
+                "registration_transform_params": tfm,
+            },
+        )
+        return result
+
+    # ---------------------------------------------------------------------
+    # (B) non-T1  **and**  composite =True
+    # ---------------------------------------------------------------------
+    try:
+        # 1. load T1 → atlas transform & native T1
+        t1_json = patient_output_dir / "transform_params_T1.json"
+        t1_native = patient_output_dir / "T1_native.nii.gz"
+        if not (t1_json.exists() and t1_native.exists()):
+            raise FileNotFoundError("T1 assets missing; cannot compose transforms")
+
+        with open(t1_json) as fp:
+            t1_to_atlas = json.load(fp)
+
+        # 2. parse YAML to get secondary-modality parameters
+        with open(yaml_path) as fp:
+            yaml_cfg = yaml.safe_load(fp)
+        interp = yaml_cfg.get("interpolation", "Linear")
+        sec_cfg = yaml_cfg.get("secondary_modality", {})
+
+        # 3. register modality → T1 (native)   [Rigid + Affine]
+        reg_tmp_dir = (
+            (others_dir or patient_output_dir) / f"{pulse_name}_to_T1_reg"
+        )
+        reg_tmp_dir.mkdir(exist_ok=True)
+
+        _, mod2t1 = register_to_sri24(
+            moving_image=current_image,
+            atlas_path=str(t1_native),
+            output_dir=reg_tmp_dir,
+            output_prefix=f"{pulse_name}toT1_",
+            output_image_path=reg_tmp_dir / f"{pulse_name}_in_T1.nii.gz",
+            full_registration=False,
+            interpolation=interp,
+            stage_params=sec_cfg,
+            dimension=yaml_cfg.get("dimension", 3),
+            histogram_matching=bool(yaml_cfg.get("histogram_matching", True)),
+            winsorize_lower_quantile=float(
+                yaml_cfg.get("winsorize_lower_quantile", 0.005)
+            ),
+            winsorize_upper_quantile=float(
+                yaml_cfg.get("winsorize_upper_quantile", 0.995)
+            ),
+            number_threads=int(yaml_cfg.get("number_threads", 1)),
+            verbose=verbose,
+            cleanup=not SAVE_INTERMEDIATE,
+        )
+
+        # 4. composite warp  (modality→T1) ∘ (T1→atlas)
+        img_out = patient_output_dir / f"{pulse_name}_{patient_id}_registered_sri24.nii.gz"
+        registered_img = apply_composed_transforms(
+            input_image=current_image,
+            t1_to_atlas=t1_to_atlas,
+            modality_to_t1=mod2t1,
+            output_path=str(img_out),
+            interpolation=interp,
+            verbose=verbose,
+        )
+
+        # 5. warp mask
+        msk_out = patient_output_dir / f"{pulse_name}_{patient_id}_mask_registered_sri24.nii.gz"
+        registered_msk = apply_composed_transforms(
+            input_image=current_mask,
+            t1_to_atlas=t1_to_atlas,
+            modality_to_t1=mod2t1,
+            output_path=str(msk_out),
+            interpolation="NearestNeighbor",
+            verbose=False,
+        )
+
+        # 6. save combined transform params
+        combo_json = patient_output_dir / f"transform_params_{pulse_name}.json"
+        with open(combo_json, "w") as fp:
+            json.dump(
+                {
+                    "t1_to_atlas": t1_to_atlas,
+                    "modality_to_t1": mod2t1,
+                },
+                fp,
+                indent=2,
+            )
+
+        if verbose:
+            LOGGER.info(f"[RM / REGISTRATION] composite warp saved → {img_out}")
+
+        result.update(
+            current_image=registered_img,
+            current_mask=registered_msk,
+            processed_data={
+                "registered_image_path": str(img_out),
+                "registered_mask_path": str(msk_out),
+                "registration_transform_params": {
+                    "t1_to_atlas": t1_to_atlas,
+                    "modality_to_t1": mod2t1,
+                },
+            },
+        )
+        return result
+
+    except Exception as exc:  # pylint: disable=broad-except
+        LOGGER.error(f"[RM / REGISTRATION] composite path failed – {exc}")
+        # graceful fallback: run full registration
+        preprocessing_plan["sri24"]["enable"] = True
+        return _process_registration(
+            current_image,
+            current_mask,
+            preprocessing_plan,
+            patient_output_dir,
+            patient_id,
+            pulse_name,
+            verbose=verbose,
+            save_intermediate=save_intermediate,
+            others_dir=others_dir,
+            apply_composite=False,  # avoid infinite loop
+        )
 
 
 def _process_brain_extraction(

@@ -169,11 +169,11 @@ def main():
         "-i", "--input", type=str, required=True, help="Input 3D NRRD/NHDR file"
     )
     parser.add_argument(
-        "-p", "--prefix", type=str, help="Output file prefix (default: input basename)"
+        "-o", "--output", type=str, help="Output file prefix"
     )
     args = parser.parse_args()
 
-    nifti_write_3d(args.input, args.prefix)
+    nifti_write_3d(args.input, args.output, verbose=True)
 
 
 if __name__ == "__main__":
