@@ -1,5 +1,4 @@
 # file: src/mgmGrowth/tasks/superresolution/tools/metrics.py
-"""PSNR / SSIM utilities with ROI support."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -8,94 +7,82 @@ from typing import Tuple
 import numpy as np
 import SimpleITK as sitk
 from numpy.typing import NDArray
-from pathlib import Path
+
+# ---------------- I/O & normalisation ---------------------------------
+def _load(path: Path) -> NDArray[np.float32]:
+    return sitk.GetArrayFromImage(sitk.ReadImage(str(path))).astype(np.float32)
 
 
-# ---------- helpers --------------------------------------------------
-
-def matching_gt_seg(
-    lr_path: Path,
-    orig_root: Path,
-) -> tuple[Path, Path | None]:
-    """
-    Given the *low-res* volume path, return the *high-res* path and seg mask
-    inside *orig_root*.
-
-    Both trees share patient IDs and filenames.
-    """
-    patient = lr_path.parent.name                # BraTS-MEN-XXXXX-000
-    gt_path = orig_root / patient / lr_path.name
-    seg_path = orig_root / patient / (patient + "-seg.nii.gz")
-    return gt_path, seg_path if seg_path.exists() else None
+def _norm(v: NDArray[np.float32]) -> NDArray[np.float32]:
+    lo, hi = np.percentile(v, (0.5, 99.5))
+    return ((v - lo) / (hi - lo + 1e-8)).clip(0.0, 1.0)
 
 
-def _load(path: Path) -> Tuple[NDArray[np.float32], Tuple[float, float, float]]:
-    img = sitk.ReadImage(str(path))
-    return sitk.GetArrayFromImage(img).astype(np.float32), img.GetSpacing()
-
-
-def _norm(arr: NDArray[np.float32]) -> NDArray[np.float32]:
-    lo, hi = np.percentile(arr, (0.5, 99.5))
-    return ((arr - lo) / (hi - lo + 1e-8)).clip(0.0, 1.0)
-
-
-# ---------- PSNR -----------------------------------------------------
-
-
+# ---------------- metrics ---------------------------------------------
 def _psnr(a: NDArray[np.float32], b: NDArray[np.float32]) -> float:
     mse = np.mean((a - b) ** 2, dtype=np.float64)
     return float("inf") if mse == 0 else 10.0 * np.log10(1.0 / mse)
 
 
-# ---------- SSIM (vector version) ------------------------------------
-
-
 def _ssim_vec(a: NDArray[np.float32], b: NDArray[np.float32]) -> float:
     K1, K2, L = 0.01, 0.03, 1.0
     C1, C2 = (K1 * L) ** 2, (K2 * L) ** 2
-    mu_a, mu_b = a.mean(dtype=np.float64), b.mean(dtype=np.float64)
-    sigma_a2 = ((a - mu_a) ** 2).mean(dtype=np.float64)
-    sigma_b2 = ((b - mu_b) ** 2).mean(dtype=np.float64)
-    sigma_ab = ((a - mu_a) * (b - mu_b)).mean(dtype=np.float64)
+    mu_a, mu_b = a.mean(), b.mean()
+    sigma_a2 = ((a - mu_a) ** 2).mean()
+    sigma_b2 = ((b - mu_b) ** 2).mean()
+    sigma_ab = ((a - mu_a) * (b - mu_b)).mean()
     num = (2 * mu_a * mu_b + C1) * (2 * sigma_ab + C2)
     den = (mu_a**2 + mu_b**2 + C1) * (sigma_a2 + sigma_b2 + C2)
     return float(num / den) if den else 1.0
 
 
-# ---------- public API -----------------------------------------------
+def _mi(a: NDArray[np.float32], b: NDArray[np.float32], bins: int = 64) -> float:
+    ha, _ = np.histogram(a, bins=bins, range=(0, 1), density=True)
+    hb, _ = np.histogram(b, bins=bins, range=(0, 1), density=True)
+    hab, _, _ = np.histogram2d(a, b, bins=bins, range=((0, 1), (0, 1)), density=True)
+    ha += 1e-12
+    hb += 1e-12
+    hab += 1e-12
+    return float(np.sum(hab * np.log(hab / (ha[:, None] * hb[None, :]))))
 
 
-def psnr_ssim_regions(
-    gt_path: Path,
-    sr_path: Path,
-    seg_path: Path | None,
-) -> np.ndarray:
+# ---------------- public API ------------------------------------------
+def metrics_regions(
+    gt: Path,
+    sr: Path,
+    seg: Path | None,
+) -> NDArray[np.float32]:
     """
-    Return a (4, 2) array = [[PSNR, SSIM] for
-    (whole, tumour_core, edema, surrounding_tumour)].
-
-    If *seg_path* is None or a region is empty → NaN.
+    Compute [[PSNR, SSIM, MI] × 4]  (whole + 3 tumour ROIs).
     """
-    gt, _ = _load(gt_path)
-    sr, _ = _load(sr_path)
-    gt_n, sr_n = _norm(gt), _norm(sr)
+    gt_n, sr_n = map(_norm, (_load(gt), _load(sr)))
+    out = np.full((4, 3), np.nan, dtype=np.float32)
 
-    out = np.full((4, 2), np.nan, dtype=np.float32)
+    seg_arr = None
+    if seg and seg.exists():
+        seg_arr = _load(seg).astype(np.int16)
 
-    # region ids None / 1 / 2 / 3
-    for idx, rid in enumerate([None, 1, 2, 3]):
+    for i, rid in enumerate([None, 1, 2, 3]):
         if rid is None:
-            mask = np.ones_like(gt, dtype=bool)
+            mask = np.ones_like(gt_n, dtype=bool)
         else:
-            if seg_path is None:
+            if seg_arr is None:
                 continue
-            seg = sitk.GetArrayFromImage(sitk.ReadImage(str(seg_path)))
-            mask = seg == rid
-            if mask.sum() == 0:
+            mask = seg_arr == rid
+            if not np.any(mask):
                 continue
 
         a, b = gt_n[mask], sr_n[mask]
-        out[idx, 0] = _psnr(a, b)
-        out[idx, 1] = _ssim_vec(a, b)
+        out[i, 0] = _psnr(a, b)
+        out[i, 1] = _ssim_vec(a, b)
+        out[i, 2] = _mi(a, b)
 
-    return out  # shape (4, 2)
+    return out  # (4,3)
+
+
+# ---------------- helper to map LR to GT & SEG ------------------------
+def matching_gt_seg(lr_path: Path, orig_root: Path) -> Tuple[Path, Path | None]:
+    patient = lr_path.parent.name
+    gt = orig_root / patient / lr_path.name
+    seg = orig_root / patient / f"{patient}-seg.nii.gz"
+    return gt, seg if seg.exists() else None

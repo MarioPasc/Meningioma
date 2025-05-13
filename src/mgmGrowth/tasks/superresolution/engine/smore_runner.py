@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from typing import Optional
 
 from mgmGrowth.tasks.superresolution import LOGGER
 from src.mgmGrowth.tasks.superresolution import LOGGER as _L
@@ -82,3 +83,41 @@ def infer_volume(
             str(cfg.n_rots),
         ]
     )
+
+def run_smore(
+    lr_path: Path,
+    out_dir: Path,
+    *,
+    cfg: Optional[SmoreConfig] = None,
+    slice_thickness: Optional[float] = None,
+    blur_kernel: Optional[Path] = None,
+    gpu_id: int = 0,
+    suffix: str = "",
+) -> tuple[Path, Path]:
+    """
+    Call `run-smore` on a **single** LR volume.
+
+    Returns
+    -------
+    weights_dir, sr_path
+    """
+    ensure_dir(out_dir)
+    cmd = [
+        "run-smore",
+        "--in-fpath", str(lr_path),
+        "--out-dir", str(out_dir),
+        "--gpu-id", str(gpu_id),
+    ]
+    if slice_thickness is not None:
+        cmd += ["--slice-thickness", str(slice_thickness)]
+    if blur_kernel:
+        cmd += ["--blur-kernel-file", str(blur_kernel)]
+    if suffix:
+        cmd += ["--suffix", suffix]
+
+    _L.info("$ %s", " ".join(cmd))
+    subprocess.run(cmd, check=True)
+
+    weights = out_dir / "weights"
+    sr = out_dir / f"{lr_path.stem}{suffix}_SR.nii.gz"
+    return weights, sr

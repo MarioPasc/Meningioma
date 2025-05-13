@@ -8,7 +8,7 @@ from src.mgmGrowth.tasks.superresolution.tools.nifti_io import (
 )
 from src.mgmGrowth.tasks.superresolution.tools.downsample import downsample_z
 from src.mgmGrowth.tasks.superresolution.tools.parallel import run_parallel       
-from src.mgmGrowth.tasks.superresolution.tools.metrics import psnr_ssim_regions, matching_gt_seg
+from src.mgmGrowth.tasks.superresolution.tools.metrics import metrics_regions, matching_gt_seg
 
 __all__ = [
     "ensure_dir",
@@ -17,6 +17,6 @@ __all__ = [
     "change_spacing_z",
     "downsample_z",
     "run_parallel"
-    "psnr_ssim_regions",
+    "metrics_regions",
     "matching_gt_seg"
 ]
