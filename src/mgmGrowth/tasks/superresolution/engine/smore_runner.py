@@ -5,6 +5,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from mgmGrowth.tasks.superresolution import LOGGER
 from src.mgmGrowth.tasks.superresolution import LOGGER as _L
 from src.mgmGrowth.tasks.superresolution.config import SmoreConfig
 from src.mgmGrowth.tasks.superresolution.tools.paths import ensure_dir
@@ -18,17 +19,28 @@ def _run(cmd: list[str]) -> None:
 def train_volume(
     lr_path: Path,
     cfg: SmoreConfig,
-    out_root: Path,
+    weight_dir: Path,
     slice_thick_mm: float,
 ) -> Path:
-    weight_dir = ensure_dir(out_root / lr_path.stem / "weights")
+    LOGGER.info("=== Training %s ===", lr_path.stem)
+    LOGGER.info(f"Slice thickness: {slice_thick_mm} mm")
+    LOGGER.info(f"Weight dir: {weight_dir}")
+    LOGGER.info(f"GPU ID: {cfg.gpu_id}")
+    LOGGER.info(f"Patch size: {cfg.patch_size}")
+    LOGGER.info(f"Batch size: {cfg.batch_size}")
+    LOGGER.info(f"Num blocks: {cfg.n_blocks}")
+    LOGGER.info(f"Num channels: {cfg.n_channels}")
+    LOGGER.info(f"Num patches: {cfg.n_patches}")
+    LOGGER.info(f"Num rotations: {cfg.n_rots}")
+    LOGGER.info("============================================")
+
     _run(
         [
-            str(cfg.smore_root / "smore-train"),
+            "smore-train",
             "--in-fpath",
             str(lr_path),
             "--weight-dir",
-            str(weight_dir.parent),
+            str(weight_dir),
             "--gpu-id",
             str(cfg.gpu_id),
             "--slice-thickness",
@@ -57,7 +69,7 @@ def infer_volume(
     ensure_dir(out_path.parent)
     _run(
         [
-            str(cfg.smore_root / "smore-test"),
+            "smore-test",
             "--in-fpath",
             str(lr_path),
             "--out-fpath",

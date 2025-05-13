@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
 
 @dataclass(slots=True, frozen=True)
 class SmoreConfig:
     """Hyper-parameters and paths for the SMORE engine."""
-    smore_root: Path
     gpu_id: int = 0
     patch_size: int = 48
     n_blocks: int = 16

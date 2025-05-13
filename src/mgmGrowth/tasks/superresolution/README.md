@@ -1,4 +1,6 @@
-# CLI
+# Superresolution
+
+The main idea is to train a SMORE model with the BraTS-Men 2023 dataset for the T1 and T2 pulses. Then, we will fine-tune the final SMORE model on our own T1 and T2 pulses from the MenGrowth dataset, to then, predict on the own trained volumes. For the SWI/SUSC pulses we must proceed in a different way, since there is no available dataset for this pulse in the BraTS-Men 2023 dataset, therefore, we can choose to fine-tune the T2 SMOTE model on the SWI or train from scratch and predict on the little SWI images.
 
 ## Commands
 
@@ -9,23 +11,13 @@ python -m src.mgmGrowth.tasks.superresolution.cli.downsample \
   --out-root  ~/Python/Datasets/Meningiomas/BraTS/SR/downsampled_brats_5mm \
   --target-dz 5
 
-### 2. Split
+### 2. Perform val
 
-python -m src.mgmGrowth.tasks.superresolution.cli.split \
-  --ds-root  ~/Python/Datasets/Meningiomas/BraTS/SR/downsampled_brats_5mm \
-  --out-root ~/Python/Datasets/Meningiomas/BraTS/SR/downsampled_brats_5mm_split
-
-### 3. Train SMORE
-
-python -m src.mgmGrowth.tasks.superresolution.cli.train_smore \
-  --train-root ~/Python/Datasets/Meningiomas/BraTS/SR/downsampled_brats_5mm_split/train \
-  --smore-root ~/Python/Projects/Meningioma/src/mgmGrowth/external/SMORE \
-  --slice-dz   5
-
-### 4. Infer
-
-python -m src.mgmGrowth.tasks.superresolution.cli.infer_smore \
-  --test-root    ~/Datasets/downsampled_brats_5mm_split/test \
-  --weights-root ~/Datasets/downsampled_brats_5mm_split/train/_smore_weights \
-  --smore-root   ~/Repos/smore-main \
-  --out-root     ~/Datasets/SR_results_5mm
+python -m src.mgmGrowth.tasks.superresolution.pipelines.superresolution_brats_experiment \
+  --data-root   ~/Python/Datasets/Meningiomas/BraTS/SR/downsampled_brats_5mm \
+  --orig-root   ~/Python/Datasets/Meningiomas/BraTS/BraTS_Men_Train \
+  --pulses      t1c \
+  --slice-dz    5 \
+  --val-frequency 2 \
+  --holdout-ratio 0.2 \
+  --gpu 0

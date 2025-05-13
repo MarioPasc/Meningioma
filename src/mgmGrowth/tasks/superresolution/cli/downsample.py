@@ -37,6 +37,9 @@ def _process_patient(
     """Down-sample **all** NIfTIs inside *pat_dir* and save to *out_root/patient*."""
     dst_dir = ensure_dir(out_root / pat_dir.name)
     for nii in pat_dir.glob("*.nii.gz"):
+        if "seg" in nii.name:
+            LOGGER.debug("Skipping segmentation file %s", nii.name)
+            continue
         arr, spacing = load_nifti(nii)
         arr_ds, spacing_ds = downsample_z(arr, spacing, target_mm)
         save_nifti(arr_ds, spacing_ds, dst_dir / nii.name, reference=nii)

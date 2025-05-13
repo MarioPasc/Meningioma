@@ -5,9 +5,9 @@ import argparse
 from pathlib import Path
 
 from src.mgmGrowth.tasks.superresolution import LOGGER
-from ..config import SmoreConfig
-from ..engine.smore_runner import infer_volume
-from ..tools.paths import ensure_dir
+from src.mgmGrowth.tasks.superresolution.config import SmoreConfig
+from src.mgmGrowth.tasks.superresolution.engine.smore_runner import infer_volume
+from src.mgmGrowth.tasks.superresolution.tools.paths import ensure_dir
 
 
 def _weights(weights_root: Path, lr_path: Path) -> Path:
@@ -18,12 +18,11 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--test-root", type=Path, required=True)
     p.add_argument("--weights-root", type=Path, required=True)
-    p.add_argument("--smore-root", type=Path, required=True)
     p.add_argument("--out-root", type=Path, required=True)
     p.add_argument("--gpu", type=int, default=0)
     args = p.parse_args()
 
-    cfg = SmoreConfig(args.smore_root, gpu_id=args.gpu)
+    cfg = SmoreConfig(gpu_id=args.gpu)
     ensure_dir(args.out_root)
 
     for lr_vol in args.test_root.rglob("*t2w.nii.gz"):
