@@ -12,9 +12,11 @@ Outputs
 from __future__ import annotations
 
 import argparse
+from os import name
 from pathlib import Path
 from typing import Iterable, List, Sequence
 
+from httpx import delete
 import numpy as np
 
 from src.mgmGrowth.tasks.superresolution import LOGGER
@@ -51,7 +53,7 @@ def main() -> None:
                     help="Pulse suffixes to include; empty = all.")
     ap.add_argument("--slice-dz", type=float, required=True)
     ap.add_argument("--gpu-id", type=int, default=0)
-    ap.add_argument("--suffix", default="")
+    ap.add_argument("--suffix", default="_smore")
     args = ap.parse_args()
 
     vols = sorted(_iter_vols(args.lr_root, args.pulses))
@@ -69,8 +71,36 @@ def main() -> None:
     cfg = SmoreConfig(gpu_id=args.gpu_id)
 
     for v in vols:
-        patient = v.parent.name
-        out_dir = ensure_dir(weights_root / patient)
+        patient   = v.parent.name                      # BraTS-MEN-XXXXX-000
+        name_pulse = v.stem.rstrip(".nii")                           # e.g. BraTS-MEN-xxxx-t1c
+        out_dir   = ensure_dir(weights_root / patient)
+
+        LOGGER.info("Processing %s (%s)", patient, name_pulse)
+
+        # ----------------------------------------------------------------
+        # SMORE directory tree:
+        #   <out_dir>/
+        #       weights/<patient>/<name_pulse>/weights/best_weights.pt
+        #       weights/<patient>/<name_pulse>/<name_pulse>.nii.gz
+        # We now relocate those two artefacts into flat folders.
+        # ----------------------------------------------------------------
+        best_pt  = (
+            out_dir
+            / name_pulse
+            / "weights"
+            / "best_weights.pt"
+        )
+        sr_vol   = (
+            out_dir
+            / name_pulse
+            / f"{name_pulse}{args.suffix}.nii.gz"
+        )
+
+
+        LOGGER.info(f"Expected weights path: {best_pt}")
+        LOGGER.info(f"Expected SR volume path: {sr_vol}")
+
+        # -------------- run SMORE (per-volume) --------------------------
         run_smore(
             v,
             out_dir,
@@ -80,14 +110,22 @@ def main() -> None:
             suffix=args.suffix,
         )
 
-        sr = out_dir / f"{v.stem}{args.suffix}_SR.nii.gz"
-        sr_dst = sr_root / sr.name
-        sr_dst.symlink_to(sr.resolve())
+        # destination paths in the *flat* structure
+        flat_pt  = weights_root / f"{name_pulse}.pt"
+        flat_vol = sr_root / f"{name_pulse}.nii.gz"
 
+        # move or copy – use .replace() for atomic rename if on same filesystem
+        import shutil, os
+
+        shutil.move(best_pt, flat_pt)        # weight file
+        shutil.move(sr_vol,  flat_vol)       # SR volume
+        os.remove(out_dir)
+        # ---------- compute metrics -------------------------------------
         gt, seg = matching_gt_seg(v, args.orig_root)
-        metrics.append(metrics_regions(gt, sr, seg))
+        metrics.append(metrics_regions(gt, flat_vol, seg))
         patient_ids.append(patient)
         LOGGER.info("✓ %s", patient)
+
 
     npz_path = args.out_root / f"metrics_{tag}.npz"
     np.savez_compressed(

@@ -29,3 +29,9 @@ python -m src.mgmGrowth.tasks.superresolution.pipelines.superresolution_brats_ex
   --gpu-id    0
 
 run-smore --in-fpath /home/mariopasc/Python/Datasets/Meningiomas/raw/Meningioma_Adquisition/RM/SUSC/P1/SUSC_P1.nii.gz --out-dir /home/mariopasc/Python/Datasets/Meningiomas/raw/Meningioma_Adquisition/RM/SUSC/P1
+
+python -m src.mgmGrowth.tasks.superresolution.statistics.analysis \
+  --hr  ~/Python/Datasets/Meningiomas/BraTS/BraTS_Men_Train/BraTS-MEN-00012-000/BraTS-MEN-00012-000-t1c.nii.gz \
+  --sr  ~/Python/Datasets/Meningiomas/BraTS/SR/SMORE_Results/output_volumes/BraTS-MEN-00012-000-t1c.nii.gz \
+  --seg ~/Python/Datasets/Meningiomas/BraTS/BraTS_Men_Train/BraTS-MEN-00012-000/BraTS-MEN-00012-000-seg.nii.gz \
+  --out-dir ~/Python/Datasets/Meningiomas/BraTS/SR/SMORE_Results
