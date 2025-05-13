@@ -65,7 +65,7 @@ def extract_patient_data(plan, patient_ids):
 
 def create_output_directories(output_dir, patient_ids):
     """Create output directory structure for patients."""
-    base_dir = Path(output_dir) / "meningioma"
+    base_dir = Path(output_dir)
     base_dir.mkdir(parents=True, exist_ok=True)
     
     for patient_id in patient_ids:
