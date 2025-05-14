@@ -118,7 +118,9 @@ def main() -> None:
 
         shutil.move(best_pt, flat_pt)        # weight file
         shutil.move(sr_vol,  flat_vol)       # SR volume
-        shutil.rmtree(Path(out_dir))
+
+        
+
         # ---------- compute metrics -------------------------------------
         gt, seg = matching_gt_seg(v, args.orig_root)
         metrics.append(metrics_regions(gt, flat_vol, seg))
