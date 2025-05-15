@@ -64,7 +64,6 @@ def main() -> None:
     weights_root = ensure_dir(args.out_root / "weights")
     sr_root = ensure_dir(args.out_root / "output_volumes")
 
-    metrics: List[np.ndarray] = []
     patient_ids: List[str] = []
 
     cfg = SmoreConfig(gpu_id=args.gpu_id)
@@ -120,10 +119,6 @@ def main() -> None:
         shutil.move(sr_vol,  flat_vol)       # SR volume
 
         
-
-        # ---------- compute metrics -------------------------------------
-        gt, seg = matching_gt_seg(v, args.orig_root)
-        metrics.append(metrics_regions(gt, flat_vol, seg))
         patient_ids.append(patient)
         LOGGER.info("✓ %s", patient)
 
@@ -131,10 +126,10 @@ def main() -> None:
     npz_path = args.out_root / f"metrics_{tag}.npz"
     np.savez_compressed(
         npz_path,
-        metrics=np.stack(metrics, axis=0).astype(np.float32),
         patient_ids=np.array(patient_ids),
     )
-    LOGGER.info("Saved metrics → %s  (%d patients)", npz_path.name, len(metrics))
+    LOGGER.info("Saved → %s  (%d patients)", npz_path.name, len(patient_ids))
+    # ----------------------------------------------------------------
 
 
 if __name__ == "__main__":

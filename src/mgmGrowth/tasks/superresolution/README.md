@@ -18,15 +18,28 @@ python -m src.mgmGrowth.tasks.superresolution.cli.downsample \
   --out-root  ~/Python/Datasets/Meningiomas/BraTS/SR/downsampled_brats_5mm \
   --target-dz 5
 
+python -m src.mgmGrowth.tasks.superresolution.cli.downsample \
+  --src-root  /media/hddb/mario/data/Meningiomas/Brats \
+  --out-root  /media/hddb/mario/data/Meningiomas/downsampled_brats_5mm \
+  --target-dz 5
+
 ### 2. Perform val
 
 python -m src.mgmGrowth.tasks.superresolution.pipelines.superresolution_brats_experiment \
-  --lr-root   ~/Python/Datasets/Meningiomas/BraTS/SR/downsampled_brats_5mm \
-  --orig-root ~/Python/Datasets/Meningiomas/BraTS/BraTS_Men_Train \
-  --out-root  ~/Python/Datasets/Meningiomas/BraTS/SR/SMORE_Results \
+  --orig-root /media/hddb/mario/data/Meningiomas/Brats \
+  --lr-root   /media/hddb/mario/data/Meningiomas/downsampled_brats_5mm \
+  --out-root  /home/mariopascual/Projects/MENINGIOMA/SR/SMORE_Results \
   --pulses    t1c \
   --slice-dz  5 \
   --gpu-id    0
+
+python -m src.mgmGrowth.tasks.superresolution.pipelines.superresolution_brats_experiment \
+--orig-root /media/hddb/mario/data/Meningiomas/Brats \
+--lr-root   /media/hddb/mario/data/Meningiomas/downsampled_brats_5mm \
+--out-root  /home/mariopascual/Projects/MENINGIOMA/SR/SMORE_Results \
+--pulses    t2w \
+--slice-dz  5 \
+--gpu-id    1
 
 run-smore --in-fpath /home/mariopasc/Python/Datasets/Meningiomas/raw/Meningioma_Adquisition/RM/SUSC/P1/SUSC_P1.nii.gz --out-dir /home/mariopasc/Python/Datasets/Meningiomas/raw/Meningioma_Adquisition/RM/SUSC/P1
 
