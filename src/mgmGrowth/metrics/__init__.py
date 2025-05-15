@@ -1,2 +1,2 @@
 # __init__.py
-from .metrics import Metrics
+from mgmGrowth.metrics.metrics import Metrics
