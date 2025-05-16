@@ -20,9 +20,10 @@ The main idea is to train a SMORE model with the BraTS-Men 2023 dataset for the 
 Local
 ```bash
 python -m src.mgmGrowth.tasks.superresolution.cli.downsample \
-  --src-root  ~/Python/Datasets/Meningiomas/BraTS/BraTS_Men_Train \
-  --out-root  ~/Python/Datasets/Meningiomas/BraTS/SR/downsampled_brats_5mm \
-  --target-dz 5
+  --src-root  ~/Python/Datasets/Meningiomas/BraTS/SR/subset \
+  --out-root  ~/Python/Datasets/Meningiomas/BraTS/SR/low_res/5mm \
+  --target-dz 5 \
+  --jobs 8
 ```
 Server
 ```bash

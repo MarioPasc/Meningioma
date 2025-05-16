@@ -91,7 +91,7 @@ def _brain_extent(octant: np.ndarray) -> int:
     """
     if not np.any(octant):
         raise ValueError("Selected octant contains no non-zero voxels.")
-    coords = np.array(np.where(octant != 0))
+    coords = np.array(np.where(octant <= 20))
     ext_x = coords[0].max() + 1
     ext_y = coords[1].max() + 1
     ext_z = coords[2].max() + 1
@@ -184,7 +184,8 @@ def plot_octant(volume: np.ndarray,
     # ------------------ compute isotropic edge length ----------------------
     vol_oct = volume[i_c:nx, j_s:ny, k_a:nz]
     L = _brain_extent(vol_oct)          # the cube edge we’ll display
-    L += 20
+    
+
     # crop the octant data cube to L×L×L
     dx = dy = dz = L                    # replaces previous dx,dy,dz
 
@@ -206,8 +207,8 @@ def plot_octant(volume: np.ndarray,
                        seg_patch=seg_ax, seg_alpha=seg_alpha)
 
     # ------------------ coronal (yz @ x=0) ---------------------------------
-    patch_co = vol_oct[0, :dy, :dz].T               # (dz, dy)
-    seg_co   = (segmentation[i_c, j_s:j_s+dy, k_a:k_a+dz].T
+    patch_co = vol_oct[0, :dy, :dz]               # (dz, dy)
+    seg_co   = (segmentation[i_c, j_s:j_s+dy, k_a:k_a+dz]
                 if segmentation is not None else None)
 
     y_edges = np.arange(dy + 1)
@@ -215,11 +216,11 @@ def plot_octant(volume: np.ndarray,
     Y_co, Z_co = np.meshgrid(y_edges, z_edges, indexing="ij")
     X_co = np.zeros_like(Y_co)
 
-    _plot_single_patch(ax, patch_co.T,
+    _plot_single_patch(ax, patch_co,
                        X_co, Y_co, Z_co,
                        vmin, vmax, cmap, alpha,
                        plane="coronal",
-                       seg_patch=seg_co.T, seg_alpha=seg_alpha)
+                       seg_patch=seg_co, seg_alpha=seg_alpha)
 
     # ------------------ sagittal (xz @ y=0) --------------------------------
     patch_sa = vol_oct[:dx, 0, :dz]                 # (dx, dz)

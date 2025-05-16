@@ -143,8 +143,8 @@ def select_top_brats_patients(
 
 if __name__ == "__main__":
     select_top_brats_patients(
-        root_dir="/media/mario/PortableSSD/Meningiom/BraTS_Men_Train",
+        root_dir="/home/mariopasc/Python/Datasets/Meningiomas/BraTS/BraTS_Men_Train",
         num_patients=50,
         pulses=["t1c", "t2w"],
-        output_dir="/home/mario/x2go_shared/sr/original_volumes",
+        output_dir="/home/mariopasc/Python/Datasets/Meningiomas/BraTS/SR/subset",
     )
