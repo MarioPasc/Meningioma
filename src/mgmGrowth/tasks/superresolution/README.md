@@ -69,10 +69,10 @@ python -m src.mgmGrowth.tasks.superresolution.statistics.analysis \
 Server
 ```bash
 python -m src.mgmGrowth.tasks.superresolution.pipelines.superresolution_brats_experiment \
-  --lr-root   /media/hddb/mario/data/Meningiomas/downsampled_brats_5mm \
+  --lr-root   /media/hddb/mario/data/Meningiomas/downsampled_brats_7mm \
   --orig-root /media/hddb/mario/data/Meningiomas/Brats \
   --out-root  /home/mariopascual/Projects/MENINGIOMA/SR \
   --pulses    t2w \
-  --slice-dz  5 \
+  --slice-dz  7 \
   --gpu-id    1
 ```
