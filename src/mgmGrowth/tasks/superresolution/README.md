@@ -10,7 +10,7 @@ The main idea is to train a SMORE model with the BraTS-Men 2023 dataset for the 
     - **Cuantitative Evaluation**. Usage of PSNR, SSIM and MI per region + whole volume. We are going to display a 1x3 violin plot per pulse, where each region will contain 3 violins, one for each downsampled resolution.
     - **Cualitative Evaluation**. Two different visualizations:
         - *BraTS validation*. Show a 3D-Cubic visualization of coronal, sagital and axial slices of the reconstructed volume, per-model (x-axis) and per-downsampling (y-axis; 3mm, 5mm, 7mm). We must select a slice where we can see the 3 labels: Enhancing Tumor Core, Edema, and Surrounding Tumor. We can have 2 lines per downsampled category, where in the first one we show the full slice, and in the second one we zoom into the tumor to highlight differences. The second visualization could be analogous to this one, showing the same slices and same layout, but, instead of showing the images, we showcase the intensity difference maps. We can add a tag to each image showcasing the dB of the PSNR for the zoomed tumor region. (p-value?)
-        - *MenGrowth validation*. Since we can't quantify the similarity between the LR volumes and the generated HR volumes, we can show a comparison between: (x-axis) LR-image + Model-generated images; (y-axis) T1, T2, SWI pulses.     
+        - *MenGrowth validation*. Since we can't quantify the similarity between the LR volumes and the generated HR volumes, we can show a comparison between: (x-axis) LR-image + Model-generated images; (y-axis) T1, T2, SWI pulses.
 
 
 ## Commands

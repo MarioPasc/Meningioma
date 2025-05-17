@@ -1,10 +1,2 @@
-# Install all dependencies from pyproject.toml
--e .
-
-# Install nnUNet in editable mode
 -e src/mgmGrowth/external/nnUNet/nnUNet
-
-# Install SynthMorph dependencies in editable mode
-# -e src/mgmGrowth/external/neurite
-# -e src/mgmGrowth/external/surfa
-# -e src/mgmGrowth/external/voxelmorph
+-e .

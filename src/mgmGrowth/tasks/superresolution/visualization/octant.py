@@ -18,7 +18,7 @@ from typing import Tuple, Final, Optional, Dict
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D as _Axes3D   # noqa: F401 – 3-D proj
-
+import cv2
 
 # ───────────────────────────────── helpers ─────────────────────────────── #
 DEBUG_SHAPES = False          # set True only while debugging
@@ -35,12 +35,13 @@ def _rgba(data2d: np.ndarray,
 
 
 # ------------------------------------------------------------------ NEW helper
-def _tint_segmentation(
+def _overlay_segmentation(
         fc: np.ndarray,
         seg_patch: np.ndarray | None,
         *,
         seg_alpha: float,
         lut: dict[int, tuple[float, float, float]],
+        only_line: bool
 ) -> np.ndarray:
     """
     Blend a translucent colour tint over the greyscale faces.
@@ -65,18 +66,25 @@ def _tint_segmentation(
         return fc
 
     out = fc.copy()
+
+    if only_line:
+        kernel = np.ones((3, 3), np.uint8)
+
     for lbl, rgb in lut.items():
         if lbl == 0:          # skip background (air / brain tissue)
             continue
         mask = seg_patch == lbl
         if not mask.any():
             continue
-        # α-blend only where mask is true
+        if only_line:                             # 1-pixel edge
+            edge = mask.astype(np.uint8) - cv2.erode(mask.astype(np.uint8),
+                                                     kernel, iterations=1)
+            mask = edge.astype(bool)
+        # α-blend
         out[mask, :3] = (
             (1.0 - seg_alpha) * out[mask, :3] +
             seg_alpha * np.asarray(rgb, dtype=float)
         )
-        # out[mask, 3]   – leave existing alpha (greyscale) unchanged
     return out
 
 def _brain_extent(octant: np.ndarray) -> int:
@@ -107,17 +115,20 @@ def _plot_single_patch(ax: plt.Axes,
                        cmap: str, alpha: float,
                        *,
                        plane: str,
-                       seg_patch: Optional[np.ndarray] = None,   # NEW
-                       seg_alpha: float = 0.5):                 # NEW
+                       seg_patch: Optional[np.ndarray] = None,  
+                       seg_alpha: float = 0.5,
+                       only_line: bool = False) -> None:                 
+    
     """Plot one rectangle at full resolution (stride = 1)."""
     fc = _rgba(patch, vmin, vmax, cmap, alpha)
 
     # NEW – blend segmentation overlay (if any)
-    fc = _tint_segmentation(
+    fc = _overlay_segmentation(
             fc,
             seg_patch,
             seg_alpha=seg_alpha,
             lut={0: (0,0,0), 1: (1, 0, 0), 2: (0, 1, 0), 3: (0, 0, 1)},
+            only_line=only_line
     )
 
     Xf, Yf, Zf = X[:-1, :-1], Y[:-1, :-1], Z[:-1, :-1]
@@ -139,8 +150,19 @@ def plot_octant(volume: np.ndarray,
                 *,
                 cmap: str = "gray",
                 alpha: float = 0.95,
-                segmentation: Optional[np.ndarray] = None,  # NEW
-                seg_alpha: float = 0.5,                    # NEW
+                segmentation: Optional[np.ndarray] = None,  
+                seg_alpha: float = 0.5,
+                only_line: bool = False,             
+                # --- axis / fig customisation -------
+                xlabel: str = "Δx (vox anterior)",
+                ylabel: str = "Δy (vox right-lat.)",
+                zlabel: str = "Δz (vox cranial)",
+                xticks: list[int] | None = None,
+                yticks: list[int] | None = None,
+                zticks: list[int] | None = None,
+                grid: bool = True,
+                cube_wireframe: bool = False,
+                figsize: tuple[int, int] = (6, 6),                    
                 save: pathlib.Path | None = None) -> plt.Figure:
     """
     Zoom visualisation of the octant x≥i_c, y≥j_s, z≥k_a with optional labels.
@@ -177,7 +199,7 @@ def plot_octant(volume: np.ndarray,
 
     vmin, vmax = float(volume.min()), float(volume.max())
 
-    fig = plt.figure(figsize=(6, 6))
+    fig = fig = plt.figure(figsize=figsize)
     ax = fig.add_subplot(111, projection="3d")
     ax.set_box_aspect((dx, dy, dz))
 
@@ -204,7 +226,9 @@ def plot_octant(volume: np.ndarray,
                        X_ax, Y_ax, Z_ax,
                        vmin, vmax, cmap, alpha,
                        plane="axial",
-                       seg_patch=seg_ax, seg_alpha=seg_alpha)
+                       seg_patch=seg_ax, 
+                       seg_alpha=seg_alpha,
+                       only_line=only_line)
 
     # ------------------ coronal (yz @ x=0) ---------------------------------
     patch_co = vol_oct[0, :dy, :dz]               # (dz, dy)
@@ -220,7 +244,9 @@ def plot_octant(volume: np.ndarray,
                        X_co, Y_co, Z_co,
                        vmin, vmax, cmap, alpha,
                        plane="coronal",
-                       seg_patch=seg_co, seg_alpha=seg_alpha)
+                       seg_patch=seg_co, 
+                       seg_alpha=seg_alpha,
+                       only_line=only_line)
 
     # ------------------ sagittal (xz @ y=0) --------------------------------
     patch_sa = vol_oct[:dx, 0, :dz]                 # (dx, dz)
@@ -236,23 +262,36 @@ def plot_octant(volume: np.ndarray,
                        X_sa, Y_sa, Z_sa,
                        vmin, vmax, cmap, alpha,
                        plane="sagittal",
-                       seg_patch=seg_sa, seg_alpha=seg_alpha)
+                       seg_patch=seg_sa, 
+                       seg_alpha=seg_alpha,
+                       only_line=only_line)
 
     # ------------------ isotropic limits & cube ----------------------------
-    _cube_wireframe(ax, dx, dy, dz)     # still draws the box
+    if cube_wireframe:
+        _cube_wireframe(ax, dx, dy, dz)     # still draws the box
+    else:
+        ax.set_axis_off()               # hide the box
 
-    ax.set_xlabel("Δx (vox anterior)")
-    ax.set_ylabel("Δy (vox right-lat.)")
-    ax.set_zlabel("Δz (vox cranial)")
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_zlabel(zlabel)
     ax.set_xlim(0, L)
     ax.set_ylim(0, L)
     ax.set_zlim(0, L)
     ax.set_box_aspect((1, 1, 1))        # isotropic
     ax.view_init(elev=25, azim=45)
-    plt.tight_layout()
+    if xticks is not None:
+        ax.set_xticks(xticks)
+    if yticks is not None:
+        ax.set_yticks(yticks)
+    if zticks is not None:
+        ax.set_zticks(zticks)
+    ax.grid(grid)
+    fig.tight_layout(pad=-0.3)  
 
     if save is not None:
-        fig.savefig(save, dpi=300)
+        fig.savefig(save, dpi=300,
+                    bbox_inches="tight", pad_inches=-0.3)   # <-- add kwargs
     else:
         plt.show()
     return fig
