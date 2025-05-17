@@ -33,6 +33,7 @@ dependencies = [
     "SimpleITK~=2.3",
     "pynrrd",
     "nibabel",
+    "opencv-python-headless~=4.7; python_version >= '3.10'",
     # modelling
     "torch~=2.2",
     "einops",

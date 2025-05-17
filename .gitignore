@@ -171,3 +171,9 @@ saved_data/
 *.nrrd
 *.nii.gz
 *.nii
+*.fls
+*.pdf
+*.synctex.gz
+*.aux
+*.fdb_latexmk
+*.synctex(busy)

@@ -1,0 +1,234 @@
+% !TeX root = quantification.tex
+\documentclass[11pt,a4paper]{article}
+%-----------------------------------------------------------------
+% Preamble: packages and settings
+%-----------------------------------------------------------------
+\usepackage[margin=1in]{geometry}   % adjust page margins
+\usepackage{graphicx}               % \includegraphics
+\usepackage{rotating}               % \rotatebox
+\usepackage{array}                  % array and tabcolsep
+\usepackage{caption}                % caption styling (optional)
+\usepackage{graphicx,multirow,booktabs}
+
+\graphicspath{{/home/mariopasc/Python/Results/Meningioma/super_resolution/metrics/plots/}}
+\newcommand{\tagstyle}[1]{\raisebox{20pt}{\rotatebox{90}{\scriptsize #1}}}
+\newcommand{\img}[1]{\includegraphics[width=0.2\textwidth]{#1}}
+\setlength{\tabcolsep}{2pt}\renewcommand{\arraystretch}{0}
+
+%-----------------------------------------------------------------
+% Document
+%-----------------------------------------------------------------
+\begin{document}
+
+\begin{figure}[ht]
+  \centering
+  % 1 = resolution label, 2 = sub-row tag, 3 = little rule, 4-6 = images
+  \begin{tabular}{c c | c@{\hspace{4pt}}
+                  c@{\hspace{2pt}}c@{\hspace{2pt}}c}
+
+      & & \textbf{HR} & \textbf{BSPLINE} & \textbf{SMORE} \\[2pt]
+
+      %  ───────── 3 mm block ─────────
+      \multirow{2}{*}{\rotatebox{90}{\textbf{3\,mm}}} &
+      \tagstyle{Volume} &
+      \img{t1c/3mm/t1c_3mm_HR.png} &
+      \img{t1c/3mm/t1c_3mm_BSPLINE.png} &
+      \img{t1c/3mm/t1c_3mm_SMORE.png} \\[-3pt]
+
+      & \tagstyle{Residual} &  % second cell in the divider column is empty
+        \phantom{\img{t1c/3mm/t1c_3mm_HR.png}} &
+        \img{t1c/3mm/t1c_3mm_BSPLINE_RES.png} &
+        \img{t1c/3mm/t1c_3mm_SMORE_RES.png} \\[5pt]
+
+      %  ───────── 5 mm block ─────────
+      \multirow{2}{*}{\rotatebox{90}{\textbf{5\,mm}}} &
+      \tagstyle{Volume} &
+      \img{t1c/5mm/t1c_5mm_HR.png} &
+      \img{t1c/5mm/t1c_5mm_BSPLINE.png} &
+      \img{t1c/5mm/t1c_5mm_SMORE.png} \\[-3pt]
+
+      & \tagstyle{Residual} & 
+      \phantom{\img{t1c/5mm/t1c_5mm_HR.png}} &
+      \img{t1c/5mm/t1c_5mm_BSPLINE_RES.png} &
+      \img{t1c/5mm/t1c_5mm_SMORE_RES.png} \\[5pt]
+
+      %  ───────── 7 mm block ─────────
+      \multirow{2}{*}{\rotatebox{90}{\textbf{7\,mm}}} &
+      \tagstyle{Volume} &
+      \img{t1c/7mm/t1c_7mm_HR.png} &
+      \img{t1c/7mm/t1c_7mm_BSPLINE.png} &
+      \img{t1c/7mm/t1c_7mm_SMORE.png} \\[-3pt]
+
+      & \tagstyle{Residual} & 
+      \phantom{\img{t1c/7mm/t1c_7mm_HR.png}} &
+      \img{t1c/7mm/t1c_7mm_BSPLINE_RES.png} &
+      \img{t1c/7mm/t1c_7mm_SMORE_RES.png} \\
+  \end{tabular}
+
+  \vspace{4pt}
+  \includegraphics[width=0.55\textwidth]{residual_cbar.png}
+
+  \vspace{2pt}
+  \includegraphics[width=0.55\textwidth]{roi_legend_octant.png}
+
+  \caption{Octant views (\textbf{Volume}) and absolute residuals
+           (\textbf{Residual}) for \textbf{T1c}.}
+  \label{fig:octant-matrix-t1c}
+\end{figure}
+
+
+\begin{figure}[ht]
+  \centering
+
+  % global spacing
+  \setlength{\tabcolsep}{2pt}
+  \renewcommand{\arraystretch}{0}
+  \setlength{\extrarowheight}{2pt}
+
+  \begin{tabular}{%
+      c                           % row labels
+      @{\hspace{1pt}} c           % ↓ 3-pt gap between every image column
+      @{\hspace{-25.5pt}} c
+      @{\hspace{-25.5pt}} c}      % ---------- headers ----------
+        &
+        \raisebox{2pt}{\textbf{PSNR}} &
+        \raisebox{2pt}{\textbf{SSIM}} &
+        \raisebox{2pt}{\textbf{BC}} \\[2pt]
+
+      % ---------- 3 mm ----------
+      \raisebox{33pt}{\rotatebox{90}{\textbf{3\,mm}}} &
+        \img{t1c/3mm/t1c_3mm_PSNR.png} &
+        \img{t1c/3mm/t1c_3mm_SSIM.png} &
+        \img{t1c/3mm/t1c_3mm_BC.png} \\[10pt]
+      
+      % ---------- 5 mm ----------
+      \raisebox{33pt}{\rotatebox{90}{\textbf{5\,mm}}} &
+        \img{t1c/5mm/t1c_5mm_PSNR.png} &
+        \img{t1c/5mm/t1c_5mm_SSIM.png} &
+        \img{t1c/5mm/t1c_5mm_BC.png} \\[10pt]
+      
+      % ---------- 7 mm ----------
+      \raisebox{33pt}{\rotatebox{90}{\textbf{7\,mm}}} &
+        \img{t1c/7mm/t1c_7mm_PSNR.png} &
+        \img{t1c/7mm/t1c_7mm_SSIM.png} &
+        \img{t1c/7mm/t1c_7mm_BC.png} \\  [20pt]
+    
+      % ---------- legend row ----------
+      &
+      & \smash{\includegraphics[width=0.55\textwidth]{roi_legend.png}} &
+      \\                                  % empty BC col
+  \end{tabular}
+
+  \caption{Super-resolution quality for the \textbf{T1c} pulse.
+           Rows correspond to native acquisition spacing
+           ($3$ mm → $7$ mm); columns show different metrics.}
+  \label{fig:violin-matrix-t1c}
+\end{figure}
+
+
+\begin{figure}[ht]
+  \centering
+  % 1 = resolution label, 2 = sub-row tag, 3 = little rule, 4-6 = images
+  \begin{tabular}{c c | c@{\hspace{4pt}}
+                  c@{\hspace{2pt}}c@{\hspace{2pt}}c}
+
+      & & \textbf{HR} & \textbf{BSPLINE} & \textbf{SMORE} \\[2pt]
+
+      %  ───────── 3 mm block ─────────
+      \multirow{2}{*}{\rotatebox{90}{\textbf{3\,mm}}} &
+      \tagstyle{Volume} &
+      \img{t2w/3mm/t2w_3mm_HR.png} &
+      \img{t2w/3mm/t2w_3mm_BSPLINE.png} &
+      \img{t2w/3mm/t2w_3mm_SMORE.png} \\[-3pt]
+
+      & \tagstyle{Residual} &  % second cell in the divider column is empty
+        \phantom{\img{t2w/3mm/t2w_3mm_HR.png}} &
+        \img{t2w/3mm/t2w_3mm_BSPLINE_RES.png} &
+        \img{t2w/3mm/t2w_3mm_SMORE_RES.png} \\[5pt]
+
+      %  ───────── 5 mm block ─────────
+      \multirow{2}{*}{\rotatebox{90}{\textbf{5\,mm}}} &
+      \tagstyle{Volume} &
+      \img{t2w/5mm/t2w_5mm_HR.png} &
+      \img{t2w/5mm/t2w_5mm_BSPLINE.png} &
+      \img{t2w/5mm/t2w_5mm_SMORE.png} \\[-3pt]
+
+      & \tagstyle{Residual} & 
+      \phantom{\img{t2w/5mm/t2w_5mm_HR.png}} &
+      \img{t2w/5mm/t2w_5mm_BSPLINE_RES.png} &
+      \img{t2w/5mm/t2w_5mm_SMORE_RES.png} \\[5pt]
+
+      %  ───────── 7 mm block ─────────
+      \multirow{2}{*}{\rotatebox{90}{\textbf{7\,mm}}} &
+      \tagstyle{Volume} &
+      \img{t2w/7mm/t2w_7mm_HR.png} &
+      \img{t2w/7mm/t2w_7mm_BSPLINE.png} &
+      \img{t2w/7mm/t2w_7mm_SMORE.png} \\[-3pt]
+
+      & \tagstyle{Residual} & 
+      \phantom{\img{t2w/7mm/t2w_7mm_HR.png}} &
+      \img{t2w/7mm/t2w_7mm_BSPLINE_RES.png} &
+      \img{t2w/7mm/t2w_7mm_SMORE_RES.png} \\
+  \end{tabular}
+
+  \vspace{4pt}
+  \includegraphics[width=0.55\textwidth]{residual_cbar.png}
+
+  \vspace{2pt}
+  \includegraphics[width=0.55\textwidth]{roi_legend_octant.png}
+
+  \caption{Octant views (\textbf{Volume}) and absolute residuals
+           (\textbf{Residual}) for \textbf{t2w}.}
+  \label{fig:octant-matrix-t2w}
+\end{figure}
+
+\begin{figure}[ht]
+  \centering
+
+  % global spacing
+  \setlength{\tabcolsep}{2pt}
+  \renewcommand{\arraystretch}{0}
+  \setlength{\extrarowheight}{2pt}
+
+  \begin{tabular}{%
+      c                           % row labels
+      @{\hspace{1pt}} c           % ↓ 3-pt gap between every image column
+      @{\hspace{-25.5pt}} c
+      @{\hspace{-25.5pt}} c}      % ---------- headers ----------
+        &
+        \raisebox{2pt}{\textbf{PSNR}} &
+        \raisebox{2pt}{\textbf{SSIM}} &
+        \raisebox{2pt}{\textbf{BC}} \\[2pt]
+
+      % ---------- 3 mm ----------
+      \raisebox{33pt}{\rotatebox{90}{\textbf{3\,mm}}} &
+        \img{t2w/3mm/t2w_3mm_PSNR.png} &
+        \img{t2w/3mm/t2w_3mm_SSIM.png} &
+        \img{t2w/3mm/t2w_3mm_BC.png} \\[10pt]
+      
+      % ---------- 5 mm ----------
+      \raisebox{33pt}{\rotatebox{90}{\textbf{5\,mm}}} &
+        \img{t2w/5mm/t2w_5mm_PSNR.png} &
+        \img{t2w/5mm/t2w_5mm_SSIM.png} &
+        \img{t2w/5mm/t2w_5mm_BC.png} \\[10pt]
+      
+      % ---------- 7 mm ----------
+      \raisebox{33pt}{\rotatebox{90}{\textbf{7\,mm}}} &
+        \img{t2w/7mm/t2w_7mm_PSNR.png} &
+        \img{t2w/7mm/t2w_7mm_SSIM.png} &
+        \img{t2w/7mm/t2w_7mm_BC.png} \\  [20pt]
+    
+      % ---------- legend row ----------
+      &
+      & \smash{\includegraphics[width=0.55\textwidth]{roi_legend.png}} &
+      \\                                  % empty BC col
+  \end{tabular}
+
+  \caption{Super-resolution quality for the \textbf{T2W} pulse.
+           Rows correspond to native acquisition spacing
+           ($3$ mm → $7$ mm); columns show different metrics.}
+  \label{fig:violin-matrix-t2w}
+\end{figure}
+
+
+\end{document}

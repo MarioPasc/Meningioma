@@ -47,13 +47,23 @@ import re
 from dataclasses import dataclass
 from typing import Iterable, List, Sequence, Tuple
 
+import warnings
+warnings.filterwarnings("ignore",
+                        message="Mean of empty slice")
+warnings.filterwarnings("ignore",
+                        message="invalid value encountered in divide")
+
+
 import numpy as np
 import SimpleITK as sitk
 from skimage.metrics import structural_similarity as ssim
 
+from mgmGrowth.tasks.superresolution import LOGGER
+
 # ------------------------------------------------------------- constants ---
 ROI_LABELS = ("all", "core", "edema", "surround")   # 0,1,2,3
 METRIC_NAMES = ("PSNR", "SSIM", "BC")
+STAT_NAMES   = ("mean", "std")          # NEW axis length = 2
 PULSES = ("t1c", "t2w")
 RESOLUTIONS = (3, 5, 7)                             # mm
 HR_RE = re.compile(r"^(?P<pid>[^/]+)-(?P<pulse>t1c|t2w)\.nii\.gz$")
@@ -96,11 +106,26 @@ def match_slices(a: np.ndarray, b: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
 
 
 def exclude_z_slices(arr: np.ndarray, idx: Sequence[int]) -> np.ndarray:
-    """Drop slices along z-axis given a list of indices."""
-    mask = np.ones(arr.shape[0], dtype=bool)
-    mask[list(idx)] = False
-    return arr[mask, ...]
+    """
+    Return *arr* with the Z-slices listed in *idx* removed.
 
+    Any index < 0 or ≥ arr.shape[0] is silently ignored to avoid IndexError.
+    """
+    if not idx:                                   # empty / None → no-op
+        return arr
+
+    z = arr.shape[0]
+    idx = np.asarray(idx, dtype=int)
+    in_bounds = (idx >= 0) & (idx < z)
+    if not in_bounds.all():                       # tell the user once
+        bad = idx[~in_bounds]
+        LOGGER.debug("Ignoring %d slice indices outside [0,%d]: %s",
+                     bad.size, z - 1, bad.tolist())
+    idx = idx[in_bounds]
+
+    mask = np.ones(z, dtype=bool)
+    mask[idx] = False
+    return arr[mask, ...]
 
 # --------------------------------------- metric helpers (robust to NaN/Inf)
 def _finite(a: np.ndarray, b: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -113,20 +138,51 @@ def psnr(hr: np.ndarray, sr: np.ndarray, data_range: float | None = None) -> flo
     if data_range is None:
         data_range = np.ptp(hr)
     mse = np.mean((hr - sr) ** 2)
-    if mse == 0:
+    if mse == 0:                                            # SAFE-SSIM
         return np.inf
+    if data_range == 0:
+        return np.nan
     return 20 * np.log10(data_range) - 10 * np.log10(mse)
 
+# SKIMAGE-SSIM ────────────────────────────────────────────────────────────
+def safe_ssim_slice(hr2d: np.ndarray,
+                    sr2d: np.ndarray,
+                    mask2d: np.ndarray) -> float:
+    """
+    SSIM on a *single axial slice* using skimage.
 
-def ssim_3d(hr: np.ndarray, sr: np.ndarray) -> float:
-    hr, sr = _finite(hr, sr)
-    # reshape to pseudo 2-D image (z, y*x) because skimage SSIM is 2-D
-    z, y, x = hr.shape
-    return float(
-        ssim(hr.reshape(z, y * x),
-             sr.reshape(z, y * x),
-             data_range=np.ptp(hr), gaussian_weights=True)
-    )
+    * Chooses the largest odd ``win_size`` ≤ min(height, width).
+    * When the side is < 3 pixels the function returns **NaN** instead of
+      raising `ValueError`.
+    """
+    # nothing to compare?
+    if not mask2d.any():
+        return np.nan
+
+    h, w = hr2d.shape
+    m = min(h, w)
+
+    if m < 3:                            # too small for any legal window
+        LOGGER.debug("ROI too small for SSIM (%dx%d) → NaN", h, w)
+        return np.nan
+
+    # choose an odd win_size that fits
+    ws = 7
+    if m < 7:
+        ws = m if m % 2 == 1 else m - 1
+
+    try:
+        return float(
+            ssim(hr2d,
+                 sr2d,
+                 data_range=float(np.ptp(hr2d)),
+                 gaussian_weights=True,
+                 win_size=ws,
+                 mask=mask2d)             # ← only voxels inside ROI
+        )
+    except ValueError as err:
+        LOGGER.debug("SSIM failed (%s) → NaN", err)
+        return np.nan
 
 
 def bhattacharyya(hr: np.ndarray, sr: np.ndarray, bins: int = 256) -> float:
@@ -145,17 +201,42 @@ def roi_mask(seg: np.ndarray, label: int | None) -> np.ndarray:
     return seg == label
 
 
-def compute_metrics(hr: np.ndarray, sr: np.ndarray, seg: np.ndarray) -> np.ndarray:
-    """Return metrics array shape (3 metrics, 4 ROIs)."""
-    metrics = np.empty((len(METRIC_NAMES), len(ROI_LABELS)), dtype=np.float64)
-    for ridx, label in enumerate((None, 1, 2, 3)):       # None → full vol
-        m = roi_mask(seg, label)
-        hr_roi, sr_roi = hr[m], sr[m]
-        metrics[0, ridx] = psnr(hr_roi, sr_roi)
-        metrics[1, ridx] = ssim_3d(hr_roi.reshape(-1, 1, 1),
-                                   sr_roi.reshape(-1, 1, 1))
-        metrics[2, ridx] = bhattacharyya(hr_roi, sr_roi)
-    return metrics
+def compute_metrics(hr: np.ndarray, sr: np.ndarray, seg: np.ndarray) -> np.ndarray: # (3,4,2)   # SLICE-WISE
+    """
+    Slice-wise metrics – returns array (3 metrics, 4 ROIs, 2 stats).
+
+    * stats[0] = mean across retained slices
+    * stats[1] = std  across retained slices
+    """
+    out = np.full((len(METRIC_NAMES),
+                   len(ROI_LABELS),
+                   len(STAT_NAMES)), np.nan, dtype=np.float64)
+
+    z_slices = hr.shape[0]
+    for ridx, label in enumerate((None, 1, 2, 3)):
+        # gather per-slice values
+        psnr_list, ssim_list, bc_list = [], [], []
+        for z in range(z_slices):
+            roi = roi_mask(seg[z], label)               # SKIMAGE-SSIM
+            if roi.sum() == 0:
+                continue
+
+            # PSNR & Bhattacharyya on masked voxels (1-D vectors)
+            h_vec, s_vec = hr[z][roi], sr[z][roi]
+            psnr_list.append(psnr(h_vec, s_vec))
+            bc_list.append(bhattacharyya(h_vec, s_vec))
+
+            # SSIM on the full 2-D slice with mask
+            ssim_list.append(
+                safe_ssim_slice(hr[z], sr[z], roi)
+            )
+
+        for vals, midx in zip((psnr_list, ssim_list, bc_list),
+                              range(len(METRIC_NAMES))):
+            if vals:                      # at least one valid slice
+                out[midx, ridx, 0] = np.nanmean(vals)
+                out[midx, ridx, 1] = np.nanstd(vals)
+    return out
 
 
 # ----------------------------------------------------- filesystem walker --
@@ -193,6 +274,8 @@ def process_patient(vpaths: VolumePaths,
     sr_arr = exclude_z_slices(sr_arr, exclude)
     seg_arr = exclude_z_slices(seg_arr, exclude)
 
+
+
     return compute_metrics(hr_arr, sr_arr, seg_arr)   # (3,4)
 
 
@@ -200,47 +283,78 @@ def process_patient(vpaths: VolumePaths,
 def main() -> None:
     ap = argparse.ArgumentParser(
         description="Compute PSNR/SSIM/Bhattacharyya for SR volumes.")
-    ap.add_argument("hr_root", type=pathlib.Path)
-    ap.add_argument("results_root", type=pathlib.Path)
-    ap.add_argument("--pulse", choices=PULSES, required=True)
-    ap.add_argument("--exclude-slices", nargs="*", type=int, default=())
-    ap.add_argument("--out", type=pathlib.Path, default=pathlib.Path("metrics.npz"))
-    ap.add_argument("--workers", type=int, default=mp.cpu_count() - 1)
+    ap.add_argument("--hr_root",  type=pathlib.Path,
+                    default=pathlib.Path(
+                    "/home/mariopasc/Python/Datasets/Meningiomas/BraTS/SR/subset"))
+    ap.add_argument("--results_root", type=pathlib.Path,
+                    default=pathlib.Path(
+                    "/home/mariopasc/Python/Results/Meningioma/super_resolution/models"))
+
+    # -------- pulse ----------------------------------------------------------
+    ap.add_argument("--pulse",  choices=("t1c", "t2w", "both"),
+                    default="both",
+                    help="Evaluate given pulse or both (default)")
+
+    # -------- slice window ---------------------------------------------------
+    ap.add_argument("--slice-window", nargs=2, type=int, metavar=("MIN", "MAX"),
+                    default=(10, 140),
+                    help="Only consider slices MIN..MAX inclusive "
+                        "(default 10-140); outside range is ignored.")
+
+    ap.add_argument("--out",   type=pathlib.Path,
+                    default=pathlib.Path(
+                    "/home/mariopasc/Python/Results/Meningioma/super_resolution/metrics/metrics.npz"))
+    ap.add_argument("--workers", type=int, default=mp.cpu_count()-1)
     args = ap.parse_args()
+
 
     # discover models dynamically
     model_dirs = [d.name for d in (args.results_root).iterdir() if d.is_dir()]
     model_dirs.sort()
 
+    # convert tuple → range of indices to drop
+    lo, hi = args.slice_window
+    exclude = list(range(0, lo))               # [0, lo-1]
+    exclude += list(range(hi+1, 10**6))        # (hi, ∞) -- upper bound trimmed later
+
+    # ---------------------------------------------------------------- engine --
     patients = sorted([d.name for d in args.hr_root.iterdir()])
-    metrics_arr = np.full((len(patients),            # P
-                           len(PULSES),              # 2
-                           len(RESOLUTIONS),         # 3
-                           len(model_dirs),          # M
-                           len(METRIC_NAMES),        # 3
-                           len(ROI_LABELS)),         # 4
+    # SLICE-WISE – added STAT dimension
+    metrics_arr = np.full((len(patients),             # P
+                           len(PULSES),               # 2
+                           len(RESOLUTIONS),          # 3
+                           len(model_dirs),
+                           len(METRIC_NAMES),         # 3
+                           len(ROI_LABELS),           # 4
+                           len(STAT_NAMES)),          # 2
                           np.nan, dtype=np.float64)
 
     patient_idx = {pid: i for i, pid in enumerate(patients)}
 
+    pulse_list = PULSES if args.pulse == "both" else [args.pulse]
+
     for m_idx, model in enumerate(model_dirs):
-        for r_idx, res in enumerate(RESOLUTIONS):
-            items = list(collect_paths(args.hr_root,
-                                       args.results_root,
-                                       args.pulse,
-                                       model,
-                                       res))
-            if not items:
-                continue
+        for pulse in pulse_list:
+            for r_idx, res in enumerate(RESOLUTIONS):
 
-            with mp.Pool(args.workers) as pool:
-                results = pool.starmap(process_patient,
-                                       [(vp, args.exclude_slices) for vp in items])
+                items = list(collect_paths(args.hr_root,
+                                        args.results_root,
+                                        pulse,
+                                        model,
+                                        res))
+                if not items:
+                    continue
+                LOGGER.info("Model %s | %d patients | 1x1x%d mm", model, len(items), res)
 
-            for vp, metr in zip(items, results):
-                p = patient_idx[vp.hr.parent.name]   # map to array index
-                pulse_idx = PULSES.index(args.pulse)
-                metrics_arr[p, pulse_idx, r_idx, m_idx, :, :] = metr
+                with mp.Pool(args.workers) as pool:
+                    res_metrics = pool.starmap(process_patient,
+                                            [(vp, exclude) for vp in items])
+
+                for vp, metr in zip(items, res_metrics):
+                    p = patient_idx[vp.hr.parent.name]
+                    pulse_idx = PULSES.index(pulse)
+                    metrics_arr[p, pulse_idx, r_idx, m_idx, :, :, :] = metr   # SLICE-WISE
+                    LOGGER.info("Done %s -> %.2f±%.2f dB (PSNR, all-slices)", vp.hr.parent.name, metr[0, 0, 0], metr[0, 0, 1])
 
     np.savez(args.out,
              metrics=metrics_arr,
@@ -249,10 +363,23 @@ def main() -> None:
              resolutions_mm=RESOLUTIONS,
              models=model_dirs,
              metric_names=METRIC_NAMES,
-             roi_labels=ROI_LABELS)
+             roi_labels=ROI_LABELS,
+             stat_names=STAT_NAMES)                         # SLICE-WISE
 
-    print(f"Saved metrics to {args.out}")
+    LOGGER.info("Saved metrics to %s", args.out)
 
+"""
+metrics_arr.shape
+# (P, 2, 3, M, 3, 4, 2)
+#  ↑  ↑  ↑  ↑  ↑  ↑  └── mean / std  (STAT_NAMES)
+#  |  |  |  |  |  └──── ROI_LABELS
+#  |  |  |  |  └────── METRIC_NAMES
+#  |  |  |  └───────── model index
+#  |  |  └──────────── resolution {3,5,7} mm
+#  |  └─────────────── pulse {t1c,t2w}
+#  └────────────────── patient
+
+"""
 
 if __name__ == "__main__":
     main()

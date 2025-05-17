@@ -105,8 +105,27 @@ def _brain_extent(octant: np.ndarray) -> int:
     ext_z = coords[2].max() + 1
     return int(min(ext_x, ext_y, ext_z))
 
-# ───────────────────────────────────────────────────────────────────────── #
 
+
+# ───────────────────────────────────────────────────────────────────────── #
+def _normalize_lut(lut):
+    """
+    Convert an RGB lookup table from 0–255 to 0–1 floats.
+
+    Parameters
+    ----------
+    lut : dict[int, tuple[int, int, int]]
+        Mapping from label → (R, G, B) in 0–255 integers.
+
+    Returns
+    -------
+    dict[int, tuple[float, float, float]]
+        Mapping from label → (R, G, B) in 0–1 floats.
+    """
+    return {
+        label: tuple(channel / 255.0 for channel in rgb)
+        for label, rgb in lut.items()
+    }
 
 def _plot_single_patch(ax: plt.Axes,
                        patch: np.ndarray,
@@ -127,7 +146,14 @@ def _plot_single_patch(ax: plt.Axes,
             fc,
             seg_patch,
             seg_alpha=seg_alpha,
-            lut={0: (0,0,0), 1: (1, 0, 0), 2: (0, 1, 0), 3: (0, 0, 1)},
+            lut=_normalize_lut(
+                {
+                    0: (0,0,0), 
+                    1: (238, 102, 119), 
+                    2: (34, 136, 51), 
+                    3: (68, 119, 170)
+                }
+            ),
             only_line=only_line
     )
 
@@ -279,7 +305,7 @@ def plot_octant(volume: np.ndarray,
     ax.set_ylim(0, L)
     ax.set_zlim(0, L)
     ax.set_box_aspect((1, 1, 1))        # isotropic
-    ax.view_init(elev=25, azim=45)
+    ax.view_init(elev=20, azim=45)
     if xticks is not None:
         ax.set_xticks(xticks)
     if yticks is not None:
