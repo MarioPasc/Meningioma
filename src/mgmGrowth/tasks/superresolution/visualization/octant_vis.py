@@ -20,6 +20,7 @@ MODELS    = ("BSPLINE", "SMORE")           # add more if available
 OUT_ROOT  = pathlib.Path(
     "/home/mariopasc/Python/Results/Meningioma/super_resolution/metrics/plots"
 )
+FORMAT = "pdf"
 
 # roots for data
 HR_ROOT   = pathlib.Path(
@@ -97,7 +98,7 @@ def save_octant(src: pathlib.Path, dst: pathlib.Path) -> None:
     oc.plot_octant(
         vol, COORDS,
         segmentation=seg,
-        only_line=True, seg_alpha=0.2,
+        only_line=True, seg_alpha=0.35,
         cmap="gray", figsize=(7, 7),
         xticks=[], yticks=[], zticks=[], grid=False,
         xlabel="Anterior (+x)", ylabel="Right (+y)", zlabel="Cranial (+z)",
@@ -107,14 +108,14 @@ def save_octant(src: pathlib.Path, dst: pathlib.Path) -> None:
 # ───────────────────── generate screenshots ────────────────────────────
 for pulse in PULSES:
     # ground-truth once per pulse (use 3-mm folder for convenience)
-    gt_png = OUT_ROOT / pulse / "3mm" / f"{pulse}_3mm_HR.png"
+    gt_png = OUT_ROOT / pulse / "3mm" / f"{pulse}_3mm_HR.{FORMAT}"
     gt_png.parent.mkdir(parents=True, exist_ok=True)
     save_octant(hr_path(pulse), gt_png)
 
     for res in RES_MM:
         # copy/rename the GT screenshot for other rows so LaTeX paths exist
         for other_png in (OUT_ROOT / pulse / f"{res}mm" /
-                          f"{pulse}_{res}mm_HR.png",):
+                          f"{pulse}_{res}mm_HR.{FORMAT}",):
             other_png.parent.mkdir(parents=True, exist_ok=True)
             if not other_png.exists():
                 other_png.symlink_to(gt_png)   # or shutil.copy if FS disallows links
@@ -122,13 +123,13 @@ for pulse in PULSES:
         for model in MODELS:
             src_nii = sr_path(model, res, pulse)
             dst_png = (OUT_ROOT / pulse / f"{res}mm" /
-                       f"{pulse}_{res}mm_{model}.png")
+                       f"{pulse}_{res}mm_{model}.{FORMAT}")
             dst_png.parent.mkdir(parents=True, exist_ok=True)
             save_octant(src_nii, dst_png)
             print("saved", dst_png)
             # save residual octant
             res_png = (OUT_ROOT / pulse / f"{res}mm" /
-                    f"{pulse}_{res}mm_{model}_RES.png")
+                    f"{pulse}_{res}mm_{model}_RES.{FORMAT}")
             save_residual_octant(hr_path(pulse), src_nii, res_png)
             plt.close("all")          # close all figures
             print("saved", res_png)
@@ -143,10 +144,10 @@ norm = mpl.colors.Normalize(vmin=0, vmax=max_val)
 mpl.colorbar.ColorbarBase(ax_cb, cmap=cmap_name, norm=norm,
                           orientation="horizontal")
 ax_cb.set_xlabel("|SR − HR| (intensity)")
-fig_cb.savefig(OUT_ROOT / "residual_cbar.png",
+fig_cb.savefig(OUT_ROOT / f"residual_cbar.{FORMAT}",
                dpi=300, bbox_inches="tight", transparent=True)
 plt.close(fig_cb)
-print("saved residual colour-bar → residual_cbar.png")
+print("saved residual colour-bar → residual_cbar.{FORMAT}")
 
 roi_display = {
     "#EE6677": "Enhancing Tumor",
@@ -161,7 +162,7 @@ fig_leg, ax_leg = plt.subplots(figsize=(6, 0.8))
 ax_leg.legend(handles=handles, loc="center", ncol=len(handles),
               frameon=False, handlelength=1.5, fontsize=18)
 plt.axis("off")
-fig_leg.savefig(OUT_ROOT / "roi_legend_octant.png",
+fig_leg.savefig(OUT_ROOT / f"roi_legend_octant.{FORMAT}",
                 dpi=300, bbox_inches="tight", transparent=True)
 plt.close(fig_leg)
-print("saved ROI legend → roi_legend_octant.png")
+print(f"saved ROI legend → roi_legend_octant.{FORMAT}")

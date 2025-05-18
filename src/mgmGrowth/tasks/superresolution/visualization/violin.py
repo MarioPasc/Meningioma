@@ -3,7 +3,7 @@
 make_violin_grid.py  —  per-pulse SR-quality visualisation
 ---------------------------------------------------------
 
-Creates one PNG per (pulse, resolution, metric) with
+Creates one {FORMAT} per (pulse, resolution, metric) with
 axes arranged for LaTeX montage:
 
 row = resolution  (3 mm → 7 mm)
@@ -15,6 +15,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pathlib
 import scienceplots
+
+from mgmGrowth.tasks.superresolution.visualization.octant_vis import FORMAT
 plt.style.use(["science", "ieee", "grid"])
 
 # ╭──────────────────── user-specific paths ──────────────────────────────╮
@@ -134,7 +136,7 @@ for pulse_idx, pulse in enumerate(pulses):
             # save figure
             out_dir = OUT_ROOT / pulse / f"{res_mm}mm"
             out_dir.mkdir(parents=True, exist_ok=True)
-            fig.savefig(out_dir / f"{pulse}_{res_mm}mm_{met}.png", dpi=300)
+            fig.savefig(out_dir / f"{pulse}_{res_mm}mm_{met}.{FORMAT}", dpi=300)
             plt.close(fig)
 # ───────────────────────── legend graphic ────────────────────────────
 # put this *after* the main plotting loop, before the script ends
@@ -169,7 +171,7 @@ fig_leg.legend(handles=legend_handles,
 
 
 plt.axis("off")                                 # no axes at all
-legend_path = OUT_ROOT / "roi_legend.png"
+legend_path = OUT_ROOT / f"roi_legend.{FORMAT}"
 fig_leg.savefig(legend_path, dpi=300,
                 bbox_inches="tight", transparent=True)
 plt.close(fig_leg)
