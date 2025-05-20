@@ -10,10 +10,12 @@ v9 additions
 """
 
 from __future__ import annotations
-import argparse, csv, json, logging, shutil, sys, re, numpy as np
+import shutil, sys, re, tempfile, time, logging, json, argparse, csv, numpy as np
 from collections import defaultdict
 from pathlib import Path
 from typing import DefaultDict, Dict, List, Sequence, Tuple
+
+from mgmGrowth.preprocessing.utils.dcmfolder2nrrd import dcmfolder_to_nrrd
 
 import pandas as pd
 import pydicom
@@ -288,21 +290,6 @@ def _group_loose_slices(files: List[Path],
     return groups
 
 # ────────────────────── SimpleITK helpers  ────────────────────────────── #
-def _sitk_stack_and_write(slices: List[Path], dst: Path) -> None:
-    good = [p for p in slices if _is_readable_dicom(p)]
-    bad  = set(slices) - set(good)
-    for b in bad:
-        logging.warning("Unreadable slice skipped: %s", b.name)
-
-    if len(good) < 3:
-        logging.error("Volume %s has <3 readable slices – skipped", dst)
-        return
-
-    reader = sitk.ImageSeriesReader()
-    reader.MetaDataDictionaryArrayUpdateOn()
-    reader.SetFileNames([str(p) for p in sorted(good, key=_slice_key)])
-    img = reader.Execute()
-    sitk.WriteImage(img, str(dst))
 
 def _copy_nrrd(src: Path, dst_stem: Path) -> None:
     if src.suffix.lower() == ".nrrd":
@@ -316,28 +303,80 @@ def _copy_nrrd(src: Path, dst_stem: Path) -> None:
 
 # ────────────────────── dataset builder (unchanged except order) ──────── #
 def _series_to_nrrd(series: List[Path], dst_stem: Path) -> None:
-    if len(series) == 1 and series[0].suffix.lower() in {".nrrd", ".nhdr"}:
+    """
+    Convert *series* ( dir / nrrd / loose slices ) to one-or-more NRRD files
+    using the generic converter **dcmfolder_to_nrrd**.
+
+    Rules
+    -----
+    • ready-made .nrrd/.nhdr → just copy
+    • a single directory     → call dcmfolder_to_nrrd(dir, dst_parent)
+    • a bag of slices/dirs   → symlink them into a temp folder and run the same
+      converter; afterwards rename the freshly-created NRRDs so their *stem*
+      matches *dst_stem* (and *_02, _03 …) exactly like the old code.
+    """
+    # 0) already in NRRD ­– trivial
+    if len(series) == 1 and _is_nrrd(series[0]):
         _copy_nrrd(series[0], dst_stem)
         return
 
-    files: List[Path] = []
-    for p in series:
-        files.extend([p] if p.is_file() else [q for q in p.iterdir() if q.is_file()])
+    # 1) choose an input folder for the converter
+    if len(series) == 1 and series[0].is_dir():
+        # ── NEW: is this already a folder full of NRRDs? ──────────────
+        nrrds_inside = sorted(p for p in series[0].iterdir() if _is_nrrd(p))
+        if nrrds_inside:                       # <──── shortcut
+            for k, n in enumerate(nrrds_inside, start=1):
+                target = dst_stem if len(nrrds_inside) == 1 \
+                         else dst_stem.with_name(f"{dst_stem.name}_{k:02d}")
+                _copy_nrrd(n, target)
+            return
 
-    by_shape: DefaultDict[Tuple[int, int], List[Path]] = defaultdict(list)
-    for f in files:
-        try:
-            ds = pydicom.dcmread(f, stop_before_pixels=True, force=True,
-                                 specific_tags=["Rows", "Columns"])
-            shape = (int(ds.get("Rows", 0) or 0), int(ds.get("Columns", 0) or 0))
-        except Exception:
-            shape = (-1, -1)
-        by_shape[shape].append(f)
+        input_dir = series[0]
+        tmp_ctx = None                         # no TemporaryDirectory needed
+    else:
+        # gather everything into a throw-away directory made of symlinks
+        tmp_ctx = tempfile.TemporaryDirectory()
+        input_dir = Path(tmp_ctx.name)
+        for p in series:
+            if p.is_file():
+                (input_dir / f"{hash(p)}_{p.name}").symlink_to(p)
+            elif p.is_dir():
+                for q in p.iterdir():
+                    if q.is_file():
+                        (input_dir / q.name).symlink_to(q)
 
-    for suffix, fset in enumerate(by_shape.values(), start=1):
-        out = dst_stem.with_suffix(".nrrd") if len(by_shape) == 1 \
-              else dst_stem.with_name(f"{dst_stem.name}_{suffix:02d}.nrrd")
-        _sitk_stack_and_write(sorted(fset, key=_slice_key), out)
+    # 2) run the high-level converter
+    out_dir = dst_stem.parent
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    before = {f.name for f in out_dir.glob("*.nrrd")}
+    try:
+        dcmfolder_to_nrrd(str(input_dir), str(out_dir))
+    except ValueError as exc:  # happens when the folder has zero DICOM slices
+        logging.warning("dcmfolder_to_nrrd skipped %s (%s)", input_dir, exc)
+        # attempt last-chance copy of any NRRDs that might be in *series*
+        copied_any = False
+        for p in series:
+            if _is_nrrd(p) or p.suffix.lower() == ".nhdr":
+                _copy_nrrd(p, dst_stem)
+                copied_any = True
+        if not copied_any:
+            logging.error("Unable to process series %s – no DICOM and no NRRD", series)
+        return    
+    after = [f for f in out_dir.glob("*.nrrd") if f.name not in before]
+
+    # 3) rename new files so they follow the previous naming convention
+    if not after:
+        logging.error("dcmfolder_to_nrrd produced no NRRDs for %s", input_dir)
+        return
+    if len(after) == 1:
+        after[0].rename(dst_stem.with_suffix(".nrrd"))
+    else:
+        for idx, f in enumerate(sorted(after), start=1):
+            f.rename(dst_stem.with_name(f"{dst_stem.name}_{idx:02d}.nrrd"))
+
+    if tmp_ctx is not None:           # be explicit; ctx might be False-y in odd cases
+        tmp_ctx.cleanup()
 
 def build_dataset(csv_path: Path, men_root: Path, out_root: Path) -> None:
     rows = pd.read_csv(csv_path)

@@ -8,43 +8,50 @@ New behaviour (May-2025)
 2.  Found NRRDs are converted with `nifti_write_3d` and written as .nii.gz.
 3.  The logger is the package-level LOGGER defined in
        mgmGrowth.preprocessing.__init__
+4.  In controls, detect these filename‐pulse mappings:
+     - "T1-PRE_*"   → T1
+     - "T1W-FS_*"   → T1
+     - "T2-FLAR_*"  → FLAIR
+     - otherwise, use the prefix before the first underscore as pulse
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Dict, Iterable, List, Sequence
 
 from mgmGrowth.preprocessing import LOGGER
-from mgmGrowth.preprocessing.tools.nrrd_to_nifti import nifti_write_3d   # conversion routine
+from mgmGrowth.preprocessing.tools.nrrd_to_nifti import nifti_write_3d
 
-# --------------------------------------------------------------------------- #
-#                         helper / pure functions                             #
-# --------------------------------------------------------------------------- #
+# map filename prefixes to canonical pulses
+ALIAS_TO_PULSE: Dict[str, str] = {
+    "T1":       "T1",
+    "T1-PRE":   "T1",
+    "T1W-FS":   "T1",
+    "T2-FLAR":  "FLAIR",
+    "FLAIR":    "FLAIR",
+    "SWI":      "SWI",
+    "SUSC":      "SWI",
+    "TC":       "TC",
+    "T1SIN":    "T1SIN",
+}
 
 def enumerate_patients(followup_root: Path) -> List[str]:
     """Sorted list of patient folder names (e.g. ['P1', 'P15'])."""
     return sorted(p.name for p in followup_root.iterdir() if p.is_dir())
 
-
 def build_id_map(patient_dirs: Sequence[str]) -> Dict[str, str]:
     """Injective mapping old-id → zero-padded 5-digit new-id."""
     return {old: f"{idx:05d}" for idx, old in enumerate(patient_dirs, start=1)}
-
 
 def baseline_file(baseline_root: Path, pulse: str, old_id: str) -> Path:
     """Return full path to the expected baseline NRRD."""
     if pulse == "TC":
         return baseline_root / "TC" / old_id / f"{pulse}_{old_id}.nrrd"
     return baseline_root / "RM" / pulse / old_id / f"{pulse}_{old_id}.nrrd"
-
-
-def followup_pattern(pulse: str, old_id: str) -> str:
-    """Filename pattern searched for inside each control visit."""
-    return f"{pulse}_{old_id}.nrrd"
-
 
 def convert_if_exists(src: Path, dst: Path) -> bool:
     """
@@ -64,21 +71,13 @@ def convert_if_exists(src: Path, dst: Path) -> bool:
         nifti_write_3d(str(src), str(dst), verbose=False)
         LOGGER.info("Converted %s → %s", src, dst)
         return True
-    except Exception as exc:                        # pylint: disable=broad-except
+    except Exception as exc:
         LOGGER.error("Conversion failed for %s : %s", src, exc)
         return False
-
 
 def find_control_dirs(patient_root: Path) -> List[Path]:
     """Return control* directories (sorted alphanumerically)."""
     return sorted(d for d in patient_root.iterdir() if d.is_dir() and d.name.startswith("control"))
-
-
-def find_followup_files(control_dir: Path, pulse: str, old_id: str) -> Iterable[Path]:
-    """Yield NRRDs inside *control_dir* matching the strict naming rule."""
-    pattern = followup_pattern(pulse, old_id)
-    return control_dir.glob(pattern)
-
 
 # --------------------------------------------------------------------------- #
 #                           core orchestration                                #
@@ -110,24 +109,26 @@ def reorg_patient(
 
     control_idx = 1
     for control_dir in control_dirs:
-        for pulse in pulses:
-            # -> pattern & explicit log
-            pat = followup_pattern(pulse, old_id)
-            LOGGER.info("Searching %s for pattern '%s'", control_dir, pat)
+        # look through all .nrrd files in this control visit
+        for src in control_dir.glob("*.nrrd"):
+            if src.name.endswith("_seg.nrrd"):
+                continue
 
-            any_found = False
-            for src in find_followup_files(control_dir, pulse, old_id):
-                any_found = True
-                dst = patient_out / f"MenGrowth-{new_idx}-{control_idx:04d}-{pulse}.nii.gz"
-                if convert_if_exists(src, dst):
-                    control_idx += 1
-            if not any_found:
-                LOGGER.warning("No %s files found in %s", pulse, control_dir)
+            # detect prefix and map to canonical pulse
+            prefix = src.name.split("_", 1)[0]
+            pulse = ALIAS_TO_PULSE.get(prefix)
+            if pulse is None:
+                LOGGER.warning("Unrecognized pulse prefix '%s' in %s; skipping", prefix, src)
+                continue
 
+            LOGGER.info("Assigning %s → pulse '%s'", src.name, pulse)
+            dst = patient_out / f"MenGrowth-{new_idx}-{control_idx:04d}-{pulse}.nii.gz"
+            if convert_if_exists(src, dst):
+                control_idx += 1
 
 # --------------------------------------------------------------------------- #
 #                               CLI wrapper                                   #
-# --------------------------------------------------------------------------- #
+# ---------------------------------------------------------------------------
 
 def run(baseline: Path, followup: Path, out_root: Path, pulses: Sequence[str]) -> None:
     """End-to-end execution."""
@@ -150,25 +151,23 @@ def run(baseline: Path, followup: Path, out_root: Path, pulses: Sequence[str]) -
             out_root=out_root,
         )
 
-
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description="Re-organise meningioma dataset.")
     parser.add_argument("--baseline", type=Path, default=Path(
-        "/home/mariopasc/Python/Datasets/Meningiomas/raw/Meningioma_Adquisition"
+        "/home/mpascual/research/datasets/meningiomas/raw/baseline"
     ))
     parser.add_argument("--followup", type=Path, default=Path(
-        "/home/mariopasc/Python/Datasets/Meningiomas/raw/men"
+        "/home/mpascual/research/datasets/meningiomas/raw/controls"
     ))
     parser.add_argument("--out", type=Path, default=Path(
-        "/home/mariopasc/Python/Datasets/Meningiomas/raw/MenGrowth-2025"
+        "/home/mpascual/research/datasets/meningiomas/raw/MenGrowth-2025"
     ))
     parser.add_argument(
-        "--pulses", default="T1,T2,SUSC,FLAIR,TC",
+        "--pulses", default="T1,T2,SWI,FLAIR,TC",
         help="Comma-separated pulse list"
     )
     return parser.parse_args()
-
 
 if __name__ == "__main__":
     args = parse_args()
