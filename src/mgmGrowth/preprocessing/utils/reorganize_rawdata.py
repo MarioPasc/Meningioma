@@ -13,6 +13,8 @@ New behaviour (May-2025)
      - "T1W-FS_*"   → T1
      - "T2-FLAR_*"  → FLAIR
      - otherwise, use the prefix before the first underscore as pulse
+5.  **Each control folder (visit) now gets one single control index** so that
+    all pulses from the same visit share the same `{controlid}`.
 """
 
 from __future__ import annotations
@@ -29,12 +31,13 @@ from mgmGrowth.preprocessing.tools.nrrd_to_nifti import nifti_write_3d
 # map filename prefixes to canonical pulses
 ALIAS_TO_PULSE: Dict[str, str] = {
     "T1":       "T1",
-    "T1-PRE":   "T1",
+    "T1-Gd":   "T1",
     "T1W-FS":   "T1",
+    "T2":       "T2",
     "T2-FLAR":  "FLAIR",
     "FLAIR":    "FLAIR",
     "SWI":      "SWI",
-    "SUSC":      "SWI",
+    "SUSC":     "SWI",
     "TC":       "TC",
     "T1SIN":    "T1SIN",
 }
@@ -92,6 +95,8 @@ def reorg_patient(
     out_root: Path,
 ) -> None:
     """Handle one patient (baseline + all follow-ups)."""
+
+    # prepare output folder for this patient
     patient_out = out_root / f"MenGrowth-{new_idx}"
     patient_out.mkdir(parents=True, exist_ok=True)
 
@@ -108,8 +113,12 @@ def reorg_patient(
     LOGGER.info("Control visits for %s : %s", old_id, [c.name for c in control_dirs])
 
     control_idx = 1
+    # loop once per control visit folder
     for control_dir in control_dirs:
-        # look through all .nrrd files in this control visit
+        LOGGER.info("Processing visit %s (will use control ID %04d)", control_dir.name, control_idx)
+        found_any = False
+
+        # scan all modalities in this one visit
         for src in control_dir.glob("*.nrrd"):
             if src.name.endswith("_seg.nrrd"):
                 continue
@@ -124,7 +133,13 @@ def reorg_patient(
             LOGGER.info("Assigning %s → pulse '%s'", src.name, pulse)
             dst = patient_out / f"MenGrowth-{new_idx}-{control_idx:04d}-{pulse}.nii.gz"
             if convert_if_exists(src, dst):
-                control_idx += 1
+                found_any = True
+
+        # only bump control_idx if this visit actually had at least one file
+        if found_any:
+            control_idx += 1
+        else:
+            LOGGER.warning("No valid NRRD found in %s; control index unchanged", control_dir)
 
 # --------------------------------------------------------------------------- #
 #                               CLI wrapper                                   #
@@ -138,10 +153,12 @@ def run(baseline: Path, followup: Path, out_root: Path, pulses: Sequence[str]) -
     out_root.mkdir(parents=True, exist_ok=True)
     LOGGER.info("Patients to process: %s", patients)
 
+    # save mapping old→new IDs
     with open(out_root / "patient_id_map.json", "w") as fp:
         json.dump(id_map, fp, indent=2)
     LOGGER.info("Wrote patient_id_map.json")
 
+    # process each patient
     for old_id, new_idx in id_map.items():
         LOGGER.info("=== Patient %s → %s ===", old_id, new_idx)
         reorg_patient(
