@@ -81,61 +81,80 @@ def run_training_and_inference(config: SmoreFullConfig) -> None:
             for vol in pulse_volumes:
                 LOGGER.info(f"Training and inferring on volume: {vol}")
                 
+                # Get proper base name without any extensions
+                # For files like "BraTS-MEN-00722-000-t2f.nii.gz"
+                # We want "BraTS-MEN-00722-000-t2f" without the .nii.gz
+                base_name = vol.name.split('.')[0]  # This removes all extensions
+                
                 # Create temporary directory for SMORE output
-                temp_out_dir = ensure_dir(smore_resolution_dir / "temp" / vol.stem)
+                temp_out_dir = ensure_dir(smore_resolution_dir / "temp")
+                
+                # Suffix for the output files
+                suffix = "_smore"
                 
                 # Run SMORE (trains and infers in one step)
-                # The run_smore function returns the expected paths, but we need to look for actual paths
-                _, _ = run_smore(
+                run_smore(
                     vol, 
                     temp_out_dir,
                     cfg=config.network,
                     slice_thickness=slice_dz,
                     gpu_id=config.network.gpu_id,
-                    suffix="_smore"  # Ensure we use consistent suffix
+                    suffix=suffix
                 )
                 
-                # Check the ACTUAL directory structure created by run-smore
-                # The actual weights path will be in a subfolder named after the volume
-                volume_subdir = temp_out_dir / vol.stem
+                # Handle the nested directory structure created by run-smore
+                # The file structure created by run-smore is:
+                # temp_out_dir/
+                #   vol.nii/
+                #     vol/
+                #       weights/best_weights.pt
+                #       vol_smore.nii.gz
                 
-                # Locate the best weights file in the weights directory
-                actual_weights_dir = volume_subdir / "weights"
-                best_weights = actual_weights_dir / "best_weights.pt"
+                # First level directory (with the .nii extension)
+                first_dir = temp_out_dir / f"{vol.stem}.nii"
                 
-                # Find the output SR file (might have different naming pattern)
-                # Look for any nifti file in the volume directory that isn't the original
-                sr_files = list(volume_subdir.glob("*_smore*.nii.gz"))
+                # Second level directory (just the volume name without extensions)
+                second_dir = first_dir / vol.stem
+                
+                # Path to weights
+                weights_path = second_dir / "weights" / "best_weights.pt"
+                
+                # Path to SR output
+                sr_path = second_dir / f"{vol.stem}{suffix}.nii.gz"
+                
+                LOGGER.info(f"Looking for weights at: {weights_path}")
+                LOGGER.info(f"Looking for SR volume at: {sr_path}")
+                
+                # Target paths with clean names (no duplicate extensions)
+                target_weights = weights_dir / f"{base_name}.pt"
+                target_sr = output_dir / f"{base_name}.nii.gz"
                 
                 # Move files to their final locations
-                # For weights: weights/{volume_name}.pt
-                target_weights = weights_dir / f"{vol.stem}.pt"
-                
-                # For SR volume: output_volumes/{volume_name}.nii.gz
-                target_sr = output_dir / f"{vol.stem}.nii.gz"
-                
-                # Move files
-                if best_weights.exists():
-                    shutil.move(str(best_weights), str(target_weights))
+                if weights_path.exists():
+                    shutil.copy2(weights_path, target_weights)
                     LOGGER.info(f"Saved weights to {target_weights}")
                 else:
-                    LOGGER.warning(f"Weights file not found at {best_weights}")
-                    # Try to find weights in alternate locations
-                    alt_weights = list(temp_out_dir.rglob("best_weights.pt"))
-                    if alt_weights:
-                        shutil.move(str(alt_weights[0]), str(target_weights))
-                        LOGGER.info(f"Found weights at {alt_weights[0]}, saved to {target_weights}")
+                    LOGGER.warning(f"Weights file not found at {weights_path}")
+                    # Try to find weights file with glob pattern
+                    weights_files = list(first_dir.glob("**/best_weights.pt"))
+                    if weights_files:
+                        shutil.copy2(weights_files[0], target_weights)
+                        LOGGER.info(f"Found weights at {weights_files[0]}, saved to {target_weights}")
+                    else:
+                        LOGGER.error(f"Could not find weights file for {base_name}")
                 
-                if sr_files:
-                    shutil.move(str(sr_files[0]), str(target_sr))
+                if sr_path.exists():
+                    shutil.copy2(sr_path, target_sr)
                     LOGGER.info(f"Saved SR volume to {target_sr}")
                 else:
-                    LOGGER.warning(f"No SR volume found in {volume_subdir}")
-                    # Try to find SR volume in alternate locations
-                    alt_sr_files = list(temp_out_dir.rglob("*_smore*.nii.gz"))
-                    if alt_sr_files:
-                        shutil.move(str(alt_sr_files[0]), str(target_sr))
-                        LOGGER.info(f"Found SR volume at {alt_sr_files[0]}, saved to {target_sr}")
+                    LOGGER.warning(f"SR volume not found at {sr_path}")
+                    # Try to find SR volume with glob pattern
+                    sr_files = list(second_dir.glob("**/*_smore*.nii.gz"))
+                    if sr_files:
+                        shutil.copy2(sr_files[0], target_sr)
+                        LOGGER.info(f"Found SR volume at {sr_files[0]}, saved to {target_sr}")
+                    else:
+                        LOGGER.error(f"Could not find SR volume for {base_name}")
                 
                 # Clean up temporary directory
                 shutil.rmtree(temp_out_dir, ignore_errors=True)
