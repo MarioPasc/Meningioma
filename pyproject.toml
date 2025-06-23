@@ -26,7 +26,7 @@ keywords = [
 ]
 dependencies = [
     # core I/O & numerics
-    "numpy~=1.26",
+    "numpy>=1.24,<1.27",
     "scipy~=1.15",
     # imaging stack
     "scikit-image~=0.23",
@@ -37,9 +37,10 @@ dependencies = [
     # modelling
     "torch~=2.2",
     "einops",
-    # geo-stats (pin everything that back-jumps!)
-    #"gstools~=1.7",
-    #"hankel~=1.3",                 # explicit!
+    # core nnU-Net from GitHub repo’s development branch
+    "nnunet @ git+https://github.com/MarioPasc/nnUNet.git@development#egg=nnunetv2",
+    # GitLab-hosted smore 
+    "smore @ git+https://gitlab.com/iacl/smore.git@v4.0.5#egg=smore",
     # nnUNet ecosystem
     "acvl-utils==0.2.5",
     "connected-components-3d~=3.22",
@@ -61,8 +62,6 @@ nnunet = [
   # installs from your GitHub repo’s default branch
   "nnunet @ git+https://github.com/MarioPasc/nnUNet.git@development#egg=nnunetv2"
 ]
-
-
 
 [project.urls]
 "Repository" = "https://github.com/MarioPasc/Meningioma"

@@ -1,0 +1,48 @@
+# SMORE Super-Resolution Configuration
+
+# Processing mode: "train" or "inference"
+mode: "train"
+
+# Data paths
+data:
+  # Required for training mode
+  train_root: "/path/to/train/data"
+  
+  # Required for inference mode
+  test_root: "/path/to/test/data"
+  out_root: "/path/to/output"
+  
+  # Common for both modes
+  weights_root: "/path/to/weights/storage"
+
+# Processing parameters
+processing:
+  # List of low-resolution slice thicknesses to process
+  low_res_slices: ["3mm", "5mm", "7mm"]
+  
+  # List of pulse types to process
+  pulses: ["t1c", "t2w", "t2f"]
+
+  
+  # GPU ID to use
+  gpu_id: 0
+
+# SMORE Network Configuration
+network:
+  # Patch size for training
+  patch_size: 48
+  
+  # Number of network blocks
+  n_blocks: 16
+  
+  # Number of channels in network
+  n_channels: 32
+  
+  # Batch size for training
+  batch_size: 32
+  
+  # Number of patches to sample during training
+  n_patches: 832000
+  
+  # Number of rotations during inference
+  n_rots: 2
