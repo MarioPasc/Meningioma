@@ -82,7 +82,7 @@ def run_training_and_inference(config: SmoreFullConfig) -> None:
                 LOGGER.info(f"Training and inferring on volume: {vol}")
                 
                 # Get base name (without any extensions)
-                base_name = vol.stem
+                base_name = vol.stem.rstrip(".nii")
                 
                 # Create temporary output directory
                 temp_dir = ensure_dir(smore_resolution_dir / "temp")
