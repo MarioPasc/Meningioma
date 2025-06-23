@@ -114,25 +114,10 @@ def run_smore(
         cmd += ["--blur-kernel-file", str(blur_kernel)]
     if suffix:
         cmd += ["--suffix", suffix]
-    if cfg is not None:
-        # Add network configuration parameters if provided
-        cmd += ["--patch-size", str(cfg.patch_size)]
-        cmd += ["--num-blocks", str(cfg.n_blocks)]
-        cmd += ["--num-channels", str(cfg.n_channels)]
-        cmd += ["--batch-size", str(cfg.batch_size)]
-        cmd += ["--n-patches", str(cfg.n_patches)]
-        cmd += ["--n-rots", str(cfg.n_rots)]
 
     _L.info("$ %s", " ".join(cmd))
     subprocess.run(cmd, check=True)
 
-    # Note: The actual directory structure might be different
-    # The run-smore tool typically creates a subdirectory with the volume name
-    volume_name = lr_path.stem
-    volume_subdir = out_dir / volume_name
-    
-    # Correct paths based on observed behavior
-    weights = volume_subdir / "weights"
-    sr = volume_subdir / f"{volume_name}{suffix}.nii.gz"
-    
+    weights = out_dir / "weights"
+    sr = out_dir / f"{lr_path.stem}{suffix}_SR.nii.gz"
     return weights, sr
