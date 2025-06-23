@@ -82,7 +82,6 @@ def plot_pulses_grouped_by_patient(root_folder: Path):
     plt.show()
 
 
-
 if __name__ == "__main__":
     import sys
     root = Path("/home/mpascual/research/datasets/meningiomas/raw/MenGrowth-2025")

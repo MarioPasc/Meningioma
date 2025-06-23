@@ -34,7 +34,7 @@ def _rgba(data2d: np.ndarray,
     return fc
 
 
-# ------------------------------------------------------------------ NEW helper
+# ------------------------------------------------------------------ 
 def _overlay_segmentation(
         fc: np.ndarray,
         seg_patch: np.ndarray | None,
@@ -141,7 +141,7 @@ def _plot_single_patch(ax: plt.Axes,
     """Plot one rectangle at full resolution (stride = 1)."""
     fc = _rgba(patch, vmin, vmax, cmap, alpha)
 
-    # NEW – blend segmentation overlay (if any)
+    # blend segmentation overlay (if any)
     fc = _overlay_segmentation(
             fc,
             seg_patch,
