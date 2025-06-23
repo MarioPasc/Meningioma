@@ -85,17 +85,30 @@ def run_training_and_inference(config: SmoreFullConfig) -> None:
                 temp_out_dir = ensure_dir(smore_resolution_dir / "temp" / vol.stem)
                 
                 # Run SMORE (trains and infers in one step)
-                weights_path, sr_path = run_smore(
+                # The run_smore function returns the expected paths, but we need to look for actual paths
+                _, _ = run_smore(
                     vol, 
                     temp_out_dir,
                     cfg=config.network,
                     slice_thickness=slice_dz,
-                    gpu_id=config.network.gpu_id
+                    gpu_id=config.network.gpu_id,
+                    suffix="_smore"  # Ensure we use consistent suffix
                 )
+                
+                # Check the ACTUAL directory structure created by run-smore
+                # The actual weights path will be in a subfolder named after the volume
+                volume_subdir = temp_out_dir / vol.stem
+                
+                # Locate the best weights file in the weights directory
+                actual_weights_dir = volume_subdir / "weights"
+                best_weights = actual_weights_dir / "best_weights.pt"
+                
+                # Find the output SR file (might have different naming pattern)
+                # Look for any nifti file in the volume directory that isn't the original
+                sr_files = list(volume_subdir.glob("*_smore*.nii.gz"))
                 
                 # Move files to their final locations
                 # For weights: weights/{volume_name}.pt
-                best_weights = weights_path / "best_weights.pt"
                 target_weights = weights_dir / f"{vol.stem}.pt"
                 
                 # For SR volume: output_volumes/{volume_name}.nii.gz
@@ -107,12 +120,22 @@ def run_training_and_inference(config: SmoreFullConfig) -> None:
                     LOGGER.info(f"Saved weights to {target_weights}")
                 else:
                     LOGGER.warning(f"Weights file not found at {best_weights}")
+                    # Try to find weights in alternate locations
+                    alt_weights = list(temp_out_dir.rglob("best_weights.pt"))
+                    if alt_weights:
+                        shutil.move(str(alt_weights[0]), str(target_weights))
+                        LOGGER.info(f"Found weights at {alt_weights[0]}, saved to {target_weights}")
                 
-                if sr_path.exists():
-                    shutil.move(str(sr_path), str(target_sr))
+                if sr_files:
+                    shutil.move(str(sr_files[0]), str(target_sr))
                     LOGGER.info(f"Saved SR volume to {target_sr}")
                 else:
-                    LOGGER.warning(f"SR volume not found at {sr_path}")
+                    LOGGER.warning(f"No SR volume found in {volume_subdir}")
+                    # Try to find SR volume in alternate locations
+                    alt_sr_files = list(temp_out_dir.rglob("*_smore*.nii.gz"))
+                    if alt_sr_files:
+                        shutil.move(str(alt_sr_files[0]), str(target_sr))
+                        LOGGER.info(f"Found SR volume at {alt_sr_files[0]}, saved to {target_sr}")
                 
                 # Clean up temporary directory
                 shutil.rmtree(temp_out_dir, ignore_errors=True)
