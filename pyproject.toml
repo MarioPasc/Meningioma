@@ -26,7 +26,7 @@ keywords = [
 ]
 dependencies = [
     # core I/O & numerics
-    "numpy>=1.24,<1.27",
+    "numpy==1.23.5",
     "scipy~=1.15",
     # imaging stack
     "scikit-image~=0.23",
