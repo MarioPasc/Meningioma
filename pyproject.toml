@@ -38,7 +38,7 @@ dependencies = [
     "torch~=2.2",
     "einops",
     # core nnU-Net from GitHub repo’s development branch
-    "nnunet @ git+https://github.com/MarioPasc/nnUNet.git@development#egg=nnunet",    # GitLab-hosted smore 
+    "nnunetv2 @ git+https://github.com/MarioPasc/nnUNet.git@development#egg=nnunetv2",    # GitLab-hosted smore 
     "smore @ git+https://gitlab.com/iacl/smore.git@v4.0.5#egg=smore",
     # nnUNet ecosystem
     "acvl-utils==0.2.5",
