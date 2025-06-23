@@ -81,10 +81,8 @@ def run_training_and_inference(config: SmoreFullConfig) -> None:
             for vol in pulse_volumes:
                 LOGGER.info(f"Training and inferring on volume: {vol}")
                 
-                # Get clean base name without extensions
+                # Get base name (without any extensions)
                 base_name = vol.stem
-                if base_name.endswith(".nii"):
-                    base_name = base_name[:-4]
                 
                 # Create temporary output directory
                 temp_dir = ensure_dir(smore_resolution_dir / "temp")
@@ -102,14 +100,18 @@ def run_training_and_inference(config: SmoreFullConfig) -> None:
                     suffix=suffix
                 )
                 
-                # ======= EXACT PATH HANDLING BASED ON superresolution_brats_experiment.py =======
-                # SMORE directory tree:
-                #   <temp_dir>/
-                #       <base_name>/weights/best_weights.pt
-                #       <base_name>/<base_name><suffix>.nii.gz
+                # ======= CORRECT PATH HANDLING FROM OBSERVED STRUCTURE =======
+                # ACTUAL SMORE directory tree:
+                #   temp_dir/
+                #   └── base_name/
+                #       ├── base_name_suffix.nii.gz
+                #       └── weights/
+                #           └── best_weights.pt
                 
-                best_weights = temp_dir / base_name / "weights" / "best_weights.pt"
-                sr_volume = temp_dir / base_name / f"{base_name}{suffix}.nii.gz"
+                # Paths to generated files
+                volume_dir = temp_dir / base_name
+                best_weights = volume_dir / "weights" / "best_weights.pt"
+                sr_volume = volume_dir / f"{base_name}{suffix}.nii.gz"
                 
                 LOGGER.info(f"Looking for weights at: {best_weights}")
                 LOGGER.info(f"Looking for SR volume at: {sr_volume}")
@@ -133,9 +135,9 @@ def run_training_and_inference(config: SmoreFullConfig) -> None:
                 
                 # Clean up temporary directory
                 try:
-                    if (temp_dir / base_name).exists():
-                        shutil.rmtree(temp_dir / base_name, ignore_errors=True)
-                        LOGGER.info(f"Cleaned up temporary directory {temp_dir / base_name}")
+                    if volume_dir.exists():
+                        shutil.rmtree(volume_dir, ignore_errors=True)
+                        LOGGER.info(f"Cleaned up temporary directory {volume_dir}")
                 except Exception as e:
                     LOGGER.warning(f"Failed to clean up temporary directory: {e}")
                 
