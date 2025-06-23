@@ -51,7 +51,6 @@ class SmoreFullConfig:
         data_config = self.config.get("data", {})
         self.train_root = Path(data_config.get("train_root", "")) if "train_root" in data_config else None
         self.test_root = Path(data_config.get("test_root", "")) if "test_root" in data_config else None
-        self.weights_root = Path(data_config.get("weights_root", "")) if "weights_root" in data_config else None
         self.out_root = Path(data_config.get("out_root", "")) if "out_root" in data_config else None
         
         # Extract processing parameters
@@ -77,10 +76,6 @@ class SmoreFullConfig:
             
         if not hasattr(self, 'low_res_slices') or not self.low_res_slices:
             errors.append("At least one low-resolution slice thickness must be specified.")
-        
-        # Weights root is required for both modes
-        if not self.weights_root:
-            errors.append("weights_root is required for both training and inference modes.")
         
         # Mode-specific validations
         if self.mode == "train":

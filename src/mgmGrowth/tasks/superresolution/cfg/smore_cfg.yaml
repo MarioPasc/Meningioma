@@ -6,14 +6,13 @@ mode: "train"
 # Data paths
 data:
   # Required for training mode
-  train_root: "/path/to/train/data"
+  train_root: "/media/hddb/mario/data/meningiomas/super_resolution/low_res"
   
   # Required for inference mode
   test_root: "/path/to/test/data"
-  out_root: "/path/to/output"
   
   # Common for both modes
-  weights_root: "/path/to/weights/storage"
+  out_root: "/home/mariopascual/projects/meningiomas/output"
 
 # Processing parameters
 processing:
@@ -23,7 +22,6 @@ processing:
   # List of pulse types to process
   pulses: ["t1c", "t2w", "t2f"]
 
-  
   # GPU ID to use
   gpu_id: 0
 

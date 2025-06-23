@@ -50,6 +50,7 @@ dependencies = [
     "pandas",
     "matplotlib",
     "seaborn",
+    "pyyaml"
 ]
 
 [build-system]
