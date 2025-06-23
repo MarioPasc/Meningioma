@@ -8,7 +8,7 @@ import sys
 from typing import Final
 
 _FMT: Final = (
-    "%(asctime)s | %(levelname)-8s | %(name)s:%(lineno)d | %(message)s"
+    "[Super-Resolution]: %(asctime)s | %(levelname)-8s | %(name)s:%(lineno)d | %(message)s"
 )
 
 logging.basicConfig(
