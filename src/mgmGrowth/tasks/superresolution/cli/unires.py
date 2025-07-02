@@ -27,8 +27,8 @@ Author  : Mario Pascual González
 Created : 2025-07-02
 
 We are using a separate logger from the module-logger since this is a standalone
-script, since the UniRES package does not support 40-- series GTX cards, therefore
-we cannot add this scripts to our dependencies. 
+script. This is because the UniRES package does not support 40-- series GTX cards, 
+therefore we cannot add this script to our project dependencies. 
 
 Check https://github.com/brudfors/UniRes/issues/24 for more details.
 --------------------------------------------------------------------------- 
