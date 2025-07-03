@@ -50,7 +50,9 @@ dependencies = [
     "pandas",
     "matplotlib",
     "seaborn",
-    "pyyaml"
+    "pyyaml",
+    "scienceplots",
+    "lpips" # Perceptual Similarity Metric, for Super-resolution https://github.com/richzhang/PerceptualSimilarity 
 ]
 
 [build-system]

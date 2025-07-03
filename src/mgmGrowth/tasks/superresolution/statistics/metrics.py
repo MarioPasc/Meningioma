@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """
-compute_sr_metrics.py
-=====================
+metrics.py
+==========
 
-Quantify SR reconstruction quality (PSNR, SSIM, Bhattacharyya coefficient)
-against the native high-resolution (HR) images.
+Quantify SR reconstruction quality using four metrics:
+
+* **PSNR** – peak-signal-to-noise ratio
+* **SSIM** – structural similarity (Gaussian, masked)
+* **Bhattacharyya coefficient** – histogram overlap
+* **LPIPS** – learned perceptual image patch similarity (AlexNet variant)
 
 Folder layout (example)
 -----------------------
@@ -27,46 +31,55 @@ Output
 ------
 `metrics.npz` containing
 
-    metrics      (P, 2, 3, M, 3, 4) float64   # NaN for missing cases
+    metrics      (P, 3, 3, M, 4, 4, 2) float64   # NaN for missing cases
     patient_ids  list[str]
-    pulses       ["t1c", "t2w"]
-    resolutions  [3, 5, 7]                    # mm
+    pulses       ["t1c", "t2w", "t2f"]
+    resolutions  [3, 5, 7]                       # mm
     models       list[str]
-    metric_names ["PSNR", "SSIM", "BC"]
+    metric_names ["PSNR", "SSIM", "BC", "LPIPS"]
     roi_labels   ["all", "core", "edema", "surround"]
+    stat_names   ["mean", "std"]
 """
 
 from __future__ import annotations
 
+# ----------------------------------------------------------------- imports
 import argparse
-import collections
-import json
+import multiprocessing.dummy as mp_threads
 import multiprocessing as mp
 import pathlib
 import re
 from dataclasses import dataclass
-from typing import Iterable, List, Sequence, Tuple
+from typing import Iterable, Sequence, Tuple, List
 
 import warnings
-warnings.filterwarnings("ignore",
-                        message="Mean of empty slice")
-warnings.filterwarnings("ignore",
-                        message="invalid value encountered in divide")
-
+warnings.filterwarnings("ignore", message="Mean of empty slice")
+warnings.filterwarnings("ignore", message="invalid value encountered in divide")
 
 import numpy as np
 import SimpleITK as sitk
 from skimage.metrics import structural_similarity as ssim
+from mgmGrowth.tasks.superresolution.utils.imio import load_lps
+import nibabel as nib
+# -------- deep-perceptual metric ------------------------------------------
+try:
+    import torch
+    import lpips                            # pip install lpips
+    _DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    _LPIPS_MODEL = lpips.LPIPS(net="alex").to(_DEVICE).eval()
+    _LPIPS_MODEL.requires_grad_(False)
+except ModuleNotFoundError:                 # library missing → metric = NaN
+    _LPIPS_MODEL = None
 
 from mgmGrowth.tasks.superresolution import LOGGER
 
 # ------------------------------------------------------------- constants ---
-ROI_LABELS = ("all", "core", "edema", "surround")   # 0,1,2,3
-METRIC_NAMES = ("PSNR", "SSIM", "BC")
-STAT_NAMES   = ("mean", "std")          # NEW axis length = 2
-PULSES = ("t1c", "t2w")
-RESOLUTIONS = (3, 5, 7)                             # mm
-HR_RE = re.compile(r"^(?P<pid>[^/]+)-(?P<pulse>t1c|t2w)\.nii\.gz$")
+ROI_LABELS   = ("all", "core", "edema", "surround")         # 0,1,2,3
+METRIC_NAMES = ("PSNR", "SSIM", "BC", "LPIPS")
+STAT_NAMES   = ("mean", "std")                              # NEW axis length = 2
+PULSES       = ("t1c", "t2w", "t2f")
+RESOLUTIONS  = (3, 5, 7)                                    # mm
+HR_RE        = re.compile(r"^(?P<pid>[^/]+)-(?P<pulse>t1c|t2w|t2f)\.nii\.gz$")
 
 # ---------------------------------------------------------- dataclasses ---
 @dataclass(frozen=True)
@@ -84,10 +97,26 @@ def read_image(path: pathlib.Path) -> sitk.Image:
 
 
 def sitk_to_np(img: sitk.Image) -> np.ndarray:
-    """Preserve ordering (z, y, x) for numpy."""
+    """Preserve ordering (z, y, x) for NumPy."""
     arr = sitk.GetArrayFromImage(img)        # returns z,y,x
     return np.asanyarray(arr, dtype=np.float64)
 
+def unify_shapes(*arrays: np.ndarray) -> Tuple[np.ndarray, ...]:
+    """
+    Pad every 3-D array with zeros so that all have the same shape.
+    Any pair of arrays may differ by at most 2 voxels along each axis,
+    mirroring `match_slices`'s safety rule.
+    """
+    shapes = np.array([a.shape for a in arrays])
+    if np.any(np.ptp(shapes, axis=0) > 2):
+        raise ValueError("Volumes differ by >2 voxels; cannot auto-align.")
+
+    target = shapes.max(axis=0)
+    padded: list[np.ndarray] = []
+    for a in arrays:
+        pad = [(0, t - s) for s, t in zip(a.shape, target)]
+        padded.append(np.pad(a, pad, constant_values=0))
+    return tuple(padded)
 
 def match_slices(a: np.ndarray, b: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """
@@ -127,8 +156,10 @@ def exclude_z_slices(arr: np.ndarray, idx: Sequence[int]) -> np.ndarray:
     mask[idx] = False
     return arr[mask, ...]
 
+
 # --------------------------------------- metric helpers (robust to NaN/Inf)
 def _finite(a: np.ndarray, b: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """Return only finite-valued voxels of both arrays (element-wise AND)."""
     m = np.isfinite(a) & np.isfinite(b)
     return a[m], b[m]
 
@@ -144,30 +175,29 @@ def psnr(hr: np.ndarray, sr: np.ndarray, data_range: float | None = None) -> flo
         return np.nan
     return 20 * np.log10(data_range) - 10 * np.log10(mse)
 
+
 # SKIMAGE-SSIM ────────────────────────────────────────────────────────────
 def safe_ssim_slice(hr2d: np.ndarray,
                     sr2d: np.ndarray,
                     mask2d: np.ndarray) -> float:
     """
-    SSIM on a *single axial slice* using skimage.
+    SSIM on a *single axial slice* using scikit-image.
 
     * Chooses the largest odd ``win_size`` ≤ min(height, width).
     * When the side is < 3 pixels the function returns **NaN** instead of
-      raising `ValueError`.
+      raising ``ValueError``.
     """
-    # nothing to compare?
-    if not mask2d.any():
+    if not mask2d.any():                         # nothing to compare
         return np.nan
 
     h, w = hr2d.shape
     m = min(h, w)
 
-    if m < 3:                            # too small for any legal window
+    if m < 3:                                   # too small for any legal window
         LOGGER.debug("ROI too small for SSIM (%dx%d) → NaN", h, w)
         return np.nan
 
-    # choose an odd win_size that fits
-    ws = 7
+    ws = 7                                      # choose an odd win_size
     if m < 7:
         ws = m if m % 2 == 1 else m - 1
 
@@ -178,65 +208,148 @@ def safe_ssim_slice(hr2d: np.ndarray,
                  data_range=float(np.ptp(hr2d)),
                  gaussian_weights=True,
                  win_size=ws,
-                 mask=mask2d)             # ← only voxels inside ROI
+                 mask=mask2d)                   # ← only voxels inside ROI
         )
     except ValueError as err:
         LOGGER.debug("SSIM failed (%s) → NaN", err)
         return np.nan
 
 
-def bhattacharyya(hr: np.ndarray, sr: np.ndarray, bins: int = 256) -> float:
+def bhattacharyya(hr: np.ndarray, sr: np.ndarray, bins: int = 256,
+                  return_distance: bool = True) -> float:
+    """
+    Bhattacharyya coefficient *or* distance between two 1-D distributions.
+
+    Parameters
+    ----------
+    hr, sr : ndarray
+        Samples (any shape); NaN / Inf are ignored.
+    bins : int
+        Number of histogram bins.
+    return_distance : bool, default False
+        If True, return  `-ln(BC)`  (Bhattacharyya distance).
+        Otherwise return the coefficient.
+
+    Returns
+    -------
+    float
+        BC in [0, 1]  or  D_B ≥ 0.
+    """
     hr, sr = _finite(hr, sr)
     if hr.size == 0 or sr.size == 0:
         return np.nan
-    h_hist, _ = np.histogram(hr, bins=bins, density=True)
-    s_hist, _ = np.histogram(sr, bins=bins, density=True)
-    return float(np.sum(np.sqrt(h_hist * s_hist)))
+
+    # un-normalised counts
+    h_cnt, _ = np.histogram(hr, bins=bins, density=False)
+    s_cnt, _ = np.histogram(sr, bins=bins, density=False)
+
+    # convert to probabilities (sum = 1)
+    p = h_cnt / h_cnt.sum()
+    q = s_cnt / s_cnt.sum()
+
+    bc = np.sum(np.sqrt(p * q))                # coefficient in [0,1]
+
+    if return_distance:
+        # guard against log(0)
+        return -np.log(np.clip(bc, 1e-12, 1.0))
+    else:
+        return bc
+
+
+
+# ----------------- LPIPS (slice-wise, ROI-aware via masking to zeros) -----
+def lpips_slice(hr2d: np.ndarray,
+                sr2d: np.ndarray,
+                mask2d: np.ndarray) -> float:
+    """
+    Compute LPIPS on an axial slice.
+
+    * Voxels **outside** the ROI are zeroed in both images.
+    * Intensities are linearly mapped to the range [-1, 1] using the
+      *joint* min-max of the two masked images.
+    """
+    if _LPIPS_MODEL is None:                  # library unavailable
+        return np.nan
+    if not mask2d.any():
+        return np.nan
+
+    # apply mask – everything else set to zero to mimic background
+    hr_masked = hr2d * mask2d
+    sr_masked = sr2d * mask2d
+
+    vmin = min(np.nanmin(hr_masked), np.nanmin(sr_masked))
+    vmax = max(np.nanmax(hr_masked), np.nanmax(sr_masked))
+    if vmax - vmin == 0.0:                    # uniform slice
+        return np.nan
+
+    # scale to [-1, 1]
+    def _scale(img: np.ndarray) -> np.ndarray:
+        return (img - vmin) / (vmax - vmin) * 2.0 - 1.0
+
+    hr_scaled = _scale(hr_masked)
+    sr_scaled = _scale(sr_masked)
+
+    # shape: 1×3×H×W (RGB replicated)
+    hr_t = torch.from_numpy(hr_scaled).float().unsqueeze(0).repeat(3, 1, 1)
+    sr_t = torch.from_numpy(sr_scaled).float().unsqueeze(0).repeat(3, 1, 1)
+    hr_t, sr_t = hr_t.unsqueeze(0).to(_DEVICE), sr_t.unsqueeze(0).to(_DEVICE)
+
+    with torch.no_grad():
+        d = _LPIPS_MODEL(hr_t, sr_t).item()   # higher = more different
+    return d
 
 
 # ------------------------------------------------------ per-ROI metrics ---
 def roi_mask(seg: np.ndarray, label: int | None) -> np.ndarray:
+    """Return boolean mask selecting ROI `label`; `None` → whole image."""
     if label is None:
         return np.ones_like(seg, dtype=bool)
     return seg == label
 
 
-def compute_metrics(hr: np.ndarray, sr: np.ndarray, seg: np.ndarray) -> np.ndarray: # (3,4,2)   # SLICE-WISE
+def compute_metrics(hr: np.ndarray, sr: np.ndarray,
+                    seg: np.ndarray) -> np.ndarray:
     """
-    Slice-wise metrics – returns array (3 metrics, 4 ROIs, 2 stats).
+    **Slice-wise metrics** – returns array (4 metrics, 4 ROIs, 2 stats).
 
-    * stats[0] = mean across retained slices
-    * stats[1] = std  across retained slices
+    stats[0] = mean across retained slices  
+    stats[1] = std  across retained slices
     """
     out = np.full((len(METRIC_NAMES),
                    len(ROI_LABELS),
-                   len(STAT_NAMES)), np.nan, dtype=np.float64)
+                   len(STAT_NAMES)),
+                  np.nan, dtype=np.float64)
 
     z_slices = hr.shape[0]
     for ridx, label in enumerate((None, 1, 2, 3)):
-        # gather per-slice values
-        psnr_list, ssim_list, bc_list = [], [], []
+        psnr_vals, ssim_vals, bc_vals, lpips_vals = [], [], [], []
+
         for z in range(z_slices):
-            roi = roi_mask(seg[z], label)               # SKIMAGE-SSIM
-            if roi.sum() == 0:
+            roi = roi_mask(seg[z], label)
+            if not roi.any():
                 continue
 
-            # PSNR & Bhattacharyya on masked voxels (1-D vectors)
+            #  PSNR & Bhattacharyya ───────────────────────────── 1-D voxels
             h_vec, s_vec = hr[z][roi], sr[z][roi]
-            psnr_list.append(psnr(h_vec, s_vec))
-            bc_list.append(bhattacharyya(h_vec, s_vec))
+            psnr_vals.append(psnr(h_vec, s_vec))
+            bc_vals.append(bhattacharyya(h_vec, s_vec))
 
-            # SSIM on the full 2-D slice with mask
-            ssim_list.append(
-                safe_ssim_slice(hr[z], sr[z], roi)
-            )
+            #  SSIM ──────────────────────────────────────────── 2-D masked
+            ssim_vals.append(safe_ssim_slice(hr[z], sr[z], roi))
 
-        for vals, midx in zip((psnr_list, ssim_list, bc_list),
-                              range(len(METRIC_NAMES))):
-            if vals:                      # at least one valid slice
+            #  LPIPS ─────────────────────────────────────────── deep metric
+            lpips_vals.append(lpips_slice(hr[z], sr[z], roi))
+
+        # write mean/std if we have at least one valid slice
+        for vals, midx in zip(
+            (psnr_vals, ssim_vals, bc_vals, lpips_vals),
+            range(len(METRIC_NAMES))
+        ):
+            if vals:                                     # non-empty list
                 out[midx, ridx, 0] = np.nanmean(vals)
                 out[midx, ridx, 1] = np.nanstd(vals)
-    return out
+
+    return out                                           # (4, 4, 2)
 
 
 # ----------------------------------------------------- filesystem walker --
@@ -261,100 +374,132 @@ def collect_paths(hr_root: pathlib.Path,
 # ------------------------------------------------ worker (per patient) ----
 def process_patient(vpaths: VolumePaths,
                     exclude: Sequence[int]) -> np.ndarray:
-    hr_img = read_image(vpaths.hr)
-    sr_img = read_image(vpaths.sr)
-    seg_img = read_image(vpaths.seg)
+    """
+    Load HR / SR / SEG volumes for a single patient, align them,
+    compute all metrics, and return an array of shape
+        (len(METRIC_NAMES), len(ROI_LABELS), len(STAT_NAMES))
 
-    hr_arr = sitk_to_np(hr_img)
-    sr_arr = sitk_to_np(sr_img)
-    seg_arr = sitk_to_np(seg_img).astype(int)
+    Any geometry mismatch > 2 voxels at any stage → patient is skipped
+    (logged) and NaNs are returned, so the main loop continues.
+    """
+    try:
+        
+        # ---- reference (HR) ------------------------------------------------
+        hr_img = nib.load(str(vpaths.hr))          # keep for geometry
+        hr_arr = load_lps(vpaths.hr, dtype=np.float32)  # LPS, no resampling
+        
+        
+        # ---- moving volumes, resampled onto HR grid ------------------------
+        sr_arr = load_lps(vpaths.sr, like=hr_img, order=1)   # linear
+        seg_arr = load_lps(vpaths.seg, like=hr_img, order=0) # nearest
+        
+        # ---------- geometry alignment ------------------------------------
+        # (1) HR ↔ SR : allow ≤ 2-voxel padding on each axis
+        hr_arr, sr_arr = match_slices(hr_arr, sr_arr)
 
-    hr_arr, sr_arr = match_slices(hr_arr, sr_arr)
-    hr_arr = exclude_z_slices(hr_arr, exclude)
-    sr_arr = exclude_z_slices(sr_arr, exclude)
-    seg_arr = exclude_z_slices(seg_arr, exclude)
+        # (2) bring the SEG volume to the *same* shape  (≤ 2 voxels tolerance)
+        try:
+            hr_arr, sr_arr, seg_arr = unify_shapes(hr_arr, sr_arr, seg_arr)
+        except ValueError as geo_err:
+            raise ValueError(f"SEG/HR size mismatch – {geo_err}") from None
+
+        # ---------- axial slice exclusion ---------------------------------
+        hr_arr  = exclude_z_slices(hr_arr,  exclude)
+        sr_arr  = exclude_z_slices(sr_arr,  exclude)
+        seg_arr = exclude_z_slices(seg_arr, exclude)
+
+        # ---------- metrics -----------------------------------------------
+        return compute_metrics(hr_arr, sr_arr, seg_arr)
+
+    except Exception as err:
+        # Skip this patient but never kill the pool
+        LOGGER.warning("Skipping patient %s – %s",
+                       vpaths.hr.parent.name, err)
+        return np.full((len(METRIC_NAMES),
+                        len(ROI_LABELS),
+                        len(STAT_NAMES)),
+                       np.nan, dtype=np.float64)
 
 
-
-    return compute_metrics(hr_arr, sr_arr, seg_arr)   # (3,4)
 
 
 # ------------------------------------------------------------- main -------
 def main() -> None:
     ap = argparse.ArgumentParser(
-        description="Compute PSNR/SSIM/Bhattacharyya for SR volumes.")
-    ap.add_argument("--hr_root",  type=pathlib.Path,
+        description="Compute PSNR/SSIM/Bhattacharyya/LPIPS for SR volumes.")
+    ap.add_argument("--hr_root", type=pathlib.Path,
                     default=pathlib.Path(
-                    "/home/mariopasc/Python/Datasets/Meningiomas/BraTS/SR/subset"))
+                        "/home/mpascual/research/datasets/meningiomas/BraTS/super_resolution/subset"))
     ap.add_argument("--results_root", type=pathlib.Path,
                     default=pathlib.Path(
-                    "/home/mariopasc/Python/Results/Meningioma/super_resolution/models"))
+                        "/home/mpascual/research/datasets/meningiomas/BraTS/super_resolution/results/models"))
 
-    # -------- pulse ----------------------------------------------------------
-    ap.add_argument("--pulse",  choices=("t1c", "t2w", "both"),
-                    default="both",
-                    help="Evaluate given pulse or both (default)")
+    # -------- pulse --------------------------------------------------------
+    ap.add_argument("--pulse", choices=("t1c", "t2w", "t2f", "all"),
+                    default="all",
+                    help="Evaluate given pulse or all (default)")
 
-    # -------- slice window ---------------------------------------------------
+    # -------- slice window -------------------------------------------------
     ap.add_argument("--slice-window", nargs=2, type=int, metavar=("MIN", "MAX"),
                     default=(10, 140),
                     help="Only consider slices MIN..MAX inclusive "
-                        "(default 10-140); outside range is ignored.")
+                         "(default 10-140); outside range is ignored.")
 
-    ap.add_argument("--out",   type=pathlib.Path,
+    ap.add_argument("--out", type=pathlib.Path,
                     default=pathlib.Path(
-                    "/home/mariopasc/Python/Results/Meningioma/super_resolution/metrics/metrics.npz"))
-    ap.add_argument("--workers", type=int, default=mp.cpu_count()-1)
+                        "/home/mpascual/research/datasets/meningiomas/BraTS/super_resolution/results/metrics/metrics.npz"))
+    ap.add_argument("--workers", type=int, default=mp.cpu_count() - 1)
     args = ap.parse_args()
 
-
     # discover models dynamically
-    model_dirs = [d.name for d in (args.results_root).iterdir() if d.is_dir()]
+    model_dirs = [d.name for d in args.results_root.iterdir() if d.is_dir()]
     model_dirs.sort()
 
     # convert tuple → range of indices to drop
     lo, hi = args.slice_window
     exclude = list(range(0, lo))               # [0, lo-1]
-    exclude += list(range(hi+1, 10**6))        # (hi, ∞) -- upper bound trimmed later
+    exclude += list(range(hi + 1, 10 ** 6))    # (hi, ∞) – upper bound trimmed later
 
-    # ---------------------------------------------------------------- engine --
+    # ---------------------------------------------------------------- engine
     patients = sorted([d.name for d in args.hr_root.iterdir()])
     # SLICE-WISE – added STAT dimension
-    metrics_arr = np.full((len(patients),             # P
-                           len(PULSES),               # 2
-                           len(RESOLUTIONS),          # 3
+    metrics_arr = np.full((len(patients),           # P
+                           len(PULSES),             # 3
+                           len(RESOLUTIONS),        # 3
                            len(model_dirs),
-                           len(METRIC_NAMES),         # 3
-                           len(ROI_LABELS),           # 4
-                           len(STAT_NAMES)),          # 2
+                           len(METRIC_NAMES),       # 4
+                           len(ROI_LABELS),         # 4
+                           len(STAT_NAMES)),        # 2
                           np.nan, dtype=np.float64)
 
     patient_idx = {pid: i for i, pid in enumerate(patients)}
-
-    pulse_list = PULSES if args.pulse == "both" else [args.pulse]
+    pulse_list = PULSES if args.pulse == "all" else [args.pulse]
 
     for m_idx, model in enumerate(model_dirs):
         for pulse in pulse_list:
             for r_idx, res in enumerate(RESOLUTIONS):
 
                 items = list(collect_paths(args.hr_root,
-                                        args.results_root,
-                                        pulse,
-                                        model,
-                                        res))
+                                          args.results_root,
+                                          pulse,
+                                          model,
+                                          res))
                 if not items:
                     continue
-                LOGGER.info("Model %s | %d patients | 1x1x%d mm", model, len(items), res)
+                LOGGER.info("Model %s | %d patients | 1×1×%d mm", model, len(items), res)
 
-                with mp.Pool(args.workers) as pool:
+                PoolClass = mp_threads.Pool if _DEVICE.type == "cuda" else mp.Pool
+
+                with PoolClass(args.workers) as pool:
                     res_metrics = pool.starmap(process_patient,
                                             [(vp, exclude) for vp in items])
 
                 for vp, metr in zip(items, res_metrics):
                     p = patient_idx[vp.hr.parent.name]
                     pulse_idx = PULSES.index(pulse)
-                    metrics_arr[p, pulse_idx, r_idx, m_idx, :, :, :] = metr   # SLICE-WISE
-                    LOGGER.info("Done %s -> %.2f±%.2f dB (PSNR, all-slices)", vp.hr.parent.name, metr[0, 0, 0], metr[0, 0, 1])
+                    metrics_arr[p, pulse_idx, r_idx, m_idx, :, :, :] = metr
+                    LOGGER.info("Done %s -> %.2f±%.2f dB (PSNR, all-slices)",
+                                vp.hr.parent.name, metr[0, 0, 0], metr[0, 0, 1])
 
     np.savez(args.out,
              metrics=metrics_arr,
@@ -364,21 +509,20 @@ def main() -> None:
              models=model_dirs,
              metric_names=METRIC_NAMES,
              roi_labels=ROI_LABELS,
-             stat_names=STAT_NAMES)                         # SLICE-WISE
+             stat_names=STAT_NAMES)
 
     LOGGER.info("Saved metrics to %s", args.out)
 
 """
 metrics_arr.shape
-# (P, 2, 3, M, 3, 4, 2)
-#  ↑  ↑  ↑  ↑  ↑  ↑  └── mean / std  (STAT_NAMES)
+# (P, 3, 3, M, 4, 4, 2)
+#  ↑  ↑  ↑  ↑  ↑  ↑  └── mean / std   (STAT_NAMES)
 #  |  |  |  |  |  └──── ROI_LABELS
 #  |  |  |  |  └────── METRIC_NAMES
 #  |  |  |  └───────── model index
 #  |  |  └──────────── resolution {3,5,7} mm
-#  |  └─────────────── pulse {t1c,t2w}
+#  |  └─────────────── pulse {t1c,t2w,t2f}
 #  └────────────────── patient
-
 """
 
 if __name__ == "__main__":

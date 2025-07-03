@@ -6,27 +6,29 @@ make_qualitative_grid.py  —  HR vs SR octant views
 from __future__ import annotations
 import pathlib, nibabel as nib
 import mgmGrowth.tasks.superresolution.visualization.octant as oc
+from mgmGrowth.tasks.superresolution.utils.imio import load_lps
 import warnings
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
+from pathlib import Path
 # ───────────────────── user configuration ──────────────────────────────
 PATIENT   = "BraTS-MEN-00231-000"
 COORDS    = (65, 120, 135)                 # (x, y, z) slice indices
-PULSES    = ("t1c", "t2w")
+PULSES    = ("t1c", "t2w", "t2f")
 RES_MM    = (3, 5, 7)
-MODELS    = ("BSPLINE", "SMORE")           # add more if available
+MODELS    = ("BSPLINE", "SMORE", "UNIRES")           # add more if available
 # Where to save screenshots (same tree as metric plots)
 OUT_ROOT  = pathlib.Path(
-    "/home/mariopasc/Python/Results/Meningioma/super_resolution/metrics/plots"
+    "/home/mpascual/research/datasets/meningiomas/BraTS/super_resolution/results/metrics"
 )
 FORMAT = "pdf"
 
 # roots for data
 HR_ROOT   = pathlib.Path(
-    "/home/mariopasc/Python/Datasets/Meningiomas/BraTS/SR/subset")
+    "/home/mpascual/research/datasets/meningiomas/BraTS/super_resolution/subset")
 MODEL_ROOT = pathlib.Path(
-    "/home/mariopasc/Python/Results/Meningioma/super_resolution/models")
+    "/home/mpascual/research/datasets/meningiomas/BraTS/super_resolution/results/models")
 
 # ───────────────────── path helpers ────────────────────────────────────
 def hr_path(pulse: str) -> pathlib.Path:
@@ -39,7 +41,8 @@ def sr_path(model: str, res: int, pulse: str) -> pathlib.Path:
 def seg_path() -> pathlib.Path:
     return HR_ROOT / PATIENT / f"{PATIENT}-seg.nii.gz"
 
-# ─────────────────── helper ───────────────────────────
+
+
 def pad_to_match(a: np.ndarray, b: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """
     Return (a′, b′) where both arrays have identical shape.
@@ -71,8 +74,9 @@ def pad_to_match(a: np.ndarray, b: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 def save_residual_octant(hr_path: pathlib.Path,
                          sr_path: pathlib.Path,
                          dst: pathlib.Path) -> None:
-    hr = nib.load(hr_path).get_fdata()
-    sr = nib.load(sr_path).get_fdata()
+    hr_img = nib.load(str(hr_path))                 # keep nib image for geometry
+    hr = load_lps(hr_path)                          # LPS data
+    sr = load_lps(sr_path, like=hr_img, order=1)    # align & interpolate
 
     hr, sr = pad_to_match(hr, sr)      # ← keep *both* padded arrays
     res    = np.abs(sr - hr)           # now shapes match
@@ -84,14 +88,15 @@ def save_residual_octant(hr_path: pathlib.Path,
         only_line=False,
         xticks=[], yticks=[], zticks=[], grid=False,
         figsize=(7, 7),
-        save=str(dst),
+        save=Path(dst),
     )
     
 
 # ─────────────────── patch save_octant ────────────────
 def save_octant(src: pathlib.Path, dst: pathlib.Path) -> None:
-    vol = nib.load(src).get_fdata()
-    seg = nib.load(seg_path()).get_fdata()
+    hr_img = nib.load(str(hr_path(PULSES[0])))      # any HR pulse as reference
+    vol = load_lps(src,  like=hr_img, order=1)
+    seg = load_lps(seg_path(), like=hr_img, order=0)
 
     vol, seg = pad_to_match(vol, seg)      # ← NEW line
 
@@ -102,7 +107,7 @@ def save_octant(src: pathlib.Path, dst: pathlib.Path) -> None:
         cmap="gray", figsize=(7, 7),
         xticks=[], yticks=[], zticks=[], grid=False,
         xlabel="Anterior (+x)", ylabel="Right (+y)", zlabel="Cranial (+z)",
-        save=str(dst)
+        save=Path(dst)
     )
 
 # ───────────────────── generate screenshots ────────────────────────────
