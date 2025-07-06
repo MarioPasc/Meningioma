@@ -1,46 +1,33 @@
-# SMORE Super-Resolution Configuration
+# ------------------------------------------------------------------
+# ECLARE Super-Resolution Configuration (flat layout expected by
+# src.mgmGrowth.tasks.superresolution.config.SmoreFullConfig)
+# ------------------------------------------------------------------
 
-# Processing mode: "train" or "inference"
-mode: "train"
+mode: "train"                              # train | inference
 
-# Data paths
-data:
-  # Required for training mode
-  train_root: "/media/hddb/mario/data/meningiomas/super_resolution/low_res"
-  
-  # Required for inference mode
-  test_root: "/path/to/test/data"
-  
-  # Common for both modes
-  out_root: "/media/hddb/mario/data/meningiomas/super_resolution/ECLARE"
+# ------------------------------------------------------------------
+# Paths
+# ------------------------------------------------------------------
+train_root: "/media/hddb/mario/data/meningiomas/super_resolution/low_res"
+# test_root:  "/path/to/test/data"         # uncomment only if mode: inference
+out_root:   "/media/hddb/mario/data/meningiomas/super_resolution/ECLARE"
 
-# Processing parameters
-processing:
-  # List of low-resolution slice thicknesses to process
-  low_res_slices: ["3mm", "5mm", "7mm"]
-  
-  # List of pulse types to process
-  pulses: ["t1c", "t2w", "t2f"]
+# ------------------------------------------------------------------
+# Data selection
+# ------------------------------------------------------------------
+low_res_slices: ["3mm", "5mm", "7mm"]      # sub-dirs under *train_root*
+pulses:        ["t1c", "t2w", "t2f"]       # filename suffixes
 
-  # GPU ID to use
-  gpu_id: 0
-
-# SMORE Network Configuration
+# ------------------------------------------------------------------
+# Network + hardware
+# ------------------------------------------------------------------
 network:
-  # Patch size for training
-  patch_size: 48
-  
-  # Number of network blocks
-  n_blocks: 16
-  
-  # Number of channels in network
-  n_channels: 32
-  
-  # Batch size for training
-  batch_size: 32
-  
-  # Number of patches to sample during training
-  n_patches: 832000
-  
-  # Number of rotations during inference
-  n_rots: 2
+  gpu_id:      0        # Which CUDA device to use
+  patch_size:  64       # ECLARE ignores but still required by the schema
+  batch_size:  128
+  n_blocks:    23
+  n_channels:  64
+  n_patches:   1_000_000
+  n_rots:      4
+
+# ------------------------------------------------------------------
