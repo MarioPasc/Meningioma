@@ -72,7 +72,7 @@ def run_training_and_inference(config: EclareFullConfig) -> None:
             for vol in pulse_volumes:
                 LOGGER.info("Running ECLARE on %s", vol.name)
 
-                base_name = vol.stem.rstrip(".nii")
+                base_name = vol.stem.rstrip(".nii.gz")
                 temp_dir = ensure_dir(eclare_resolution_dir / "temp")
 
                 # NB: suffix must match eclare_runner default
@@ -90,19 +90,22 @@ def run_training_and_inference(config: EclareFullConfig) -> None:
 
                 # ~~~ Collect outputs ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
                 volume_dir = temp_dir / base_name
-                best_weights = volume_dir / "weights" / "best_weights.pt"
-                sr_volume = volume_dir / f"{base_name}{suffix}.nii.gz"
+                best_weights = eclare_resolution_dir / "weights" / "best_weights.pt"
+                sr_volume = temp_dir / f"{base_name}{suffix}.nii.gz"
 
                 target_weights = weights_dir / f"{base_name}.pt"
                 target_sr = output_dir / f"{base_name}.nii.gz"
 
                 if best_weights.exists():
+                    LOGGER.info("Looking for best weights at %s", best_weights)
+                    
                     shutil.copy2(best_weights, target_weights)
                     LOGGER.info("Saved weights → %s", target_weights)
                 else:
                     LOGGER.warning("Weights file not found: %s", best_weights)
 
                 if sr_volume.exists():
+                    LOGGER.info("Looking for SR volume at %s", sr_volume)
                     shutil.copy2(sr_volume, target_sr)
                     LOGGER.info("Saved SR volume → %s", target_sr)
                 else:
