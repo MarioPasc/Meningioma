@@ -12,7 +12,7 @@ data:
   test_root: "/path/to/test/data"
   
   # Common for both modes
-  out_root: "/home/mariopascual/projects/meningiomas/output"
+  out_root: "/media/hddb/mario/data/meningiomas/super_resolution/ECLARE"
 
 # Processing parameters
 processing:

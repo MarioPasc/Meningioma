@@ -161,7 +161,7 @@ def main() -> None:  # pragma: no cover
         "--config",
         type=Path,
         required=True,
-        help="Path to YAML config compatible with SmoreFullConfig",
+        help="Path to YAML config compatible with ECLAREFullConfig",
     )
     args = parser.parse_args()
 
