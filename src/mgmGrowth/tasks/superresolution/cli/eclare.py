@@ -113,7 +113,7 @@ def run_training_and_inference(config: EclareFullConfig) -> None:
 
                 # clean-up
                 try:
-                    shutil.rmtree(volume_dir, ignore_errors=True)
+                    shutil.rmtree(temp_dir, ignore_errors=True)
                 except Exception as exc:  # noqa: BLE001
                     LOGGER.debug("Cleanup failed for %s: %s", volume_dir, exc)
 
