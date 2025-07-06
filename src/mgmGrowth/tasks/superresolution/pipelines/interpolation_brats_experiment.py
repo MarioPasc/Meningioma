@@ -26,14 +26,15 @@ from typing import Tuple
 
 import SimpleITK as sitk
 from mgmGrowth.tasks.superresolution.engine import interpolation_runner as ir
+from mgmGrowth.tasks.superresolution import LOGGER as _LOG
 
 # ───────────────────────── configuration constants ────────────────────── #
-IN_ROOT = Path("/home/mariopasc/Python/Datasets/Meningiomas/BraTS/SR/low_res")
-OUT_ROOT = Path("/home/mariopasc/Python/Results/Meningioma/super_resolution")
+IN_ROOT = Path("/home/mpascual/research/datasets/meningiomas/BraTS/super_resolution/low_res")
+OUT_ROOT = Path("/home/mpascual/research/datasets/meningiomas/BraTS/super_resolution/results/models/BSPLINE")
 RES_DIRS = ("3mm", "5mm", "7mm")
 TARGET_SPACING: Tuple[float, float, float] = (1.0, 1.0, 1.0)
 
-_LOG = logging.getLogger("super_res_pipeline")
+
 
 
 # ────────────────────────────── helpers ───────────────────────────────── #
@@ -97,10 +98,6 @@ def _parse_cli() -> argparse.Namespace:
 
 def main() -> None:
     args = _parse_cli()
-    level = logging.INFO if args.verbose else logging.WARNING
-    logging.basicConfig(level=level,
-                        format="%(asctime)s | %(levelname)s | %(message)s",
-                        datefmt="%H:%M:%S")
 
     algo_dir = OUT_ROOT / args.interp.upper()
     algo_dir.mkdir(parents=True, exist_ok=True)

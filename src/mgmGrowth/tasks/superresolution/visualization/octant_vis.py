@@ -20,7 +20,7 @@ RES_MM    = (3, 5, 7)
 MODELS    = ("BSPLINE", "SMORE", "UNIRES")           # add more if available
 # Where to save screenshots (same tree as metric plots)
 OUT_ROOT  = pathlib.Path(
-    "/home/mpascual/research/datasets/meningiomas/BraTS/super_resolution/results/metrics"
+    "/home/mpascual/research/datasets/meningiomas/BraTS/super_resolution/results/metrics/vis/octant"
 )
 FORMAT = "pdf"
 

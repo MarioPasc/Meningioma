@@ -21,10 +21,10 @@ plt.style.use(["science", "ieee", "grid"])
 
 # ╭──────────────────── user-specific paths ──────────────────────────────╮
 METRICS_PATH = pathlib.Path(
-    "/home/mariopasc/Python/Results/Meningioma/super_resolution/metrics/metrics.npz"
+    "/home/mpascual/research/datasets/meningiomas/BraTS/super_resolution/results/metrics/metrics.npz"
 )
 OUT_ROOT = pathlib.Path(
-    "/home/mariopasc/Python/Results/Meningioma/super_resolution/metrics/plots"
+    "/home/mpascual/research/datasets/meningiomas/BraTS/super_resolution/results/metrics/vis/violin"
 )
 # ╰───────────────────────────────────────────────────────────────────────╯
 
@@ -56,23 +56,24 @@ def configure_axes(ax: plt.Axes, metric: str, res_mm: int) -> None:
 
     # ── 2. metric-specific spine / tick handling (unchanged) ───────────
     if metric == "PSNR":
-        if res_mm in (3, 5):                     # keep y, drop x
-            ax.spines["bottom"].set_visible(False)
+        if res_mm in (3, 5):                     # keep y, make x white instead of hiding
+            ax.spines["bottom"].set_color("white")
+            ax.tick_params(axis="x", colors="white")
         else:                                    # 7-mm PSNR
             ax.set_xlabel("")
     else:  # SSIM or BC
         ax.spines["left"].set_visible(False)
         ax.tick_params(axis="y", left=False, labelleft=False)
 
-        if res_mm not in (7,):                   # 3-mm / 5-mm
-            ax.spines["bottom"].set_visible(False)
+        if res_mm not in (7,):                   # 3-mm / 5-mm - make x white instead of hiding
+            ax.spines["bottom"].set_color("white")
+            ax.tick_params(axis="x", colors="white")
 
-    # ── 3. remove bottom ticks for all rows above the bottom row ───────
+    # ── 3. make bottom ticks white for all rows above the bottom row ───────
     if res_mm != 7:                              # 3-mm and 5-mm rows
         ax.tick_params(axis="x",
                        which="both",
-                       bottom=False, labelbottom=False)
-
+                       colors="white")  # white instead of hiding
 
 # ─────────── main loop ───────────
 for pulse_idx, pulse in enumerate(pulses):
@@ -116,15 +117,28 @@ for pulse_idx, pulse in enumerate(pulses):
 
             # cosmetic limits & labels
             if met.upper() == "SSIM":
-                ax.set_xlim(0.85, 1.0)
+                ax.set_xlim(0.5, 1.0)
+                ax.set_xticks(np.arange(0.45, 1.01, 0.1))
             # ax.set_xlabel("PSNR (dB)" if met.upper() == "PSNR" else met)
 
             # y-axis labels only for PSNR plots
             if met.upper() == "PSNR":
+                ax.set_xlim(0, 40)
+                ax.set_xticks(np.arange(0, 41, 10))
+                
                 ax.set_yticks(y_centres)
                 ax.set_yticklabels(model_names, fontsize=32)
             else:
                 ax.set_yticks([])
+
+            if met.upper() == "BC":
+                # Add your desired BC range and ticks here, e.g.:
+                ax.set_xlim(0, 11)
+                ax.set_xticks(np.arange(0, 11.1, 1))  
+
+            if met.upper() == "LPIPS":
+                ax.set_xlim(0, 0.6)
+                ax.set_xticks(np.arange(0, 0.61, 0.1))
 
             ax.grid(axis="x", linestyle="--", alpha=0.3)
             ax.xaxis.set_tick_params(labelsize=32)
