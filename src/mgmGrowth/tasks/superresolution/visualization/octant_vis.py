@@ -17,7 +17,7 @@ PATIENT   = "BraTS-MEN-00231-000"
 COORDS    = (65, 120, 135)                 # (x, y, z) slice indices
 PULSES    = ("t1c", "t2w", "t2f")
 RES_MM    = (3, 5, 7)
-MODELS    = ("BSPLINE", "SMORE", "UNIRES")           # add more if available
+MODELS    = ("BSPLINE", "SMORE", "UNIRES", "ECLARE")           # add more if available
 # Where to save screenshots (same tree as metric plots)
 OUT_ROOT  = pathlib.Path(
     "/home/mpascual/research/datasets/meningiomas/BraTS/super_resolution/results/metrics/vis/octant"

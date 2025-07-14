@@ -362,6 +362,8 @@ def collect_paths(hr_root: pathlib.Path,
     Yield VolumePaths for every patient that has both HR and SR volumes.
     """
     res_dir = results_root / model / f"{resolution_mm}mm" / "output_volumes"
+    LOGGER.info("Collecting paths for %s | %d mm | %s", model, resolution_mm, pulse)
+    LOGGER.info("res_dir = %s", res_dir)
     for patient_dir in sorted(hr_root.iterdir()):
         pid = patient_dir.name
         hr_path = patient_dir / f"{pid}-{pulse}.nii.gz"
