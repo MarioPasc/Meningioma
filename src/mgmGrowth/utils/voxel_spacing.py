@@ -4,6 +4,7 @@ Patient Spacing Filter Utility
 
 This script analyzes medical imaging data (NRRD files) and identifies patients
 with all sequences having Z-spacing less than or equal to a specified threshold.
+It can also find patients common to specified pulse sequences.
 """
 
 import os
@@ -130,7 +131,35 @@ def find_patients_with_spacing(dataset_root, z_spacing_threshold):
     return patients_all_under_threshold, patients_some_under_threshold, df
 
 
-def generate_report(patients_all_under, patients_some_under, df, z_spacing_threshold, output_file=None):
+def find_patients_with_all_pulses(df, pulse_sequences):
+    """Find patients that have data for all the specified pulse sequences."""
+    if not pulse_sequences:
+        return []
+    
+    # Convert to list if input is a string
+    if isinstance(pulse_sequences, str):
+        pulse_sequences = [seq.strip() for seq in pulse_sequences.split(',')]
+    
+    common_patients = set()
+    
+    # Initialize with all patients
+    for i, sequence in enumerate(pulse_sequences):
+        # Find patients with this sequence
+        patients_with_sequence = set(df[(df['Modality'] == 'MRI') & 
+                                       (df['Sequence'] == sequence)]['Patient'].unique())
+        
+        # For the first sequence, initialize common_patients
+        if i == 0:
+            common_patients = patients_with_sequence
+        else:
+            # Intersect with patients having previous sequences
+            common_patients &= patients_with_sequence
+    
+    return sorted(list(common_patients))
+
+
+def generate_report(patients_all_under, patients_some_under, df, z_spacing_threshold, 
+                   pulse_sequences=None, output_file=None):
     """Generate a report of patients meeting the spacing criteria."""
     report = []
     
@@ -158,6 +187,16 @@ def generate_report(patients_all_under, patients_some_under, df, z_spacing_thres
     
     # Report patients with some sequences under threshold
     report.append(f"Patients with SOME (but not all) sequences having Z-spacing <= {z_spacing_threshold}mm: {len(patients_some_under)}")
+    
+    # Add information about patients common to specified sequences
+    if pulse_sequences:
+        common_patients = find_patients_with_all_pulses(df, pulse_sequences)
+        pulse_str = ", ".join(pulse_sequences)
+        report.append(f"\nPatients present in all specified sequences ({pulse_str}): {len(common_patients)}")
+        if common_patients:
+            report.append("Patient IDs: " + ", ".join(common_patients))
+        else:
+            report.append("No patients found with all specified sequences.")
     
     # Additional sequence statistics
     if not df.empty:
@@ -191,18 +230,22 @@ def main():
     parser.add_argument(
         "--dataset", "-d", 
         required=False,
-        default="/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_Adquisition",
+        default="/media/mpascual/PortableSSD/Meningiomas/raw/source/Meningioma_Adquisition",
         help="Path to the dataset root directory"
     )
     parser.add_argument(
         "--threshold", "-t", 
         type=float, 
-        default=1.0,
+        default=5.0,
         help="Z-spacing threshold in mm (default: 1.0)"
     )
     parser.add_argument(
         "--output", "-o",
         help="Output file for the report (if not specified, prints to console)"
+    )
+    parser.add_argument(
+        "--pulses", "-p",
+        help="Comma-separated list of MRI pulse sequences to find common patients (e.g., T1,T1SIN,T2,FLAIR)"
     )
     
     args = parser.parse_args()
@@ -221,12 +264,24 @@ def main():
         args.threshold
     )
     
+    # Process pulse sequences if provided
+    pulse_sequences = None
+    if args.pulses:
+        pulse_sequences = [seq.strip() for seq in args.pulses.split(',')]
+        common_patients = find_patients_with_all_pulses(df, pulse_sequences)
+        print(f"\nPatients present in all specified sequences ({args.pulses}):")
+        if common_patients:
+            print(", ".join(common_patients))
+        else:
+            print("No patients found with all specified sequences.")
+    
     # Generate and output report
     generate_report(
         patients_all_under, 
         patients_some_under, 
         df, 
         args.threshold,
+        pulse_sequences,
         args.output
     )
     
