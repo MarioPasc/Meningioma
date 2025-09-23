@@ -401,16 +401,20 @@ def make_panels_for_pulse(pulse: str, stats: Dict[str, object], out_dir: pathlib
         handles, labels = adjusted_means_panel(axes[0], emm, palette, title=f"{pulse.upper()}: Adjusted means")
         # 1: Forest; return items to align heatmap rows
         items = forest_contrasts(axes[1], contr, palette, title=f"{pulse.upper()}: Effect vs BSPLINE")
-        # 2: Wilcoxon transposed to items; share y with forest and hide forest y labels
+        # 2: Wilcoxon transposed to items; share y with forest.
+        # Keep y labels on the forest (axes[1]) and hide them on the heatmap (axes[2]).
         if items:
             axes[2].get_shared_y_axes().joined(axes[1], axes[2])
-            axes[1].set_yticklabels([])
+            # Ensure forest keeps its y labels
+            axes[1].tick_params(axis='y', labelleft=True)
         wilcoxon_heatmap(axes[2], wilc, meta["models"], title=f"{pulse.upper()}: Wilcoxon vs BSPLINE",
                          transpose_to_items=items if items else None)
+        # Hide y tick labels on the heatmap (done after the heatmap sets them)
+        axes[2].tick_params(axis='y', which='both', labelleft=False)
         # figure-level legend
         if handles and labels:
             fig.legend(handles, labels, loc="lower center", ncol=len(labels), frameon=False,
-                       bbox_to_anchor=(0.5, -0.02))
+                       bbox_to_anchor=(0.5, -0.1))
             fig.subplots_adjust(bottom=0.20)
         for ext in ("pdf","png"):
             out = out_dir / f"sr_panel_{pulse}_COMBINED.{ext}"
