@@ -1,79 +1,250 @@
-# Superresolution
+# Super-resolution (MRI) – SMORE, ECLARE, UNIRES and baselines
 
-The main idea is to train a SMORE model with the BraTS-Men 2023 dataset for the T1 and T2 pulses. Then, we will fine-tune the final SMORE model on our own T1 and T2 pulses from the MenGrowth dataset, to then, predict on the own trained volumes. For the SWI/SUSC pulses we must proceed in a different way, since there is no available dataset for this pulse in the BraTS-Men 2023 dataset, therefore, we can choose to fine-tune the T2 SMOTE model on the SWI or train from scratch and predict on the little SWI images.
+This subpackage provides a complete toolkit to create anisotropic MR datasets, run multiple super-resolution (SR) models, and evaluate them quantitatively and qualitatively. It contains thin runners around external CLIs (SMORE, ECLARE, UNIRES), interpolation baselines, pipelines, and metrics.
 
-## Experimental design
-
-1. First we extract the t1c and t2w, and segmentation files from the BraTS dataset from 50 patients, where all the tumour labels are present. This is going to be the cohort of the study to measure the performance of SMORE + Interolation algorithms.
-2. We are going to downsample this cohort to 3 low-resolution datasets: 1x1x3mm, 1x1x5mm and 1x1x7mm; The algorithm will try to recreate the HR-image of 1x1x1mm.
-3. We are going to perform two different evaluation strategies:
-    - **Cuantitative Evaluation**. Usage of PSNR, SSIM and MI per region + whole volume. We are going to display a 1x3 violin plot per pulse, where each region will contain 3 violins, one for each downsampled resolution.
-    - **Cualitative Evaluation**. Two different visualizations:
-        - *BraTS validation*. Show a 3D-Cubic visualization of coronal, sagital and axial slices of the reconstructed volume, per-model (x-axis) and per-downsampling (y-axis; 3mm, 5mm, 7mm). We must select a slice where we can see the 3 labels: Enhancing Tumor Core, Edema, and Surrounding Tumor. We can have 2 lines per downsampled category, where in the first one we show the full slice, and in the second one we zoom into the tumor to highlight differences. The second visualization could be analogous to this one, showing the same slices and same layout, but, instead of showing the images, we showcase the intensity difference maps. We can add a tag to each image showcasing the dB of the PSNR for the zoomed tumor region. (p-value?)
-        - *MenGrowth validation*. Since we can't quantify the similarity between the LR volumes and the generated HR volumes, we can show a comparison between: (x-axis) LR-image + Model-generated images; (y-axis) T1, T2, SWI pulses.
+Highlights
+- Data prep: subset BraTS-Men, downsample to 3/5/7 mm (z-only)
+- Models: SMORE, ECLARE, UNIRES, plus interpolation baselines (NN/Linear/BSpline/Lanczos/Gaussian)
+- Pipelines: batch experiments over cohorts and resolutions
+- Metrics: PSNR, SSIM, Bhattacharyya, LPIPS (optional), ROI-aware
+- Outputs: consistent directory layout per model and per resolution
 
 
-## Commands
+## Package layout
 
-### 1. Downsample
+```
+tasks/superresolution/
+  ├─ cli/                     # User-facing entry points
+  │   ├─ downsample.py        # Create LR cohorts (z-downsample)
+  │   ├─ prepare_brats_data.py# Subset + downsample in one go
+  │   ├─ smore.py             # Train/Infer SMORE via YAML config
+  │   ├─ eclare.py            # Train/Infer ECLARE via YAML config
+  │   └─ unires.py            # Batch UNIRES driver (external CLI)
+  ├─ engine/                  # Thin wrappers around model CLIs
+  │   ├─ smore_runner.py      # smore-train / smore-test / run-smore
+  │   ├─ eclare_runner.py     # eclare-train / eclare-test / run-eclare
+  │   └─ interpolation_runner.py  # SimpleITK resampling helpers
+  ├─ pipelines/
+  │   ├─ superresolution_brats_experiment.py   # SMORE batch (per volume)
+  │   └─ interpolation_brats_experiment.py     # Baselines over cohorts
+  ├─ statistics/
+  │   └─ metrics.py            # PSNR/SSIM/Bhattacharyya/LPIPS (+ROI)
+  ├─ tools/                    # I/O, paths, parallelism, metrics utils
+  ├─ utils/                    # NIfTI/LPS IO helpers, BRATS sorting
+  ├─ cfg/
+  │   ├─ smore_cfg.yaml        # Example SMORE config
+  │   └─ eclare_cfg.yaml       # Example ECLARE config
+  └─ README.md                 # This document
+```
 
-Local
+
+## Data layout assumptions
+
+We use BraTS-Men naming and folder structure. Each patient folder contains pulses and a segmentation:
+
+- `<PID>/<PID>-t1c.nii.gz`
+- `<PID>/<PID>-t2w.nii.gz`
+- `<PID>/<PID>-t2f.nii.gz` (FLAIR)
+- `<PID>/<PID>-seg.nii.gz`
+
+LR cohorts are organized by slice thickness: `low_res/{3mm,5mm,7mm}/<PID>/*.nii.gz`.
+
+
+## Models included
+
+1) SMORE – Self-super-resolution from through-plane slices
+- Entry point: `python -m src.mgmGrowth.tasks.superresolution.cli.smore --config cfg/smore_cfg.yaml`
+- Backed by external CLIs: `smore-train`, `smore-test`, `run-smore`
+- Mode "train": train per-volume and immediately infer, storing
+  - `out_root/SMORE/{3mm|5mm|7mm}/weights/<PID>-<pulse>.pt`
+  - `out_root/SMORE/{3mm|5mm|7mm}/output_volumes/<PID>-<pulse>.nii.gz`
+
+2) ECLARE – Self-super-resolution with explicit slice profile
+- Entry point: `python -m src.mgmGrowth.tasks.superresolution.cli.eclare --config cfg/eclare_cfg.yaml`
+- Backed by external CLIs: `eclare-train`, `eclare-test`, `run-eclare`
+- Mirrors the SMORE interface and output layout under `out_root/ECLARE/...`
+
+3) UNIRES – Multi-contrast reconstruction (external package)
+- Batch driver: `python -m src.mgmGrowth.tasks.superresolution.cli.unires --input-dir <LR/res> --output-dir <dest> --device cuda`
+- Expects one triplet per subject: `-t1c`, `-t2w`, `-t2f`
+- Calls the external `unires` binary; results are written per-subject under `--output-dir/<PID>`
+
+4) Interpolation baselines – SimpleITK resampling to 1×1×1 mm³
+- Pipeline: `python -m src.mgmGrowth.tasks.superresolution.pipelines.interpolation_brats_experiment --interp {nn|linear|bspline|lanczos|gaussian}`
+- Uses `engine/interpolation_runner.py` helpers and writes results under a model-like folder (e.g., `results/models/BSPLINE/{3mm,5mm,7mm}/output_volumes`).
+
+Note: SMORE/ECLARE/UNIRES binaries must be available in your PATH. This repo intentionally wraps them without vendoring their code.
+
+
+## Quick start
+
+1) Create a curated subset and LR cohorts
+
+```bash
+python -m src.mgmGrowth.tasks.superresolution.cli.prepare_brats_data \
+  --src-root  /path/to/BraTS_Men_Train \
+  --out-root  /path/to/BraTS/super_resolution \
+  --num-patients 50 \
+  --pulses t1c t2w t2f \
+  --resolutions 3 5 7 \
+  --jobs 8
+```
+
+Alternatively, just downsample an existing cohort directory:
+
 ```bash
 python -m src.mgmGrowth.tasks.superresolution.cli.downsample \
-  --src-root  ~/Python/Datasets/Meningiomas/BraTS/SR/subset \
-  --out-root  ~/Python/Datasets/Meningiomas/BraTS/SR/low_res/5mm \
+  --src-root  /path/to/subset \
+  --out-root  /path/to/low_res/5mm \
   --target-dz 5 \
   --jobs 8
 ```
-Server
+
+2) Run SMORE across pulses and resolutions via YAML
+
+Edit `cfg/smore_cfg.yaml` (paths, pulses, low_res_slices) and run:
+
 ```bash
-python -m src.mgmGrowth.tasks.superresolution.cli.downsample \
-  --src-root  /media/hddb/mario/data/Meningiomas/Brats \
-  --out-root  /media/hddb/mario/data/Meningiomas/downsampled_brats_5mm \
-  --target-dz 5
+python -m src.mgmGrowth.tasks.superresolution.cli.smore \
+  --config src/mgmGrowth/tasks/superresolution/cfg/smore_cfg.yaml
 ```
 
-python -m src.mgmGrowth.tasks.superresolution.cli.downsample \
-  --src-root  /media/hddb/mario/data/Meningiomas/Brats \
-  --out-root  /media/hddb/mario/data/Meningiomas/downsampled_brats_5mm \
-  --target-dz 5
+3) Run ECLARE (same idea, different out-root)
 
-### 2. Perform val
+```bash
+python -m src.mgmGrowth.tasks.superresolution.cli.eclare \
+  --config src/mgmGrowth/tasks/superresolution/cfg/eclare_cfg.yaml
+```
 
-Local
+4) Run the SMORE BraTS experiment pipeline (per-volume wrapper)
+
 ```bash
 python -m src.mgmGrowth.tasks.superresolution.pipelines.superresolution_brats_experiment \
-  --orig-root /media/hddb/mario/data/Meningiomas/Brats \
-  --lr-root   /media/hddb/mario/data/Meningiomas/downsampled_brats_5mm \
-  --out-root  /home/mariopascual/Projects/MENINGIOMA/SR/SMORE_Results \
-  --pulses    t1c \
+  --orig-root /path/to/BraTS/source_HR \
+  --lr-root   /path/to/low_res/5mm \
+  --out-root  /path/to/results/SMORE_5mm \
+  --pulses    t1c t2w \
   --slice-dz  5 \
   --gpu-id    0
-
-python -m src.mgmGrowth.tasks.superresolution.pipelines.superresolution_brats_experiment \
---orig-root /media/hddb/mario/data/Meningiomas/Brats \
---lr-root   /media/hddb/mario/data/Meningiomas/downsampled_brats_5mm \
---out-root  /home/mariopascual/Projects/MENINGIOMA/SR/SMORE_Results \
---pulses    t2w \
---slice-dz  5 \
---gpu-id    1
-
-run-smore --in-fpath /home/mariopasc/Python/Datasets/Meningiomas/raw/Meningioma_Adquisition/RM/SUSC/P1/SUSC_P1.nii.gz --out-dir /home/mariopasc/Python/Datasets/Meningiomas/raw/Meningioma_Adquisition/RM/SUSC/P1
-
-python -m src.mgmGrowth.tasks.superresolution.statistics.analysis \
-  --hr  ~/Python/Datasets/Meningiomas/BraTS/BraTS_Men_Train/BraTS-MEN-00012-000/BraTS-MEN-00012-000-t1c.nii.gz \
-  --sr  ~/Python/Datasets/Meningiomas/BraTS/SR/SMORE_Results/output_volumes/BraTS-MEN-00012-000-t1c.nii.gz \
-  --seg ~/Python/Datasets/Meningiomas/BraTS/BraTS_Men_Train/BraTS-MEN-00012-000/BraTS-MEN-00012-000-seg.nii.gz \
-  --out-dir ~/Python/Datasets/Meningiomas/BraTS/SR/SMORE_Results
 ```
 
-Server
+5) Interpolation baselines over the whole cohort
+
 ```bash
-python -m src.mgmGrowth.tasks.superresolution.pipelines.superresolution_brats_experiment \
-  --lr-root   /media/hddb/mario/data/Meningiomas/downsampled_brats_7mm \
-  --orig-root /media/hddb/mario/data/Meningiomas/Brats \
-  --out-root  /home/mariopascual/Projects/MENINGIOMA/SR \
-  --pulses    t2w \
-  --slice-dz  7 \
-  --gpu-id    1
+python -m src.mgmGrowth.tasks.superresolution.pipelines.interpolation_brats_experiment \
+  --interp bspline
 ```
+
+6) UNIRES batch driver (external binary)
+
+```bash
+python -m src.mgmGrowth.tasks.superresolution.cli.unires \
+  --input-dir  /path/to/low_res/5mm \
+  --output-dir /path/to/results/UNIRES/5mm \
+  --device cuda \
+  --threads 8
+```
+
+
+## Output structure
+
+SMORE/ECLARE (config runners)
+```
+<out_root>/
+  SMORE/ or ECLARE/
+    3mm/
+      weights/         # <PID>-<pulse>.pt
+      output_volumes/  # <PID>-<pulse>.nii.gz
+    5mm/
+      ...
+    7mm/
+      ...
+```
+
+SMORE pipeline (`superresolution_brats_experiment.py`)
+```
+<out_root>/
+  weights/          # flat: <PID>-<pulse>.pt
+  output_volumes/   # flat: <PID>-<pulse>.nii.gz
+  metrics_<tag>.npz # patient_ids only (metrics computed separately)
+```
+
+Interpolation pipeline (`interpolation_brats_experiment.py`)
+```
+.../results/models/<ALGO>/{3mm,5mm,7mm}/output_volumes/<PID>-<pulse>.nii.gz
+```
+
+UNIRES driver (`cli/unires.py`)
+```
+--output-dir/<PID>/  # per-subject outputs written by the external tool
+```
+
+
+## Evaluation and metrics
+
+We compute robust per-slice, per-ROI metrics against the original HR volumes:
+- PSNR (dB)
+- SSIM (Gaussian, masked by ROI)
+- Bhattacharyya distance (histogram overlap)
+- LPIPS (AlexNet) – optional; requires `torch` and `lpips`
+
+Run:
+
+```bash
+python -m src.mgmGrowth.tasks.superresolution.statistics.metrics \
+  --hr_root      /path/to/BraTS/super_resolution/subset \
+  --results_root /path/to/BraTS/super_resolution/results/models \
+  --pulse        all \
+  --slice-window 10 140 \
+  --workers      8 \
+  --out          /path/to/BraTS/super_resolution/results/metrics/metrics.npz
+```
+
+The NPZ includes `metrics` with shape `(P, 3, 3, M, 4, 4, 2)` and metadata arrays (`patient_ids`, `pulses`, `resolutions_mm`, `models`, `metric_names`, `roi_labels`, `stat_names`). See `statistics/metrics.py` for details.
+
+
+## Configuration (YAML)
+
+Both SMORE and ECLARE runners accept the same structure:
+
+```yaml
+mode: train # or inference
+data:
+  train_root: /path/to/low_res
+  test_root:  /path/to/low_res/test
+  out_root:   /path/to/results
+processing:
+  low_res_slices: ["3mm", "5mm", "7mm"]
+  pulses: ["t1c", "t2w", "t2f"]
+  gpu_id: 0
+network:
+  patch_size: 48
+  n_blocks: 16
+  n_channels: 32
+  batch_size: 32
+  n_patches: 832000
+  n_rots: 2
+```
+
+In "inference" mode, the runners will look for weights produced during training under the same `out_root/{MODEL}/{res}/weights/` directory.
+
+
+## Tips and troubleshooting
+
+- External CLIs: ensure `smore-*`, `run-smore`, `eclare-*`, `run-eclare`, and `unires` are in PATH on the target machine.
+- GPU selection: both SMORE/ECLARE runners accept `processing.gpu_id`.
+- Geometry mismatches: metrics logic tolerates ≤2 voxels padding per axis when aligning HR/SR/SEG (see `statistics/metrics.py`). Larger mismatches are skipped and reported.
+- LPIPS dependency: if `lpips` isn’t installed, LPIPS is returned as NaN (others remain valid).
+- Resampling window: adjust `--slice-window` to skip empty/extreme slices.
+
+
+## Citations
+
+- SMORE: Zeng et al., “Self Super-Resolution for Magnetic Resonance Images,” MICCAI 2018.
+- ECLARE: Remedios et al., “Self-supervised super-resolution for anisotropic MR images with and without slice gap,” SASHIMI 2023.
+- UNIRES: Brudfors et al., “UniRes: ...” (see the official repository/documentation for citation details).
+
+
+## License and acknowledgements
+
+This subpackage wraps external research code via their CLIs. Please consult their licenses. The surrounding pipeline code here is distributed under this repository’s license.

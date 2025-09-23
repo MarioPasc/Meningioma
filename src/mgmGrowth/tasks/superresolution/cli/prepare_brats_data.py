@@ -14,7 +14,7 @@ python -m src.mgmGrowth.tasks.superresolution.cli.prepare_brats_data \
     --src-root  /home/mpascual/research/datasets/meningiomas/BraTS/source/BraTS_Men_Train \
     --out-root  /home/mpascual/research/datasets/meningiomas/BraTS/super_resolution \
     --num-patients 50 \
-    --pulses t1c t2w t2f \
+    --pulses t1c t2w t2f t1n \
     --jobs 8
 """
 from __future__ import annotations
