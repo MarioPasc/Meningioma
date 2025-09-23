@@ -13,6 +13,13 @@ Residuals use a diverging colormap with a global symmetric window and a
 horizontal colorbar at the bottom labeled "Residual ΔI = NN − HR (a.u.)".
 
 Optional orientation labels from NIfTI affine: --orientation_labels
+
+python src/mgmGrowth/tasks/superresolution/visualization/show_sagital_example.py   \
+    --subject BraTS-MEN-00231-000   --slice_number 115   \
+    --super_resolution_path /home/mpascual/research/datasets/meningiomas/BraTS/super_resolution   \
+    --output_dir /home/mpascual/research/datasets/meningiomas/BraTS/super_resolution/results/metrics/example  \
+    --left_margin 0.07 --group_gap 0.05 --fig_height 4.5 --fig_width 12 --row_gap 0.15 \
+        
 """
 
 import os
@@ -279,16 +286,28 @@ def draw_grid_pdf(
     axcodes_map: Dict[Tuple[int,int], Optional[Tuple[str,str,str]]],
     residuals: List[np.ndarray],
     orientation_labels: bool = False,
+    row_gap: float = 0.002,
+    fig_width: float = 11.5,
+    fig_height: float = 6.9,
+    pair_gap: float = 0.010,
+    group_gap: float = 0.055,
+    first_left_gap: float = 0.025,
+    top_row_gap: Optional[float] = None,
+    left_margin: float = 0.06,
+    right_margin: float = 0.995,
+    top_margin: float = 0.955,
+    bottom_margin: float = 0.08,
+    wspace: float = 0.02,
 ) -> str:
     """Render and save a single-page PDF."""
     os.makedirs(paths.output_dir, exist_ok=True)
     out_name = f"{spec.subject}_sag{spec.slice_idx}_wide_pairs.pdf"
     out_path = os.path.join(paths.output_dir, out_name)
 
-    # Landscape A4 width cap
+    # Figure size (user-controllable). Keep a soft A4 width cap by default.
     A4_W = 11.69
-    fig_w = min(11.5, A4_W)
-    fig_h = 6.9  # wider than tall
+    fig_w = min(fig_width, A4_W)
+    fig_h = fig_height
 
     fig, axes = plt.subplots(
         nrows=spec.n_rows,
@@ -318,21 +337,6 @@ def draw_grid_pdf(
     colors[128] = [0, 0, 0, 1]
     res_cmap = ListedColormap(colors, name='black_center_div')
 
-    # Top headers centered over each pair of columns
-    top_y = 0.975
-    for p_idx, pulse in enumerate(spec.pulses):
-        axL = axes[0, 2*p_idx]
-        axR = axes[0, 2*p_idx + 1]
-        boxL = axL.get_position()
-        boxR = axR.get_position()
-        x_center = 0.5 * (boxL.x0 + boxL.x1 + boxR.x0 + boxR.x1) / 2.0 
-        if pulse.lower() == 't1c':
-            x_center -= 0.04
-        elif pulse.lower() == 't2f':
-            x_center += 0.042
-        elif pulse.lower() == 't1n':
-            x_center += 0.08
-        fig.text(x_center, top_y, pulse.upper(), color='white', ha='center', va='top')
 
     # Plot panels
     for r in range(spec.n_rows):
@@ -368,7 +372,78 @@ def draw_grid_pdf(
 
     # Compact spacing to bring slices closer
     # Increase horizontal space between columns to make room for centered HR
-    plt.subplots_adjust(left=0.06, right=0.995, top=0.955, bottom=0.08, wspace=0.08, hspace=0.003)
+    # 'row_gap' controls the vertical spacing (hspace) between rows.
+    plt.subplots_adjust(left=left_margin, right=right_margin, top=top_margin, bottom=bottom_margin, wspace=wspace, hspace=row_gap)
+
+    # Custom spacing: add larger separation between pulse groups and extra space before first pulse.
+    # Also bring the first row closer to the rest by reducing the gap between row 0 and row 1.
+    try:
+        G = len(spec.pulses)
+        R = spec.n_rows
+        # Determine inner horizontal bounds from current axes (top row)
+        x0s = []
+        x1s = []
+        for c in range(spec.n_cols):
+            b = axes[0, c].get_position()
+            x0s.append(b.x0)
+            x1s.append(b.x1)
+        inner_left = min(x0s)
+        inner_right = max(x1s)
+        inner_width = inner_right - inner_left
+
+        # Tunable layout parameters (in figure fraction units)
+        within_gap = pair_gap    # small gap between the two columns of a pulse
+        between_gap = group_gap  # larger gap between pulse groups
+        extra_left = first_left_gap  # extra space before the first pulse (separates from y labels)
+
+        total_gaps = extra_left + G*within_gap + (G-1)*between_gap
+        available = inner_width - total_gaps
+        # Compute panel width so everything fits between inner_left and inner_right
+        w_panel = max(0.0001, available / (2*G))
+
+        # Reposition columns group-wise
+        for g in range(G):
+            start_x = inner_left + extra_left + g * (2*w_panel + within_gap + between_gap)
+            for r in range(R):
+                # Left column of group g
+                bL = axes[r, 2*g].get_position()
+                axes[r, 2*g].set_position([start_x, bL.y0, w_panel, bL.height])
+                # Right column of group g
+                bR = axes[r, 2*g + 1].get_position()
+                axes[r, 2*g + 1].set_position([start_x + w_panel + within_gap, bR.y0, w_panel, bR.height])
+
+        # Adjust vertical gaps between all consecutive rows to match the target gap(s)
+        if R >= 2:
+            # Build row boxes from column 0 (same for all columns per row)
+            row_boxes = [axes[r, 0].get_position() for r in range(R)]
+            # Iterate from top row downwards, aligning each gap to its target
+            for r in range(R - 1):
+                upper = [axes[r, c].get_position() for c in range(spec.n_cols)]
+                lower = [axes[r+1, c].get_position() for c in range(spec.n_cols)]
+                # gap between these two rows (using column 0)
+                current_gap = row_boxes[r].y0 - (row_boxes[r+1].y0 + row_boxes[r+1].height)
+                # target gap for this pair
+                pair_target = row_gap if not (r == 0 and top_row_gap is not None) else max(0.0, top_row_gap)
+                if current_gap > pair_target:
+                    delta = current_gap - pair_target
+                    # shift the entire upper row down by delta
+                    for c in range(spec.n_cols):
+                        b = axes[r, c].get_position()
+                        axes[r, c].set_position([b.x0, b.y0 - delta, b.width, b.height])
+                    # update cached row_boxes
+                    row_boxes[r] = axes[r, 0].get_position()
+    except Exception as e:
+        logging.warning("Custom spacing adjustment failed: %s", e)
+
+    # Top headers centered over each pair of columns (after repositioning)
+    top_y = 0.975
+    for p_idx, pulse in enumerate(spec.pulses):
+        axL = axes[0, 2*p_idx]
+        axR = axes[0, 2*p_idx + 1]
+        boxL = axL.get_position()
+        boxR = axR.get_position()
+        x_center = 0.5 * ((boxL.x0 + boxL.x1) + (boxR.x0 + boxR.x1)) / 2.0
+        fig.text(x_center, top_y, pulse.upper(), color='white', ha='center', va='top')
 
     # Insert centered HR images between column pairs on the top row (just below headers)
     for p_idx, pulse in enumerate(spec.pulses):
@@ -446,6 +521,25 @@ def parse_args() -> argparse.Namespace:
                    help='Output directory')
     p.add_argument('--orientation_labels', action='store_true',
                    help='Overlay L/R and S/I labels from NIfTI affine on image panels')
+    p.add_argument('--row_gap', type=float, default=0.0015,
+                   help='Vertical spacing between rows (Matplotlib hspace fraction). Smaller = closer rows.')
+    p.add_argument('--fig_width', type=float, default=11.5,
+                   help='Figure width in inches. Larger makes panels bigger (up to A4 width cap by default).')
+    p.add_argument('--fig_height', type=float, default=6.9,
+                   help='Figure height in inches. Increase to make panels taller.')
+    p.add_argument('--pair_gap', type=float, default=0.010,
+                   help='Horizontal gap within a pulse pair (between the two columns).')
+    p.add_argument('--group_gap', type=float, default=0.055,
+                   help='Horizontal gap between pulse groups.')
+    p.add_argument('--first_left_gap', type=float, default=0.025,
+                   help='Extra left gap before the first pulse group (away from y labels).')
+    p.add_argument('--top_row_gap', type=float, default=None,
+                   help='Optional specific gap between row 0 and row 1. If omitted, uses row_gap.')
+    p.add_argument('--left_margin', type=float, default=0.06, help='Left figure margin (0-1).')
+    p.add_argument('--right_margin', type=float, default=0.995, help='Right figure margin (0-1).')
+    p.add_argument('--top_margin', type=float, default=0.955, help='Top figure margin (0-1).')
+    p.add_argument('--bottom_margin', type=float, default=0.08, help='Bottom figure margin (0-1).')
+    p.add_argument('--wspace', type=float, default=0.02, help='Matplotlib wspace between columns prior to custom packing.')
     p.add_argument('--log', default='INFO', help='Logging level (DEBUG, INFO, WARNING, ERROR)')
     return p.parse_args()
 
@@ -470,7 +564,22 @@ def main() -> None:
     hr_by_pulse = collect_hr_slices(spec, paths)
     imgs, kinds, axcodes_map, residuals = collect_grid(spec, paths, hr_by_pulse)
 
-    draw_grid_pdf(spec, paths, imgs, kinds, axcodes_map, residuals, orientation_labels=args.orientation_labels)
+    draw_grid_pdf(
+        spec, paths, imgs, kinds, axcodes_map, residuals,
+        orientation_labels=args.orientation_labels,
+        row_gap=args.row_gap,
+        fig_width=args.fig_width,
+        fig_height=args.fig_height,
+        pair_gap=args.pair_gap,
+        group_gap=args.group_gap,
+        first_left_gap=args.first_left_gap,
+        top_row_gap=args.top_row_gap,
+        left_margin=args.left_margin,
+        right_margin=args.right_margin,
+        top_margin=args.top_margin,
+        bottom_margin=args.bottom_margin,
+        wspace=args.wspace,
+    )
 
 
 if __name__ == "__main__":
