@@ -5,8 +5,8 @@ Down-sample BraTS in z only, with optional N-way patient-level parallelism.
 Example
 -------
 python -m src.mgmGrowth.tasks.superresolution.cli.downsample \
-    --src-root  ~/Datasets/BraTS_Men_Train \
-    --out-root  ~/Datasets/downsampled_brats_5mm \
+    --src-root  /media/mpascual/PortableSSD/Meningiomas/tasks/superresolution/high_resolution \
+    --out-root  /media/mpascual/PortableSSD/Meningiomas/tasks/superresolution/low_res \
     --target-dz 5 \
     --jobs 4
 """

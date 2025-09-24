@@ -431,10 +431,10 @@ def main() -> None:
         description="Compute PSNR/SSIM/Bhattacharyya/LPIPS for SR volumes.")
     ap.add_argument("--hr_root", type=pathlib.Path,
                     default=pathlib.Path(
-                        "/home/mpascual/research/datasets/meningiomas/BraTS/super_resolution/subset"))
+                        "/media/mpascual/PortableSSD/Meningiomas/tasks/superresolution/high_resolution"))
     ap.add_argument("--results_root", type=pathlib.Path,
                     default=pathlib.Path(
-                        "/home/mpascual/research/datasets/meningiomas/BraTS/super_resolution/results/models"))
+                        "/media/mpascual/PortableSSD/Meningiomas/tasks/superresolution/results/models"))
 
     # -------- pulse --------------------------------------------------------
     ap.add_argument("--pulse", choices=("t1c", "t2w", "t2f", "t1n", "all"),
@@ -449,7 +449,7 @@ def main() -> None:
 
     ap.add_argument("--out", type=pathlib.Path,
                     default=pathlib.Path(
-                        "/home/mpascual/research/datasets/meningiomas/BraTS/super_resolution/results/metrics/metrics.npz"))
+                        "/media/mpascual/PortableSSD/Meningiomas/tasks/superresolution/results/metrics/metrics.npz"))
     ap.add_argument("--workers", type=int, default=mp.cpu_count() - 1)
     args = ap.parse_args()
 

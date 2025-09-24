@@ -9,8 +9,8 @@ spacing, using SimpleITK and the resampling helpers defined in
 
 Folder layout
 -------------
-Input  : /home/mariopasc/Python/Datasets/Meningiomas/BraTS/SR/low_res/{3mm,5mm,7mm}/<case>/<mod>.nii.gz
-Output : /home/mariopasc/Python/Results/Meningioma/super_resolution/{ALGO}/{3mm,5mm,7mm}/output_volumes/<same-name>.nii.gz
+Input  : /media/mpascual/PortableSSD/Meningiomas/tasks/superresolution/low_res/{3mm,5mm,7mm}/<case>/<mod>.nii.gz
+Output : /media/mpascual/PortableSSD/Meningiomas/tasks/superresolution/results/models/T1N/BSPLINE/{3mm,5mm,7mm}/output_volumes/<same-name>.nii.gz
 
 The script is restart-safe: existing output files are skipped unless
 ``--overwrite`` is given.
@@ -29,8 +29,8 @@ from mgmGrowth.tasks.superresolution.engine import interpolation_runner as ir
 from mgmGrowth.tasks.superresolution import LOGGER as _LOG
 
 # ───────────────────────── configuration constants ────────────────────── #
-IN_ROOT = Path("/home/mpascual/research/datasets/meningiomas/BraTS/super_resolution/low_res")
-OUT_ROOT = Path("/home/mpascual/research/datasets/meningiomas/BraTS/super_resolution/results/models/BSPLINE")
+IN_ROOT = Path("/media/mpascual/PortableSSD/Meningiomas/tasks/superresolution/low_res/")
+OUT_ROOT = Path("/media/mpascual/PortableSSD/Meningiomas/tasks/superresolution/results/models/T1N/BSPLINE")
 RES_DIRS = ("3mm", "5mm", "7mm")
 TARGET_SPACING: Tuple[float, float, float] = (1.0, 1.0, 1.0)
 

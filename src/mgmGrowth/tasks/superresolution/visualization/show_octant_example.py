@@ -27,7 +27,7 @@ python src/mgmGrowth/tasks/superresolution/visualization/show_octant_example.py 
   --subject BraTS-MEN-00231-000 \
   --highres_dir /media/mpascual/PortableSSD/Meningiomas/tasks/superresolution/high_resolution \
   --models_dir  /media/mpascual/PortableSSD/Meningiomas/tasks/superresolution/results/models \
-  --pulses t1c t2f t2w \
+  --pulses t1c t2f t2w t1n \
   --models UNIRES SMORE ECLARE BSPLINE \
   --out /media/mpascual/PortableSSD/Meningiomas/tasks/superresolution/results/figures \
   --coords 65 120 135   # or three ints: k i j
