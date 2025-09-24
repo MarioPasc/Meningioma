@@ -234,7 +234,7 @@ def plot_octant(volume: np.ndarray,
     L = _brain_extent(vol_oct)          # the cube edge we’ll display
     
 
-    # crop the octant data cube to L×L×L
+    # crop the octant data cube to LxLxL
     dx = dy = dz = L                    # replaces previous dx,dy,dz
 
 

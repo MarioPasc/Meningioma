@@ -51,7 +51,7 @@ P42/
 ```
 All images in *results/* share:
 
-* **Resolution** 1 × 1 × 1 mm  
+* **Resolution** 1 x 1 x 1 mm  
 * **FoV / orientation** SRI24 T1 template  
 * **Intensity scale** 0-mean, unit-variance (brain voxels)  
 * **Perfect intra-patient co-registration** by construction.

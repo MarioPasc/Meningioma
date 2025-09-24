@@ -78,7 +78,7 @@ def transform_sanity_check(transform_path: str | Path) -> Dict[str, Any]:
         return {"ok": None, "reason": "binary_composite"}
 
     mat = np.loadtxt(transform_path, comments="#")
-    # ANTs affines are 3×4 (last col is translation)
+    # ANTs affines are 3x4 (last col is translation)
     scale_shear = mat[:, :3].ravel()
     translation = mat[:, 3]
 

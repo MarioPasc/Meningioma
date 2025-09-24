@@ -6,10 +6,10 @@ viz_model_comparison_octants.py
 Octant-based visualizations for super-resolution model comparison.
 
 Outputs:
-1) HR-only figure: 1×P grid (columns = pulses) with octant views, optional
+1) HR-only figure: 1xP grid (columns = pulses) with octant views, optional
    segmentation outline.
 2) Per-pulse model comparison: for each pulse (and each requested resolution),
-   a 2×M grid with:
+   a 2xM grid with:
      - Row 1: SR octant per model
      - Row 2: Residual octant per model (SR − HR), diverging cmap centered at 0.
 
@@ -374,7 +374,7 @@ class Args:
 
 
 def parse_args() -> Args:
-    p = argparse.ArgumentParser(description="Per-pulse octant grids: rows=3/5/7mm, cols=2×models (SR|Residual)")
+    p = argparse.ArgumentParser(description="Per-pulse octant grids: rows=3/5/7mm, cols=2xmodels (SR|Residual)")
     p.add_argument("--subject", required=True)
     p.add_argument("--highres_dir", required=True, type=Path)
     p.add_argument("--models_dir", required=True, type=Path)
@@ -491,7 +491,7 @@ def make_pulse_figure(
     rmax = max(symmetric_rmax(all_residuals, q=99.0), 1e-6)
     err_cmap = plt.get_cmap('afmhot')
 
-    # Grid: rows = 3/5/7mm; cols = 2 × models (SR | Residual)
+    # Grid: rows = 3/5/7mm; cols = 2 x models (SR | Residual)
     n_rows = len(res_rows)
     n_cols = 2 * len(args.models)
 

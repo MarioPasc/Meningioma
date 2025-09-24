@@ -190,7 +190,7 @@ def ks_pipeline(hr_root: pathlib.Path,
             # structure: dict[roi_label → list[p_i]]
             roi_pvals: dict[int | None, list[float]] = {None: [], 1: [], 2: [], 3: []}
 
-            # Prepare async jobs (patient × roi)
+            # Prepare async jobs (patient x roi)
             async_results = []
             for it in items:
                 for roi_label in (None, 1, 2, 3):

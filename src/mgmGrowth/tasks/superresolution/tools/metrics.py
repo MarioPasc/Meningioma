@@ -53,7 +53,7 @@ def metrics_regions(
     seg: Path | None,
 ) -> NDArray[np.float32]:
     """
-    Compute [[PSNR, SSIM, MI] × 4]  (whole + 3 tumour ROIs).
+    Compute [[PSNR, SSIM, MI] x 4]  (whole + 3 tumour ROIs).
     """
     gt_n, sr_n = map(_norm, (_load(gt), _load(sr)))
     out = np.full((4, 3), np.nan, dtype=np.float32)

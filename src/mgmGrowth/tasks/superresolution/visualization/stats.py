@@ -292,7 +292,7 @@ def wilcoxon_heatmap(ax: plt.Axes, df: pd.DataFrame, models: List[str], title: s
     baseline = baseline[0] if len(baseline) else "BSPLINE"
 
     if transpose_to_items is None:
-        # original layout: rows=ROI, cols=resolution×model (non-baseline)
+        # original layout: rows=ROI, cols=resolutionxmodel (non-baseline)
         res_order = sorted(df["resolution"].astype(int).unique())
         cols = [(r, m) for r in res_order for m in models if m != baseline]
         mat = np.full((len(rois), len(cols)), np.nan, float)
@@ -339,7 +339,7 @@ def wilcoxon_heatmap(ax: plt.Axes, df: pd.DataFrame, models: List[str], title: s
     
 def icc_bars(ax: plt.Axes, df: pd.DataFrame, palette: Dict[str,str], title: str, roi: str = "all") -> None:
     """
-    Median ICC(2,1) per model × resolution for a selected ROI across features.
+    Median ICC(2,1) per model x resolution for a selected ROI across features.
     """
     if df.empty:
         ax.text(0.5, 0.5, "No ICC results", ha="center", va="center"); ax.set_axis_off(); return
@@ -391,9 +391,9 @@ def make_panels_for_pulse(pulse: str, stats: Dict[str, object], out_dir: pathlib
         figA.savefig(out); LOG.info("Saved %s", out)
     plt.close(figA)
 
-    # --- Panel B or 1×3 combined panel if ICC missing ---
+    # --- Panel B or 1x3 combined panel if ICC missing ---
     if icc is None or icc.empty:
-        LOG.warning("ICC empty for pulse=%s. Building 1×3 panel (Adjusted, Forest, Wilcoxon).", pulse)
+        LOG.warning("ICC empty for pulse=%s. Building 1x3 panel (Adjusted, Forest, Wilcoxon).", pulse)
         fig, axes = plt.subplots(1, 3, figsize=(10.0, 3.2),
                                  gridspec_kw={"width_ratios":[1.2, 1.2, 1.4]},
                                  constrained_layout=True)
@@ -421,7 +421,7 @@ def make_panels_for_pulse(pulse: str, stats: Dict[str, object], out_dir: pathlib
             fig.savefig(out); LOG.info("Saved %s", out)
         plt.close(fig)
     else:
-        # Keep previous 1×2 B when ICC available
+        # Keep previous 1x2 B when ICC available
         figB, axesB = plt.subplots(1, 2, figsize=(7.0, 3.2), constrained_layout=True)
         wilcoxon_heatmap(axesB[0], wilc, meta["models"], title=f"{pulse.upper()}: Wilcoxon vs BSPLINE")
         icc_bars(axesB[1], icc, palette, title=f"{pulse.upper()}: Radiomic stability", roi="all")

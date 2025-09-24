@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-WIDE 4x(2×pulses) sagittal grid with error maps and single PDF output.
+WIDE 4x(2xpulses) sagittal grid with error maps and single PDF output.
 
 Layout per pulse (two columns):
 - Row 'hr':   left = HR slice;             right = blank
@@ -506,7 +506,7 @@ class PathsSpec:
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description='Render wide 4×(2×pulses) sagittal grid with residuals.')
+    p = argparse.ArgumentParser(description='Render wide 4x(2xpulses) sagittal grid with residuals.')
     p.add_argument('--subject', default="BraTS-MEN-00231-000", help='Subject ID')
     p.add_argument('--super_resolution_path',
                    default="/home/mpascual/research/datasets/meningiomas/BraTS/super_resolution",

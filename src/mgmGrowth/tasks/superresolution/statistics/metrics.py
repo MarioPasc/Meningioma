@@ -75,11 +75,11 @@ from mgmGrowth.tasks.superresolution import LOGGER
 
 # ------------------------------------------------------------- constants ---
 ROI_LABELS   = ("all", "core", "edema", "surround")         # 0,1,2,3
-METRIC_NAMES = ("PSNR", "SSIM", "BC", "LPIPS")
+METRIC_NAMES = ("PSNR", "SSIM")
 STAT_NAMES   = ("mean", "std")                              # NEW axis length = 2
-PULSES       = ("t1c", "t2w", "t2f")
+PULSES       = ("t1c", "t1n", "t2w", "t2f")
 RESOLUTIONS  = (3, 5, 7)                                    # mm
-HR_RE        = re.compile(r"^(?P<pid>[^/]+)-(?P<pulse>t1c|t2w|t2f)\.nii\.gz$")
+HR_RE        = re.compile(r"^(?P<pid>[^/]+)-(?P<pulse>t1c|t1n|t2w|t2f)\.nii\.gz$")
 
 # ---------------------------------------------------------- dataclasses ---
 @dataclass(frozen=True)
@@ -289,7 +289,7 @@ def lpips_slice(hr2d: np.ndarray,
     hr_scaled = _scale(hr_masked)
     sr_scaled = _scale(sr_masked)
 
-    # shape: 1×3×H×W (RGB replicated)
+    # shape: 1x3xHxW (RGB replicated)
     hr_t = torch.from_numpy(hr_scaled).float().unsqueeze(0).repeat(3, 1, 1)
     sr_t = torch.from_numpy(sr_scaled).float().unsqueeze(0).repeat(3, 1, 1)
     hr_t, sr_t = hr_t.unsqueeze(0).to(_DEVICE), sr_t.unsqueeze(0).to(_DEVICE)
@@ -437,7 +437,7 @@ def main() -> None:
                         "/home/mpascual/research/datasets/meningiomas/BraTS/super_resolution/results/models"))
 
     # -------- pulse --------------------------------------------------------
-    ap.add_argument("--pulse", choices=("t1c", "t2w", "t2f", "all"),
+    ap.add_argument("--pulse", choices=("t1c", "t2w", "t2f", "t1n", "all"),
                     default="all",
                     help="Evaluate given pulse or all (default)")
 
@@ -488,7 +488,7 @@ def main() -> None:
                                           res))
                 if not items:
                     continue
-                LOGGER.info("Model %s | %d patients | 1×1×%d mm", model, len(items), res)
+                LOGGER.info("Model %s | %d patients | 1x1x%d mm", model, len(items), res)
 
                 PoolClass = mp_threads.Pool if _DEVICE.type == "cuda" else mp.Pool
 

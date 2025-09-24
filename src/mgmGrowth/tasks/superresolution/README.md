@@ -69,7 +69,7 @@ LR cohorts are organized by slice thickness: `low_res/{3mm,5mm,7mm}/<PID>/*.nii.
 - Expects one triplet per subject: `-t1c`, `-t2w`, `-t2f`
 - Calls the external `unires` binary; results are written per-subject under `--output-dir/<PID>`
 
-4) Interpolation baselines – SimpleITK resampling to 1×1×1 mm³
+4) Interpolation baselines – SimpleITK resampling to 1x1x1 mm³
 - Pipeline: `python -m src.mgmGrowth.tasks.superresolution.pipelines.interpolation_brats_experiment --interp {nn|linear|bspline|lanczos|gaussian}`
 - Uses `engine/interpolation_runner.py` helpers and writes results under a model-like folder (e.g., `results/models/BSPLINE/{3mm,5mm,7mm}/output_volumes`).
 

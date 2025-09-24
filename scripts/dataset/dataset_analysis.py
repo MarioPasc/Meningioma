@@ -388,7 +388,7 @@ def analyze_per_pulse_segmentation(
                     except ValueError:
                         pass
 
-        # Then, gather the pulse-level data for the 1×3 subplot
+        # Then, gather the pulse-level data for the 1x3 subplot
         for patient_id, patient_data in data.items():
             pulses = patient_data.get("pulses", {})
 

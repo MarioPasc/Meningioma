@@ -303,7 +303,7 @@ def fit_lmm_primary(df: pd.DataFrame, pulse: str):
     sub["resolution_c"]  = sub["resolution"].astype("category")
     sub["model_c"]       = sub["model"].astype("category")
 
-    # keep complete panels (patient, roi) across all model×resolution cells
+    # keep complete panels (patient, roi) across all modelxresolution cells
     full_n = sub["model_c"].nunique() * sub["resolution_c"].nunique()
     cnt = (sub.assign(cell=sub["model_c"].astype(str) + "|" + sub["resolution_c"].astype(str))
               .groupby(["patient","roi"])["cell"].nunique().reset_index(name="n"))

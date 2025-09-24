@@ -53,7 +53,7 @@ def _slice_key(path: str) -> tuple[float, int]:
 
         pos = np.asarray(ds.ImagePositionPatient, dtype=float)        # (x, y, z)
         orient = np.asarray(ds.ImageOrientationPatient, dtype=float)  # (6,)
-        normal = np.cross(orient[:3], orient[3:])                     # n = r × c
+        normal = np.cross(orient[:3], orient[3:])                     # n = r x c
         loc = float(np.dot(pos, normal))
 
         inst = int(getattr(ds, "InstanceNumber", 0))
@@ -163,7 +163,7 @@ def write_nrrd(files: List[str], out_path: Path, compress: bool = True) -> None:
 
 
 def determinant_direction(img: sitk.Image) -> float:
-    """Return det(3×3 direction matrix)."""
+    """Return det(3x3 direction matrix)."""
     d = img.GetDirection()
     return (d[0] * (d[4] * d[8] - d[5] * d[7])
             - d[1] * (d[3] * d[8] - d[5] * d[6])

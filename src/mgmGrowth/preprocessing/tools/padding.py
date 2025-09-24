@@ -7,7 +7,7 @@ This script provides two functions:
 2. reverse_letterbox: Receives a 3D predicted mask (as a SimpleITK image) and the extra_info dictionary,
    and returns the mask cropped and inversely resampled to the original in-plane dimensions.
 
-These functions are intended for pipelines where images are first resampled to a physical voxel size (e.g., 1×1×1 mm³)
+These functions are intended for pipelines where images are first resampled to a physical voxel size (e.g., 1x1x1 mm³)
 and then, for CNN processing, letterboxed/padded to a fixed digital size. If physical measurements need to be made on the CNN output,
 the reverse transformation can be applied.
   

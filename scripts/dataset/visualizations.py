@@ -5,7 +5,7 @@ import nibabel as nib
 
 def plot_axial_slices(patient_id="P40", n_slices=5, mask=True, white=False, grey=False, csf=False):
     """
-    Generate a 3×N plot showing multiple axial slices of a patient with one pulse per row.
+    Generate a 3xN plot showing multiple axial slices of a patient with one pulse per row.
     
     Args:
         patient_id: Patient identifier
