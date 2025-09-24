@@ -220,17 +220,6 @@ def symmetric_rmax(residuals: Sequence[np.ndarray], q: float = 99.0) -> float:
     return float(max(vals)) if vals else 1.0
 
 
-def build_black_center_diverging() -> ListedColormap:
-    """Use berlin_r if present; fallback to seismic; force exact center to black."""
-    try:
-        base = plt.get_cmap('berlin_r')
-    except Exception:
-        base = plt.get_cmap('seismic')
-    colors = base(np.linspace(0, 1, 256))
-    colors[127] = [0, 0, 0, 1]; colors[128] = [0, 0, 0, 1]
-    return ListedColormap(colors, name='black_center_div')
-
-
 # -------------------- render octant to raster figure ------------------------
 
 def _with_global_minmax_for_plot_octant(
