@@ -101,7 +101,7 @@ def run_training_and_inference(config: EclareFullConfig) -> None:
                 else:
                     LOGGER.warning("Weights file not found: %s", best_weights)
 
-                if sr_volume.exists():
+                if Path(sr_volume).exists():
                     LOGGER.info("Looking for SR volume at %s", sr_volume)
                     shutil.copy2(sr_volume, target_sr)
                     LOGGER.info("Saved SR volume → %s", target_sr)

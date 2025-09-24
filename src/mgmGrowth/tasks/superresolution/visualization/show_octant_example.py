@@ -199,58 +199,58 @@ def _otsu_threshold(x: np.ndarray) -> float:
 
 def compute_head_mask_from_hr(hr_vol_LPS: np.ndarray) -> np.ndarray:
     """
-    Estimate head/skull/brain mask from HR magnitude only.
-    Steps: robust rescale → optional smoothing → Otsu → largest CC → hole fill.
-    Returns boolean mask (True = head; False = background/air).
+    Head/background mask from HR magnitude using the largest 3D connected component.
+
+    Steps:
+      1) Robust low-percentile threshold to drop speckle (no Otsu).
+      2) Keep the largest connected component (18-connectivity).
+      3) Fill internal holes and lightly close gaps.
+
+    Returns
+    -------
+    np.ndarray
+        Boolean mask with True for head/skull/brain and False for air/background.
     """
     v = np.abs(hr_vol_LPS.astype(np.float32))
     v[~np.isfinite(v)] = 0.0
 
-    # robust rescale to [0,1] to stabilize Otsu
+    # Robust tiny threshold to suppress numerical noise
     nz = v[v > 0]
-    if nz.size > 0:
-        lo, hi = np.percentile(nz, [0.5, 99.8])
-        if hi > lo:
-            v = np.clip((v - lo) / (hi - lo), 0.0, 1.0)
+    if nz.size == 0:
+        return np.zeros_like(v, dtype=bool)
+    thr = max(1e-6, float(np.percentile(nz, 0.5)))  # 0.5th percentile is conservative
+    fg = v > thr
 
-    # optional light smoothing
-    try:
-        from scipy.ndimage import gaussian_filter
-        v = gaussian_filter(v, sigma=1.0)
-    except Exception:
-        pass
-
-    thr = _otsu_threshold(v)
-    mask = v >= thr
-
-    # morphology and largest component keeping
     try:
         from scipy.ndimage import (
-            binary_opening, binary_closing, binary_fill_holes, label,
-            generate_binary_structure,
+            binary_opening, binary_closing, binary_fill_holes,
+            label, generate_binary_structure,
         )
         st = generate_binary_structure(3, 2)  # 18-connectivity
-        mask = binary_opening(mask, structure=st, iterations=1)
+        fg = binary_opening(fg, structure=st, iterations=1)
+
+        labels, nlab = label(fg, structure=st)
+        if nlab == 0:
+            return np.zeros_like(fg, dtype=bool)
+
+        counts = np.bincount(labels.ravel())
+        counts[0] = 0  # ignore background
+        keep = int(counts.argmax())
+        mask = labels == keep
+
         mask = binary_fill_holes(mask)
-        labels, nlab = label(mask, structure=st)
-        if nlab > 0:
-            counts = np.bincount(labels.ravel())
-            counts[0] = 0
-            keep = counts.argmax()
-            mask = labels == keep
         mask = binary_closing(mask, structure=st, iterations=1)
+        return mask
     except Exception:
-        # no SciPy: accept the raw threshold mask
-        pass
-
-    return mask
-
-
+        # Fallback without SciPy: return foreground; still zeros-out air.
+        return fg
+    
 def apply_background_black(vol: np.ndarray, mask: np.ndarray) -> np.ndarray:
     """Zero out everything outside the head mask."""
     out = vol.copy()
     out[~mask] = 0.0
     return out
+
 
 
 
@@ -512,7 +512,7 @@ def make_pulse_figure(
             axL.set_facecolor('black')
 
             # Residual octant (masked, normalized to [-1,1])
-            res_vol = signed_residual(masked_sr, masked_hr) / rmax
+            res_vol = signed_residual(masked_sr, masked_hr)
             res_img = render_octant_png(
                 res_vol, coords,
                 segmentation=None, cmap=res_cmap,
