@@ -19,7 +19,7 @@ Optional orientation labels from NIfTI affine: --orientation_labels
 python src/mgmGrowth/tasks/superresolution/visualization/show_sagital_example.py   \
     --subject BraTS-MEN-00231-000   --slice_number 115   \
     --super_resolution_path /home/mpascual/research/datasets/meningiomas/BraTS/super_resolution   \
-    --output_dir /home/mpascual/research/datasets/meningiomas/BraTS/super_resolution/results/metrics/example  \
+    --output_dir /media/mpascual/PortableSSD/Meningiomas/tasks/superresolution/results/figures  \
     --left_margin 0.07 --group_gap 0.05 --fig_height 4.5 --fig_width 12 --row_gap 0.15 \
         
 """
