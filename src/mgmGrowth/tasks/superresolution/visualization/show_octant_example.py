@@ -177,22 +177,81 @@ def center_of_mass(mask: np.ndarray) -> Tuple[int, int, int]:
     i = int(round(mean_ijk[0])); j = int(round(mean_ijk[1])); k = int(round(mean_ijk[2]))
     return k, i, j
 
-def compute_brain_mask(hr_vol_LPS: np.ndarray, seg_LPS: Optional[np.ndarray]) -> np.ndarray:
-    """
-    Brain/background mask.
-    Priority: use segmentation if available; otherwise HR>0.
-    Returns a boolean array with True for brain voxels.
-    """
-    if seg_LPS is not None and np.any(seg_LPS > 0):
-        return seg_LPS > 0
-    return hr_vol_LPS > 0
+def _otsu_threshold(x: np.ndarray) -> float:
+    """1D Otsu on finite, positive values."""
+    x = x[np.isfinite(x)]
+    x = x[x > 0]
+    if x.size == 0:
+        return 0.0
+    hist, edges = np.histogram(x, bins=256)
+    p = hist.astype(np.float64)
+    p /= p.sum() + 1e-12
+    bins = (edges[:-1] + edges[1:]) * 0.5
+    omega = np.cumsum(p)
+    mu = np.cumsum(p * bins)
+    mu_t = mu[-1]
+    denom = omega * (1.0 - omega)
+    denom[denom == 0] = np.nan
+    sigma_b2 = (mu_t * omega - mu) ** 2 / denom
+    k = np.nanargmax(sigma_b2)
+    return float(bins[k])
 
 
-def apply_mask(vol: np.ndarray, mask: np.ndarray) -> np.ndarray:
-    """Zero background outside mask."""
+def compute_head_mask_from_hr(hr_vol_LPS: np.ndarray) -> np.ndarray:
+    """
+    Estimate head/skull/brain mask from HR magnitude only.
+    Steps: robust rescale → optional smoothing → Otsu → largest CC → hole fill.
+    Returns boolean mask (True = head; False = background/air).
+    """
+    v = np.abs(hr_vol_LPS.astype(np.float32))
+    v[~np.isfinite(v)] = 0.0
+
+    # robust rescale to [0,1] to stabilize Otsu
+    nz = v[v > 0]
+    if nz.size > 0:
+        lo, hi = np.percentile(nz, [0.5, 99.8])
+        if hi > lo:
+            v = np.clip((v - lo) / (hi - lo), 0.0, 1.0)
+
+    # optional light smoothing
+    try:
+        from scipy.ndimage import gaussian_filter
+        v = gaussian_filter(v, sigma=1.0)
+    except Exception:
+        pass
+
+    thr = _otsu_threshold(v)
+    mask = v >= thr
+
+    # morphology and largest component keeping
+    try:
+        from scipy.ndimage import (
+            binary_opening, binary_closing, binary_fill_holes, label,
+            generate_binary_structure,
+        )
+        st = generate_binary_structure(3, 2)  # 18-connectivity
+        mask = binary_opening(mask, structure=st, iterations=1)
+        mask = binary_fill_holes(mask)
+        labels, nlab = label(mask, structure=st)
+        if nlab > 0:
+            counts = np.bincount(labels.ravel())
+            counts[0] = 0
+            keep = counts.argmax()
+            mask = labels == keep
+        mask = binary_closing(mask, structure=st, iterations=1)
+    except Exception:
+        # no SciPy: accept the raw threshold mask
+        pass
+
+    return mask
+
+
+def apply_background_black(vol: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    """Zero out everything outside the head mask."""
     out = vol.copy()
     out[~mask] = 0.0
     return out
+
 
 
 # -------------------- residuals and colormap --------------------------------
@@ -404,9 +463,9 @@ def make_pulse_figure(
     seg_path = hr_seg_path(args.highres_dir, args.subject)
     seg_LPS = data_LPS(load_nii(seg_path)) if seg_path.exists() else None
 
-    # Brain/background mask from HR (or seg)
-    brain_mask = compute_brain_mask(hr_LPS, seg_LPS)
-    masked_hr = apply_mask(hr_LPS, brain_mask)
+    # --- build head mask (from HR only) and apply to HR ---
+    head_mask = compute_head_mask_from_hr(hr_LPS)
+    masked_hr = apply_background_black(hr_LPS, head_mask)
 
     # Cache SR (masked) and collect residuals for global window
     sr_cache: Dict[Tuple[str, int], np.ndarray] = {}
@@ -418,7 +477,7 @@ def make_pulse_figure(
             if (sr_nii.shape != hr_nii.shape) or not np.allclose(sr_nii.affine, hr_nii.affine):
                 sr_nii = resample_like(sr_nii, hr_nii, order=1)
             sr_LPS = data_LPS(sr_nii)
-            masked_sr = apply_mask(sr_LPS, brain_mask)
+            masked_sr = apply_background_black(sr_LPS, head_mask)
             sr_cache[(m, rmm)] = masked_sr
 
             all_residuals.append(signed_residual(masked_sr, masked_hr))
@@ -527,8 +586,12 @@ def make_pulse_figure(
     sm.set_array([])
     cbar = fig.colorbar(sm, ax=axes.ravel().tolist(), orientation='horizontal', fraction=0.035, pad=0.05)
     cbar.set_label(r"Residual $\Delta I =$ SR $-$ HR (a.u.)", color='white')
-    if getattr(cbar, 'outline', None) is not None:
-        cbar.outline.set_edgecolor('white')
+    outline = getattr(cbar, 'outline', None)
+    if outline is not None:
+        try:
+            outline.set_edgecolor('white')  # type: ignore[attr-defined]
+        except Exception:
+            pass
     cbar.ax.tick_params(color='white', labelcolor='white')
 
     # Save

@@ -89,7 +89,7 @@ def run_training_and_inference(config: EclareFullConfig) -> None:
 
                 # ~~~ Collect outputs ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
                 best_weights = weights_src_dir / "best_weights.pt"
-                sr_volume = sr_generated.strip(".nii")
+                sr_volume = sr_generated.stem.rstrip(".nii")
 
                 target_weights = weights_dir / f"{base_name}.pt"
                 target_sr = output_dir / f"{base_name}.nii.gz"
