@@ -91,9 +91,9 @@ def configure_matplotlib() -> None:
 def build_black_center_diverging() -> ListedColormap:
     """
     Custom diverging map:
-      negative: #BB5566  →  0.0
+      negative: #762A83  →  0.0
       zero    : #000000  →  0.5
-      positive: #004488  →  1.0
+      positive: #ffe945  →  1.0
     """
     def _hex_rgba(h: str) -> np.ndarray:
         h = h.lstrip('#')
@@ -102,8 +102,8 @@ def build_black_center_diverging() -> ListedColormap:
         b = int(h[4:6], 16) / 255.0
         return np.array([r, g, b, 1.0], dtype=float)
 
-    neg = _hex_rgba("BB5566")  # low end (SR−HR < 0)
-    pos = _hex_rgba("004488")  # high end (SR−HR > 0)
+    neg = _hex_rgba("ffe945")  # low end (SR−HR < 0)
+    pos = _hex_rgba("762A83")  # high end (SR−HR > 0)
     blk = np.array([0.0, 0.0, 0.0, 1.0], dtype=float)
 
     n = 256
@@ -329,6 +329,11 @@ def render_octant_png(
         )
         plt.close(fig)
         img = plt.imread(tmp_path)
+        # If PNG has alpha channel, composite over black to avoid white matting
+        if img.ndim == 3 and img.shape[-1] == 4:
+            rgb = img[..., :3]
+            alpha = img[..., 3:4]
+            img = rgb * alpha  # black background: (1-alpha)*0 added implicitly
     finally:
         try:
             os.remove(tmp_path)
@@ -482,9 +487,9 @@ def make_pulse_figure(
 
             all_residuals.append(signed_residual(masked_sr, masked_hr))
 
-    # Residual window and custom colormap
+    # Error window (99th percentile of |SR−HR|) and sequential colormap for error
     rmax = max(symmetric_rmax(all_residuals, q=99.0), 1e-6)
-    res_cmap = build_black_center_diverging()
+    err_cmap = plt.get_cmap('afmhot')
 
     # Grid: rows = 3/5/7mm; cols = 2 × models (SR | Residual)
     n_rows = len(res_rows)
@@ -507,20 +512,23 @@ def make_pulse_figure(
                 enforce_minmax=None, figsize=(4, 4),
             )
             axL = axes[r_idx, 2*m_idx]
-            axL.imshow(sr_img, origin='upper'); axL.set_xticks([]); axL.set_yticks([])
+            axL.imshow(sr_img, origin='upper', interpolation='nearest'); axL.set_xticks([]); axL.set_yticks([])
             for s in axL.spines.values(): s.set_visible(False)
             axL.set_facecolor('black')
 
-            # Residual octant (masked, normalized to [-1,1])
-            res_vol = signed_residual(masked_sr, masked_hr)
-            res_img = render_octant_png(
-                res_vol, coords,
-                segmentation=None, cmap=res_cmap,
+            # Error octant: |SR − HR| normalized by rmax → [0, 100]
+            err_vol = np.abs(signed_residual(masked_sr, masked_hr))
+            err_vol = (100.0 * np.clip(err_vol / rmax, 0.0, 1.0)).astype(np.float32)
+            # Ensure background is exact 0
+            err_vol = apply_background_black(err_vol, head_mask)
+            err_img = render_octant_png(
+                err_vol, coords,
+                segmentation=None, cmap=err_cmap,
                 seg_alpha=0.0, only_line=False,
-                enforce_minmax=(-1.0, +1.0), figsize=(4, 4),
+                enforce_minmax=(0.0, 100.0), figsize=(4, 4),
             )
             axR = axes[r_idx, 2*m_idx + 1]
-            axR.imshow(res_img, origin='upper'); axR.set_xticks([]); axR.set_yticks([])
+            axR.imshow(err_img, origin='upper', interpolation='nearest'); axR.set_xticks([]); axR.set_yticks([])
             for s in axR.spines.values(): s.set_visible(False)
             axR.set_facecolor('black')
 
@@ -581,11 +589,11 @@ def make_pulse_figure(
         x_center = 0.5 * ((boxL.x0 + boxL.x1) + (boxR.x0 + boxR.x1)) / 2.0
         fig.text(x_center, top_y, m, color='white', ha='center', va='top')
 
-    # Colorbar with physical range
-    sm = plt.cm.ScalarMappable(norm=Normalize(-rmax, +rmax), cmap=res_cmap)
+    # Colorbar for error [0, 100] (100 ≈ 99th percentile of |SR−HR|)
+    sm = plt.cm.ScalarMappable(norm=Normalize(0.0, 100.0), cmap=err_cmap)
     sm.set_array([])
     cbar = fig.colorbar(sm, ax=axes.ravel().tolist(), orientation='horizontal', fraction=0.035, pad=0.05)
-    cbar.set_label(r"Residual $\Delta I =$ SR $-$ HR (a.u.)", color='white')
+    cbar.set_label(r"Absolute Residual Error $\,|\mathrm{SR} - \mathrm{HR}|$", color='white')
     outline = getattr(cbar, 'outline', None)
     if outline is not None:
         try:

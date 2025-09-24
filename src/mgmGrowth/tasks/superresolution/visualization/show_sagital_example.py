@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 """
-WIDE 4x(2×pulses) sagittal grid with residual maps and single PDF output.
+WIDE 4x(2×pulses) sagittal grid with error maps and single PDF output.
 
 Layout per pulse (two columns):
 - Row 'hr':   left = HR slice;             right = blank
-- Rows lower: left = residual (NN − HR);   right = NN-upsampled slice
+- Rows lower: left = error |NN − HR|;      right = NN-upsampled slice
 
 Top headers are centered over each 2-column pulse group.
 Row labels use lowercase 'mm'. No suptitle.
 
-Residuals use a diverging colormap with a global symmetric window and a
-horizontal colorbar at the bottom labeled "Residual ΔI = NN − HR (a.u.)".
+Error maps use a sequential colormap (afmhot) with 0 mapped to black.
+Values are scaled to 0–100 using a global rmax estimated as the 99th percentile
+of |NN − HR| across all panels. A horizontal colorbar is labeled
+"Error |NN − HR| (0–100)".
 
 Optional orientation labels from NIfTI affine: --orientation_labels
 
@@ -319,23 +321,15 @@ def draw_grid_pdf(
     )
     fig.patch.set_facecolor('black')
 
-    # Compute global symmetric window for residuals (robust 99th of |.|, then symmetric)
+    # Compute global scale for error maps (robust 99th of |NN−HR|)
     if residuals:
         q = [np.percentile(np.abs(r[np.isfinite(r)]), 99.0) for r in residuals]
         rmax = float(max(q)) if q else 1.0
     else:
         rmax = 1.0
-    res_norm = Normalize(vmin=-rmax, vmax=rmax)
-    # Build a residual colormap with pure black at the center (value 0)
-    try:
-        base_cmap = plt.get_cmap('berlin_r')
-    except Exception:
-        base_cmap = plt.get_cmap('seismic')
-    colors = base_cmap(np.linspace(0, 1, 256))
-    # Force exact midpoint to black so 0 residual maps to black
-    colors[127] = [0, 0, 0, 1]
-    colors[128] = [0, 0, 0, 1]
-    res_cmap = ListedColormap(colors, name='black_center_div')
+    # Error display normalization: 0..100 (0=black)
+    res_norm = Normalize(vmin=0.0, vmax=100.0)
+    res_cmap = plt.get_cmap('afmhot')
 
 
     # Plot panels
@@ -355,7 +349,9 @@ def draw_grid_pdf(
                 continue
 
             if kind == 'residual':
-                ax.imshow(im, cmap=res_cmap, origin='lower', interpolation='nearest', norm=res_norm)
+                # Display error magnitude scaled to 0–100 using global rmax
+                disp = 100.0 * np.clip(np.abs(im) / (rmax if rmax > 0 else 1.0), 0.0, 1.0)
+                ax.imshow(disp, cmap=res_cmap, origin='lower', interpolation='nearest', norm=res_norm)
             else:
                 vmin, vmax = robust_window(im, 1.0, 99.0)
                 ax.imshow(im, cmap='gray', origin='lower', interpolation='nearest', vmin=vmin, vmax=vmax)
@@ -479,12 +475,12 @@ def draw_grid_pdf(
         vmin, vmax = robust_window(im_hr, 1.0, 99.0)
         hr_ax.imshow(im_hr, cmap='gray', origin='lower', interpolation='nearest', vmin=vmin, vmax=vmax)
 
-    # Horizontal colorbar for residuals
+    # Horizontal colorbar for error maps
     if residuals:
         sm = plt.cm.ScalarMappable(norm=res_norm, cmap=res_cmap)
         sm.set_array([])
         cbar = fig.colorbar(sm, ax=axes.ravel().tolist(), orientation='horizontal', fraction=0.035, pad=0.05)
-        cbar.set_label(r"Residual $\Delta I =$ NN $-$ HR (a.u.)", color='white')
+        cbar.set_label(r"Error $|\,\mathrm{NN} - \mathrm{HR}\,|$ (0–100)", color='white')
         outline = getattr(cbar, 'outline', None)
         if outline is not None:
             try:
