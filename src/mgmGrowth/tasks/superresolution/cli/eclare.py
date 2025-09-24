@@ -73,15 +73,14 @@ def run_training_and_inference(config: EclareFullConfig) -> None:
                 LOGGER.info("Running ECLARE on %s", vol.name)
 
                 base_name = vol.stem.rstrip(".nii.gz")
-                temp_dir = ensure_dir(eclare_resolution_dir / "temp")
 
                 # NB: suffix must match eclare_runner default
                 suffix = "_eclare"
 
-                # Fire & forget: train + infer in one call
-                run_eclare(
+                # Run ECLARE directly in the resolution directory (no temp dir)
+                weights_src_dir, sr_generated = run_eclare(
                     vol,
-                    temp_dir,
+                    eclare_resolution_dir,
                     cfg=config.network,
                     relative_slice_thickness=relative_slice_thickness,
                     gpu_id=config.network.gpu_id,
@@ -89,16 +88,14 @@ def run_training_and_inference(config: EclareFullConfig) -> None:
                 )
 
                 # ~~~ Collect outputs ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-                volume_dir = temp_dir / base_name
-                best_weights = eclare_resolution_dir / "weights" / "best_weights.pt"
-                sr_volume = temp_dir / f"{base_name}{suffix}.nii.gz"
+                best_weights = weights_src_dir / "best_weights.pt"
+                sr_volume = sr_generated
 
                 target_weights = weights_dir / f"{base_name}.pt"
                 target_sr = output_dir / f"{base_name}.nii.gz"
 
                 if best_weights.exists():
                     LOGGER.info("Looking for best weights at %s", best_weights)
-                    
                     shutil.copy2(best_weights, target_weights)
                     LOGGER.info("Saved weights → %s", target_weights)
                 else:
@@ -110,12 +107,6 @@ def run_training_and_inference(config: EclareFullConfig) -> None:
                     LOGGER.info("Saved SR volume → %s", target_sr)
                 else:
                     LOGGER.error("SR volume missing: %s", sr_volume)
-
-                # clean-up
-                try:
-                    shutil.rmtree(temp_dir, ignore_errors=True)
-                except Exception as exc:  # noqa: BLE001
-                    LOGGER.debug("Cleanup failed for %s: %s", volume_dir, exc)
 
 
 

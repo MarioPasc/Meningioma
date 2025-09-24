@@ -88,6 +88,37 @@ def configure_matplotlib() -> None:
         logging.warning("LaTeX not available: %s", e)
         plt.rcParams['text.usetex'] = False
 
+def build_black_center_diverging() -> ListedColormap:
+    """
+    Custom diverging map:
+      negative: #BB5566  →  0.0
+      zero    : #000000  →  0.5
+      positive: #004488  →  1.0
+    """
+    def _hex_rgba(h: str) -> np.ndarray:
+        h = h.lstrip('#')
+        r = int(h[0:2], 16) / 255.0
+        g = int(h[2:4], 16) / 255.0
+        b = int(h[4:6], 16) / 255.0
+        return np.array([r, g, b, 1.0], dtype=float)
+
+    neg = _hex_rgba("BB5566")  # low end (SR−HR < 0)
+    pos = _hex_rgba("004488")  # high end (SR−HR > 0)
+    blk = np.array([0.0, 0.0, 0.0, 1.0], dtype=float)
+
+    n = 256
+    colors = np.empty((n, 4), dtype=float)
+    # 0..127: neg → black
+    for t in range(128):
+        a = t / 127.0
+        colors[t] = (1.0 - a) * neg + a * blk
+    # 128..255: black → pos
+    for t in range(128, 256):
+        a = (t - 128) / 127.0
+        colors[t] = (1.0 - a) * blk + a * pos
+
+    return ListedColormap(colors, name="bb5566_black_004488")
+
 
 # -------------------- I/O and geometry --------------------------------------
 
@@ -145,6 +176,23 @@ def center_of_mass(mask: np.ndarray) -> Tuple[int, int, int]:
     mean_ijk = idx.mean(axis=0)  # (i,j,k)
     i = int(round(mean_ijk[0])); j = int(round(mean_ijk[1])); k = int(round(mean_ijk[2]))
     return k, i, j
+
+def compute_brain_mask(hr_vol_LPS: np.ndarray, seg_LPS: Optional[np.ndarray]) -> np.ndarray:
+    """
+    Brain/background mask.
+    Priority: use segmentation if available; otherwise HR>0.
+    Returns a boolean array with True for brain voxels.
+    """
+    if seg_LPS is not None and np.any(seg_LPS > 0):
+        return seg_LPS > 0
+    return hr_vol_LPS > 0
+
+
+def apply_mask(vol: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    """Zero background outside mask."""
+    out = vol.copy()
+    out[~mask] = 0.0
+    return out
 
 
 # -------------------- residuals and colormap --------------------------------
@@ -361,14 +409,19 @@ def make_pulse_figure(
     coords: Tuple[int, int, int],
     res_rows: Sequence[int] = RES_ROWS,
 ) -> None:
-    # load HR reference + seg once
+    # Load HR reference and segmentation
     hr_nii = load_nii(hr_pulse_path(args.highres_dir, args.subject, pulse))
     hr_LPS = data_LPS(hr_nii)
-    seg_LPS = data_LPS(load_nii(hr_seg_path(args.highres_dir, args.subject))) if hr_seg_path(args.highres_dir, args.subject).exists() else None
+    seg_path = hr_seg_path(args.highres_dir, args.subject)
+    seg_LPS = data_LPS(load_nii(seg_path)) if seg_path.exists() else None
 
-    # collect all residual volumes for global window (per pulse)
-    all_residuals: List[np.ndarray] = []
+    # Brain/background mask from HR (or seg)
+    brain_mask = compute_brain_mask(hr_LPS, seg_LPS)
+    masked_hr = apply_mask(hr_LPS, brain_mask)
+
+    # Cache SR (masked) and collect residuals for global window
     sr_cache: Dict[Tuple[str, int], np.ndarray] = {}
+    all_residuals: List[np.ndarray] = []
 
     for m in args.models:
         for rmm in res_rows:
@@ -376,46 +429,42 @@ def make_pulse_figure(
             if (sr_nii.shape != hr_nii.shape) or not np.allclose(sr_nii.affine, hr_nii.affine):
                 sr_nii = resample_like(sr_nii, hr_nii, order=1)
             sr_LPS = data_LPS(sr_nii)
-            sr_cache[(m, rmm)] = sr_LPS
-            all_residuals.append(signed_residual(sr_LPS, hr_LPS))
+            masked_sr = apply_mask(sr_LPS, brain_mask)
+            sr_cache[(m, rmm)] = masked_sr
 
-    rmax = symmetric_rmax(all_residuals, q=99.0)
-    res_norm = Normalize(vmin=-rmax, vmax=+rmax)
+            all_residuals.append(signed_residual(masked_sr, masked_hr))
+
+    # Residual window and custom colormap
+    rmax = max(symmetric_rmax(all_residuals, q=99.0), 1e-6)
     res_cmap = build_black_center_diverging()
 
-    # figure grid
+    # Grid: rows = 3/5/7mm; cols = 2 × models (SR | Residual)
     n_rows = len(res_rows)
     n_cols = 2 * len(args.models)
 
-    # A4 width cap as in sagittal
     A4_W = 11.69
-    fig_w = min(args.fig_width, A4_W)
-    fig_h = args.fig_height
-
-    fig, axes = plt.subplots(
-        nrows=n_rows, ncols=n_cols,
-        figsize=(fig_w, fig_h), squeeze=True
-    )
+    fig_w = min(args.fig_width, A4_W); fig_h = args.fig_height
+    fig, axes = plt.subplots(nrows=n_rows, ncols=n_cols, figsize=(fig_w, fig_h), squeeze=True)
     fig.patch.set_facecolor('black')
 
-    # render each cell by rasterizing a dedicated plot_octant and placing it
     for r_idx, rmm in enumerate(res_rows):
         for m_idx, m in enumerate(args.models):
-            # SR cell (left of the pair)
+            masked_sr = sr_cache[(m, rmm)]
+
+            # SR octant (masked)
             sr_img = render_octant_png(
-                sr_cache[(m, rmm)], coords,
+                masked_sr, coords,
                 segmentation=seg_LPS, cmap='gray',
                 seg_alpha=0.30, only_line=True,
                 enforce_minmax=None, figsize=(4, 4),
             )
             axL = axes[r_idx, 2*m_idx]
-            axL.imshow(sr_img, origin='upper')
-            axL.set_xticks([]); axL.set_yticks([])
+            axL.imshow(sr_img, origin='upper'); axL.set_xticks([]); axL.set_yticks([])
             for s in axL.spines.values(): s.set_visible(False)
             axL.set_facecolor('black')
 
-            # Residual cell (right of the pair)
-            res_vol = signed_residual(sr_cache[(m, rmm)], hr_LPS) / (rmax if rmax > 0 else 1.0)
+            # Residual octant (masked, normalized to [-1,1])
+            res_vol = signed_residual(masked_sr, masked_hr) / rmax
             res_img = render_octant_png(
                 res_vol, coords,
                 segmentation=None, cmap=res_cmap,
@@ -423,30 +472,27 @@ def make_pulse_figure(
                 enforce_minmax=(-1.0, +1.0), figsize=(4, 4),
             )
             axR = axes[r_idx, 2*m_idx + 1]
-            axR.imshow(res_img, origin='upper')
-            axR.set_xticks([]); axR.set_yticks([])
+            axR.imshow(res_img, origin='upper'); axR.set_xticks([]); axR.set_yticks([])
             for s in axR.spines.values(): s.set_visible(False)
             axR.set_facecolor('black')
 
-    # row labels (left side)
+    # Row labels
     left_x = 0.03
     for r_idx, rmm in enumerate(res_rows):
         box = axes[r_idx, 0].get_position()
         y_mid = (box.y0 + box.y1) / 2.0
         fig.text(left_x, y_mid, f"{rmm}mm", color='white', ha='left', va='center')
 
-    # spacing baseline
+    # Spacing
     plt.subplots_adjust(
         left=args.left_margin, right=args.right_margin,
         top=args.top_margin, bottom=args.bottom_margin,
         wspace=args.wspace, hspace=args.row_gap
     )
 
-    # pair/group packing like sagittal, but groups=MODELs
+    # Pair/group packing
     try:
-        G = len(args.models)
-        R = n_rows
-        # compute inner bounds from top row
+        G, R = len(args.models), n_rows
         x0s, x1s = [], []
         for c in range(n_cols):
             b = axes[0, c].get_position()
@@ -463,14 +509,11 @@ def make_pulse_figure(
         for g in range(G):
             start_x = inner_left + extra_left + g * (2*w_panel + within_gap + between_gap)
             for r in range(R):
-                # left col of model g
                 bL = axes[r, 2*g].get_position()
                 axes[r, 2*g].set_position([start_x, bL.y0, w_panel, bL.height])
-                # right col of model g
                 bR = axes[r, 2*g + 1].get_position()
                 axes[r, 2*g + 1].set_position([start_x + w_panel + within_gap, bR.y0, w_panel, bR.height])
 
-        # vertical gap between rows 0 and 1
         if R >= 2 and args.top_row_gap is not None:
             row_boxes = [axes[r, 0].get_position() for r in range(R)]
             current_gap = row_boxes[0].y0 - (row_boxes[1].y0 + row_boxes[1].height)
@@ -482,15 +525,15 @@ def make_pulse_figure(
     except Exception as e:
         logging.warning("Custom spacing adjustment failed: %s", e)
 
-    # top headers = model names centered over each pair
+    # Model headers
     top_y = 0.975
     for m_idx, m in enumerate(args.models):
-        axL = axes[0, 2*m_idx]; axR = axes[0, 2*m_idx + 1]
-        boxL = axL.get_position(); boxR = axR.get_position()
+        boxL = axes[0, 2*m_idx].get_position()
+        boxR = axes[0, 2*m_idx + 1].get_position()
         x_center = 0.5 * ((boxL.x0 + boxL.x1) + (boxR.x0 + boxR.x1)) / 2.0
         fig.text(x_center, top_y, m, color='white', ha='center', va='top')
 
-    # residual colorbar (global per pulse)
+    # Colorbar with physical range
     sm = plt.cm.ScalarMappable(norm=Normalize(-rmax, +rmax), cmap=res_cmap)
     sm.set_array([])
     cbar = fig.colorbar(sm, ax=axes.ravel().tolist(), orientation='horizontal', fraction=0.035, pad=0.05)
@@ -499,7 +542,7 @@ def make_pulse_figure(
         cbar.outline.set_edgecolor('white')
     cbar.ax.tick_params(color='white', labelcolor='white')
 
-    # save
+    # Save
     out_dir = args.out_dir / "octants_by_model" / args.subject
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / f"{args.subject}_{pulse}_octants_models.{args.fmt}"
@@ -510,6 +553,7 @@ def make_pulse_figure(
         fig.savefig(out_file, dpi=600, facecolor=fig.get_facecolor(), bbox_inches='tight')
     plt.close(fig)
     logging.info("Saved: %s", out_file)
+
 
 
 # -------------------- main ---------------------------------------------------
