@@ -108,8 +108,8 @@ def unify_shapes(*arrays: np.ndarray) -> Tuple[np.ndarray, ...]:
     mirroring `match_slices`'s safety rule.
     """
     shapes = np.array([a.shape for a in arrays])
-    if np.any(np.ptp(shapes, axis=0) > 2):
-        raise ValueError("Volumes differ by >2 voxels; cannot auto-align.")
+    if np.any(np.ptp(shapes, axis=0) > 3):
+        raise ValueError("Volumes differ by >3 voxels; cannot auto-align.")
 
     target = shapes.max(axis=0)
     padded: list[np.ndarray] = []

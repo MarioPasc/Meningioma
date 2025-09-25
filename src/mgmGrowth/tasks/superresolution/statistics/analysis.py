@@ -30,7 +30,7 @@ Usage
 python src/mgmGrowth/tasks/superresolution/statistics/analysis.py \
     --metrics_npz /media/mpascual/PortableSSD/Meningiomas/tasks/superresolution/results/metrics/metrics.npz \ 
     --hr_root /media/mpascual/PortableSSD/Meningiomas/tasks/superresolution/high_resolution \
-    --results_root /media/mpascual/PortableSSD/Meningiomas/tasks/superresolution/results/ \
+    --results_root /media/mpascual/PortableSSD/Meningiomas/tasks/superresolution/results \
     --out_npz /media/mpascual/PortableSSD/Meningiomas/tasks/superresolution/results/stats.npz
 
 Notes
@@ -51,13 +51,17 @@ import pandas as pd
 from scipy import stats
 import nibabel as nib
 from skimage.feature import graycomatrix, graycoprops
-import statsmodels.formula.api as smf
-import patsy
-from statsmodels.stats.multitest import multipletests
+import statsmodels.formula.api as smf #type: ignore
+import patsy #type: ignore
+from statsmodels.stats.multitest import multipletests #type: ignore
+from tqdm import tqdm #type: ignore
+
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="statsmodels")
 
 # ----------------------------- logging ------------------------------------
 # Reuse the super-resolution logger so messages integrate with the rest
-# of the SR pipelines/tools.
+# of the SR pipelines/tools12
 from mgmGrowth.tasks.superresolution import LOGGER as LOG
 import sys
 
@@ -80,8 +84,170 @@ class Paths:
     out_npz: pathlib.Path
 
 # ----------------------------- helpers ------------------------------------
-PRIMARY_BY_PULSE = {"t1c": "SSIM", "t2w": "SSIM", "t2f": "PSNR"}
+PRIMARY_BY_PULSE = {"t1c": "SSIM", "t2w": "SSIM", "t2f": "PSNR", "t1n": "SSIM"}
 ROI_LABELS = ("all", "core", "edema", "surround")
+
+
+def sanity_check_metrics(metrics: Dict, hr_root: pathlib.Path, results_root: pathlib.Path) -> Dict[str, object]:
+    """
+    Perform a series of sanity checks on the loaded metrics and underlying volumes.
+
+    This helper inspects the shape consistency of the metrics array, the presence of
+    NaNs, out-of-range values for each metric, completeness of panels required by the
+    linear mixed models, and verifies that all high-resolution (HR) and super-resolved
+    (SR) NIfTI volumes exist and can be aligned safely.
+
+    Parameters
+    ----------
+    metrics : Dict
+        The metrics dictionary loaded via ``load_metrics_npz``.
+    hr_root : pathlib.Path
+        Root directory containing HR volumes organised by patient.
+    results_root : pathlib.Path
+        Root directory containing SR volumes organised by model/resolution.
+
+    Returns
+    -------
+    Dict[str, object]
+        A dictionary summarising issues discovered. Keys include ``shape_ok``,
+        ``nan_fraction``, ``out_of_range``, ``incomplete_panels`` and ``missing_volumes``.
+        This report is intended for logging/diagnostic purposes.
+    """
+    report: Dict[str, object] = {}
+
+    # --- check array shape consistency ------------------------------------
+    arr = metrics.get("metrics")
+    if arr is None or not isinstance(arr, np.ndarray) or arr.ndim != 7:
+        LOG.error("Metrics array missing or has unexpected dimension: %s", None if arr is None else arr.shape)
+        report["shape_ok"] = False
+    else:
+        # expected dimensions from meta arrays
+        expected = (
+            len(metrics.get("patient_ids", [])),
+            len(metrics.get("pulses", [])),
+            len(metrics.get("resolutions_mm", [])),
+            len(metrics.get("models", [])),
+            len(metrics.get("metric_names", [])),
+            len(metrics.get("roi_labels", [])),
+            len(metrics.get("stat_names", [])),
+        )
+        report["observed_shape"] = arr.shape
+        report["expected_shape"] = expected
+        report["shape_ok"] = arr.shape == expected
+        if not report["shape_ok"]:
+            LOG.warning("Metrics array shape %s does not match expected %s", arr.shape, expected)
+
+    # --- compute fraction of NaN entries (mean stat) ----------------------
+    stat_names = list(metrics.get("stat_names", []))
+    mean_idx = stat_names.index("mean") if "mean" in stat_names else 0
+    mean_values = arr[..., mean_idx] if arr is not None else np.array([])
+    nan_fraction = float(np.isnan(mean_values).sum() / mean_values.size) if mean_values.size > 0 else 1.0
+    report["nan_fraction"] = nan_fraction
+    if nan_fraction > 0:
+        LOG.info("Metrics contain %.2f%% NaN values (mean over slices)", nan_fraction * 100)
+
+    # --- out-of-range checks per metric ----------------------------------
+    out_of_range: Dict[str, float] = {}
+    metric_names = list(metrics.get("metric_names", []))
+    for m_idx, m_name in enumerate(metric_names):
+        vals = mean_values[..., m_idx, :]
+        finite = vals[np.isfinite(vals)]
+        if finite.size == 0:
+            out_of_range[m_name] = 0
+            continue
+        if m_name.upper() == "PSNR":
+            # PSNR should be positive; extremely high values (> 100 dB) are unlikely
+            bad_negative = (finite <= 0).sum()
+            bad_postitive = (finite > 100).sum()
+            bad = (bad_negative + bad_postitive) / finite.size * 100
+
+            LOG.warning(f"Bad PSNR: {bad_negative} out of {finite.size} finite values")
+        elif m_name.upper() == "SSIM":
+            # SSIM typically in [0,1]; negatives or >1 indicate problems
+            bad = ((finite < 0) | (finite > 1)).sum()
+        else:
+            bad = 0
+        if bad > 0:
+            LOG.warning("%d values of metric %s appear out of expected range.", bad, m_name)
+        out_of_range[m_name] = float(bad)
+    report["out_of_range_perc"] = out_of_range
+
+    # --- completeness of panels ------------------------------------------
+    try:
+        df = to_long_df(metrics)
+        incomplete_panels: Dict[str, int] = {}
+        pulses = list(metrics.get("pulses", []))
+        models = list(metrics.get("models", []))
+        resolutions = list(metrics.get("resolutions_mm", []))
+        for pulse in pulses:
+            primary = PRIMARY_BY_PULSE.get(str(pulse), None)
+            if primary is None:
+                continue
+            sub = df[(df["pulse"] == pulse) & (df["metric"] == primary)].copy()
+            full_n = len(models) * len(resolutions)
+            cnt = (
+                sub.assign(cell=sub["model"].astype(str) + "|" + sub["resolution"].astype(str))
+                   .groupby(["patient","roi"])["cell"].nunique().reset_index(name="n")
+            )
+            n_incomplete = int((cnt["n"] < full_n).sum())
+            if n_incomplete > 0:
+                LOG.warning("Pulse %s: %d (patient,roi) panels are incomplete (have < %d combos).",
+                            pulse, n_incomplete, full_n)
+            incomplete_panels[str(pulse)] = n_incomplete
+        report["incomplete_panels"] = incomplete_panels
+    except Exception as e:
+        LOG.error("Failed to check panel completeness: %s", e)
+        report["incomplete_panels"] = None
+
+    # --- check volume existence and shapes --------------------------------
+    missing_volumes: List[str] = []
+    mismatched_shapes: List[str] = []
+    patient_ids = list(metrics.get("patient_ids", []))
+    pulses = list(metrics.get("pulses", []))
+    models = list(metrics.get("models", []))
+    resolutions = list(metrics.get("resolutions_mm", []))
+
+    for pid in tqdm(patient_ids, desc="Verifying volumes", unit="patient"):
+        pid_dir = hr_root / str(pid)
+        seg_path = pid_dir / f"{pid}-seg.nii.gz"
+        if not seg_path.exists():
+            missing_volumes.append(str(seg_path))
+        hr_imgs: Dict[str, nib.Nifti1Image] = {}
+        for pulse in pulses:
+            hr_path = pid_dir / f"{pid}-{pulse}.nii.gz"
+            if not hr_path.exists():
+                missing_volumes.append(str(hr_path))
+                continue
+            try:
+                hr_imgs[pulse] = nib.load(str(hr_path))
+            except Exception:
+                missing_volumes.append(str(hr_path))
+        for pulse in pulses:
+            for res in resolutions:
+                for model in models:
+                    sr_path = results_root / str(model) / f"{res}mm" / "output_volumes" / f"{pid}-{pulse}.nii.gz"
+                    if not sr_path.exists():
+                        missing_volumes.append(str(sr_path))
+                        continue
+                    if pulse in hr_imgs:
+                        try:
+                            sr_img = nib.load(str(sr_path))
+                            hr_shape = hr_imgs[pulse].shape
+                            sr_shape = sr_img.shape
+                            diffs = np.abs(np.subtract(hr_shape, sr_shape))
+                            if np.any(diffs > 2):
+                                mismatched_shapes.append(f"{pid}-{pulse}-{res}-{model}: HR{hr_shape} vs SR{sr_shape}")
+                        except Exception:
+                            mismatched_shapes.append(str(sr_path))
+    report["missing_volumes"] = sorted(set(missing_volumes))
+    report["mismatched_shapes"] = mismatched_shapes
+    if report["missing_volumes"]:
+        LOG.warning("Missing %d volume files.", len(report['missing_volumes']))
+    if report["mismatched_shapes"]:
+        LOG.warning("%d volume pairs have shape differences > 2 voxels.", len(report['mismatched_shapes']))
+
+
+    return report
 
 def load_metrics_npz(path: pathlib.Path) -> Dict:
     """Load metrics.npz from metrics.py with allow_pickle for lists."""
@@ -725,6 +891,19 @@ def main():
     LOG.info("Starting SR statistics analysis …")
     # 1) Load and tidy metrics
     metr = load_metrics_npz(paths.metrics_npz)
+    # Run sanity checks on metrics and underlying volumes.  The report
+    # summarises potential issues (NaNs, shape mismatches, missing files, etc.).
+    try:
+        check_report = sanity_check_metrics(metr, paths.hr_root, paths.results_root)
+        # Save in the same directory as out_npz
+        json_saving_path = paths.out_npz.parent / (paths.out_npz.stem + "_sanity_report.json")
+        with open(json_saving_path, "w", encoding="utf-8") as f:
+            json.dump(check_report, f, indent=2, ensure_ascii=False)
+        # Log the report as JSON for readability
+        LOG.info("Sanity check report saved to %s", json_saving_path)
+    except Exception as e:
+        # Do not abort the entire analysis if checks fail; just log the error
+        LOG.error("Sanity check failed: %s", e)
     df = to_long_df(metr)
     pulses = list(metr["pulses"]); resolutions = list(metr["resolutions_mm"]); models = list(metr["models"])
     LOG.info("Loaded metrics: rows=%d | pulses=%s | resolutions=%s | models=%s",
