@@ -50,7 +50,7 @@ import multiprocessing as mp
 import pathlib
 import re
 from dataclasses import dataclass
-from typing import Iterable, Sequence, Tuple, List
+from typing import Iterable, Sequence, Tuple, List, cast
 
 import warnings
 warnings.filterwarnings("ignore", message="Mean of empty slice")
@@ -61,6 +61,12 @@ import SimpleITK as sitk
 from skimage.metrics import structural_similarity as ssim
 from mgmGrowth.tasks.superresolution.utils.imio import load_lps
 import nibabel as nib
+# progress bar -------------------------------------------------------------
+try:
+    from tqdm import tqdm  # type: ignore
+except Exception:  # fallback: no-op tqdm
+    def tqdm(iterable=None, total=None, desc=None):
+        return iterable if iterable is not None else range(total or 0)
 # -------- deep-perceptual metric ------------------------------------------
 try:
     import torch
@@ -68,8 +74,11 @@ try:
     _DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     _LPIPS_MODEL = lpips.LPIPS(net="alex").to(_DEVICE).eval()
     _LPIPS_MODEL.requires_grad_(False)
+    _USE_THREADS = bool(_DEVICE.type == "cuda")
 except ModuleNotFoundError:                 # library missing → metric = NaN
     _LPIPS_MODEL = None
+    _DEVICE = None  # type: ignore[assignment]
+    _USE_THREADS = False
 
 from mgmGrowth.tasks.superresolution import LOGGER
 
@@ -144,16 +153,16 @@ def exclude_z_slices(arr: np.ndarray, idx: Sequence[int]) -> np.ndarray:
         return arr
 
     z = arr.shape[0]
-    idx = np.asarray(idx, dtype=int)
-    in_bounds = (idx >= 0) & (idx < z)
-    if not in_bounds.all():                       # tell the user once
-        bad = idx[~in_bounds]
+    idx_arr = np.asarray(list(idx), dtype=int)
+    in_bounds = (idx_arr >= 0) & (idx_arr < z)
+    if not bool(np.all(in_bounds)):               # tell the user once
+        bad = idx_arr[~in_bounds]
         LOGGER.debug("Ignoring %d slice indices outside [0,%d]: %s",
-                     bad.size, z - 1, bad.tolist())
-    idx = idx[in_bounds]
+                     int(bad.size), z - 1, bad.tolist())
+    idx_arr = idx_arr[in_bounds]
 
     mask = np.ones(z, dtype=bool)
-    mask[idx] = False
+    mask[idx_arr] = False
     return arr[mask, ...]
 
 
@@ -392,8 +401,8 @@ def process_patient(vpaths: VolumePaths,
         
         
         # ---- moving volumes, resampled onto HR grid ------------------------
-        sr_arr = load_lps(vpaths.sr, like=hr_img, order=1)   # linear
-        seg_arr = load_lps(vpaths.seg, like=hr_img, order=0) # nearest
+        sr_arr = load_lps(vpaths.sr, like=cast(nib.Nifti1Image, hr_img), order=1)   # linear
+        seg_arr = load_lps(vpaths.seg, like=cast(nib.Nifti1Image, hr_img), order=0) # nearest
         
         # ---------- geometry alignment ------------------------------------
         # (1) HR ↔ SR : allow ≤ 2-voxel padding on each axis
@@ -423,6 +432,12 @@ def process_patient(vpaths: VolumePaths,
                        np.nan, dtype=np.float64)
 
 
+# Small adapter to allow ordered imap with a single-argument function
+def _process_patient_args(arg: Tuple[VolumePaths, Sequence[int]]) -> np.ndarray:
+    vp, exclude = arg
+    return process_patient(vp, exclude)
+
+
 
 
 # ------------------------------------------------------------- main -------
@@ -443,9 +458,9 @@ def main() -> None:
 
     # -------- slice window -------------------------------------------------
     ap.add_argument("--slice-window", nargs=2, type=int, metavar=("MIN", "MAX"),
-                    default=(10, 140),
+                    default=(15, 140),
                     help="Only consider slices MIN..MAX inclusive "
-                         "(default 10-140); outside range is ignored.")
+                         "(default 15-140); outside range is ignored.")
 
     ap.add_argument("--out", type=pathlib.Path,
                     default=pathlib.Path(
@@ -490,18 +505,38 @@ def main() -> None:
                     continue
                 LOGGER.info("Model %s | %d patients | 1x1x%d mm", model, len(items), res)
 
-                PoolClass = mp_threads.Pool if _DEVICE.type == "cuda" else mp.Pool
+                PoolClass = mp_threads.Pool if _USE_THREADS else mp.Pool
 
-                with PoolClass(args.workers) as pool:
-                    res_metrics = pool.starmap(process_patient,
-                                            [(vp, exclude) for vp in items])
+                # Cap workers to number of items to avoid idle processes
+                workers = max(1, min(args.workers, len(items)))
+                # Reasonable chunk size to reduce scheduling overhead
+                chunksize = max(1, len(items) // (workers * 4) or 1)
 
-                for vp, metr in zip(items, res_metrics):
-                    p = patient_idx[vp.hr.parent.name]
-                    pulse_idx = PULSES.index(pulse)
-                    metrics_arr[p, pulse_idx, r_idx, m_idx, :, :, :] = metr
-                    LOGGER.info("Done %s -> %.2f±%.2f dB (PSNR, all-slices)",
-                                vp.hr.parent.name, metr[0, 0, 0], metr[0, 0, 1])
+                pulse_idx = PULSES.index(pulse)
+                with PoolClass(workers) as pool:
+                    iterator = pool.imap(
+                        _process_patient_args,
+                        [(vp, exclude) for vp in items],
+                        chunksize=chunksize,
+                    )
+
+                    # Progress bar per (model, pulse, resolution)
+                    for idx, metr in enumerate(
+                        tqdm(iterator, total=len(items), desc=f"{model} | {pulse} | {res}mm")
+                    ):
+                        vp = items[idx]
+                        p = patient_idx[vp.hr.parent.name]
+                        metrics_arr[p, pulse_idx, r_idx, m_idx, :, :, :] = metr
+                        # Reduce log volume: info every 10 patients
+                        if (idx + 1) % 10 == 0 or (idx + 1) == len(items):
+                            LOGGER.info(
+                                "[%s %s %dmm] %d/%d processed",
+                                model,
+                                pulse,
+                                res,
+                                idx + 1,
+                                len(items),
+                            )
 
     np.savez(args.out,
              metrics=metrics_arr,

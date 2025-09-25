@@ -43,6 +43,7 @@ Notes
 
 from __future__ import annotations
 import argparse, json, logging, math, pathlib
+import multiprocessing as mp
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
 
@@ -55,7 +56,7 @@ import statsmodels.formula.api as smf #type: ignore
 import patsy #type: ignore
 from statsmodels.stats.multitest import multipletests #type: ignore
 from tqdm import tqdm #type: ignore
-
+from nibabel.processing import resample_from_to #type: ignore
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning, module="statsmodels")
 
@@ -241,6 +242,11 @@ def sanity_check_metrics(metrics: Dict, hr_root: pathlib.Path, results_root: pat
                             mismatched_shapes.append(str(sr_path))
     report["missing_volumes"] = sorted(set(missing_volumes))
     report["mismatched_shapes"] = mismatched_shapes
+    if report["mismatched_shapes"]:
+        LOG.warning("%d volume pairs have shape differences > 2 voxels.", len(report['mismatched_shapes']))
+        for s in report["mismatched_shapes"][:5]:
+            LOG.debug("Example mismatch: %s", s)
+
     if report["missing_volumes"]:
         LOG.warning("Missing %d volume files.", len(report['missing_volumes']))
     if report["mismatched_shapes"]:
@@ -457,6 +463,68 @@ def ensure_psd(V_df: pd.DataFrame, eps: float = 1e-9) -> np.ndarray:
     return V_psd
 
 
+def _as_float(img: nib.Nifti1Image) -> np.ndarray:
+    return img.get_fdata(dtype=np.float32)
+
+def _canonical(img: nib.Nifti1Image) -> nib.Nifti1Image:
+    """Reorient to RAS to standardize axes (axial is axis=2)."""
+    return nib.as_closest_canonical(img)
+
+def _pad_or_crop_to(arr: np.ndarray, target_shape: Tuple[int, int, int]) -> np.ndarray:
+    """
+    Center pad/crop to match target_shape. Only for small deltas (≤2 voxels/axis).
+    """
+    out = arr
+    diffs = np.array(target_shape) - np.array(arr.shape)
+    if np.all(diffs == 0):
+        return out
+    if np.any(np.abs(diffs) > 2):
+        LOG.error("pad/crop refused: shape delta %s too large vs target %s", diffs.tolist(), target_shape)
+        return out  # leave as-is; upstream checks will warn
+    # pad if positive diff, crop if negative
+    pads = [(max(0, d//2), max(0, d - d//2)) for d in diffs]
+    out = np.pad(out,
+                 pad_width=((pads[0][0], pads[0][1]),
+                            (pads[1][0], pads[1][1]),
+                            (pads[2][0], pads[2][1])),
+                 mode="constant", constant_values=0)
+    # crop negative diffs
+    for ax, d in enumerate(diffs):
+        if d < 0:
+            cutL = (-d)//2
+            cutR = (-d) - cutL
+            sl = [slice(None)]*3
+            sl[ax] = slice(cutL, out.shape[ax]-cutR)
+            out = out[tuple(sl)]
+    return out
+
+def load_align_triplet(hr_path: pathlib.Path,
+                       seg_path: pathlib.Path,
+                       sr_path: pathlib.Path) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Load HR, SEG, SR -> reorient all to RAS -> resample SEG and SR to HR grid.
+    Nearest for SEG, linear for SR. Pad/crop tiny residual shape deltas.
+    """
+    hr_img  = _canonical(nib.load(str(hr_path)))
+    seg_img = _canonical(nib.load(str(seg_path)))
+    sr_img  = _canonical(nib.load(str(sr_path)))
+
+    # resample_to=HR grid using affine+shape
+    seg_r = resample_from_to(seg_img, hr_img, order=0)  # nearest neighbor
+    sr_r  = resample_from_to(sr_img,  hr_img, order=1)  # linear
+
+    hr = _as_float(hr_img)
+    seg = _as_float(seg_r)
+    sr  = _as_float(sr_r)
+
+    # guard tiny residual mismatches
+    if seg.shape != hr.shape or sr.shape != hr.shape:
+        LOG.warning("Resampled shapes differ from HR: HR=%s SEG=%s SR=%s. Applying ≤2-voxel pad/crop.",
+                    hr.shape, seg.shape, sr.shape)
+        seg = _pad_or_crop_to(seg, hr.shape)
+        sr  = _pad_or_crop_to(sr,  hr.shape)
+    return hr, sr, seg
+
 # ----------------------------- LMM ----------------------------------------
 def fit_lmm_primary(df: pd.DataFrame, pulse: str):
     primary = PRIMARY_BY_PULSE[pulse]
@@ -518,7 +586,7 @@ def fit_lmm_primary(df: pd.DataFrame, pulse: str):
 
     # EMM over ROI and pairwise contrasts vs baseline
     emm_rows, contrasts, pvals, tmp = [], [], [], []
-    for r in levels_res:
+    for r in tqdm(levels_res, desc=f"EMM[{pulse}]", leave=False):
         for m_ in levels_mod:
             # when you build 'synth' for EMMs and contrasts, keep categories explicit:
             # synth = pd.DataFrame({
@@ -552,7 +620,7 @@ def fit_lmm_primary(df: pd.DataFrame, pulse: str):
                 "mean": mean, "se": se, "lcl": mean - zc*se, "ucl": mean + zc*se
             })
 
-    for r in levels_res:
+    for r in tqdm(levels_res, desc=f"Contrasts[{pulse}]", leave=False):
         for m_ in levels_mod:
             if m_ == baseline: 
                 continue
@@ -746,7 +814,12 @@ def glcm_features(slice2d: np.ndarray, mask2d: np.ndarray) -> Dict[str, float]:
     """
     if not mask2d.any():
         return {"contr": np.nan, "homog": np.nan, "corr": np.nan}
-    vals = slice2d[mask2d]
+    try:
+        vals = slice2d[mask2d]
+    except Exception:
+        # Let me visualize the mask and the slice in the calling function
+        LOG.error("glcm_features: mask application failed with shapes %s vs %s", slice2d.shape, mask2d.shape)
+        return {"contr": np.nan, "homog": np.nan, "corr": np.nan}
     vmin, vmax = np.percentile(vals, [1, 99])
     if vmax <= vmin:
         return {"contr": np.nan, "homog": np.nan, "corr": np.nan}
@@ -760,36 +833,34 @@ def glcm_features(slice2d: np.ndarray, mask2d: np.ndarray) -> Dict[str, float]:
     }
 
 def extract_radiomics(hr_vol: np.ndarray, sr_vol: np.ndarray, seg_vol: np.ndarray, roi_label: int | None) -> Dict[str, float]:
-    """Compute slice-averaged first-order + GLCM features for HR and SR."""
-    feats = {}
+    feats: Dict[str, float] = {}
     mask = roi_mask_from_seg(seg_vol, roi_label)
     if not mask.any():
         return {k: np.nan for k in ["mean","var","skew","kurt","entropy","contr","homog","corr"]}
 
     # first-order on all voxels inside ROI
-    feats.update(first_order_features(hr_vol[mask]))
-    # rename with suffixes later
+    fo_hr = first_order_features(hr_vol[mask])
+    fo_sr = first_order_features(sr_vol[mask])
 
-    # texture: average per-slice GLCM within ROI
+    # texture: axial slices (axis=2 in RAS). Avoid axis=0 sagittal error.
     contr, homog, corr = [], [], []
-    Z = hr_vol.shape[0]
+    Z = hr_vol.shape[2]
     for z in range(Z):
-        roi2d = mask[z]
+        roi2d = mask[:, :, z]
         if not roi2d.any():
             continue
-        f_hr = glcm_features(hr_vol[z], roi2d)
-        f_sr = glcm_features(sr_vol[z], roi2d)
+        f_hr = glcm_features(hr_vol[:, :, z], roi2d)
+        f_sr = glcm_features(sr_vol[:, :, z], roi2d)
         contr.append((f_hr["contr"], f_sr["contr"]))
         homog.append((f_hr["homog"], f_sr["homog"]))
         corr.append((f_hr["corr"],  f_sr["corr"]))
+
     def avg(pairs, idx):
-        arr = np.array([p[idx] for p in pairs if np.all(np.isfinite(p))])
+        arr = np.array([p[idx] for p in pairs if np.all(np.isfinite(p))], dtype=float)
         return float(np.mean(arr)) if arr.size else np.nan
-    # Return paired as dict with HR/SR suffix to align ICC input downstream
-    out = {}
-    fo_hr = first_order_features(hr_vol[mask]); fo_sr = first_order_features(sr_vol[mask])
-    for k in ["mean","var","skew","kurt","entropy"]:
-        out[f"{k}_HR"] = fo_hr[k]; out[f"{k}_SR"] = fo_sr[k]
+
+    out = {f"{k}_HR": fo_hr[k] for k in ["mean","var","skew","kurt","entropy"]}
+    out.update({f"{k}_SR": fo_sr[k] for k in ["mean","var","skew","kurt","entropy"]})
     out["contr_HR"] = avg(contr, 0); out["contr_SR"] = avg(contr, 1)
     out["homog_HR"] = avg(homog, 0); out["homog_SR"] = avg(homog, 1)
     out["corr_HR"]  = avg(corr,  0); out["corr_SR"]  = avg(corr,  1)
@@ -833,7 +904,87 @@ def collect_paths(hr_root: pathlib.Path, results_root: pathlib.Path, pulse: str,
             out.append((hr_p, seg_p, sr_p))
     return out
 
-def run_radiomics(paths: Paths, pulses: List[str], resolutions: List[int], models: List[str]) -> Dict[str, List[dict]]:
+def _radiomics_worker(args: Tuple[pathlib.Path, pathlib.Path, pathlib.Path, str, int]) -> Tuple[str, Dict[str, Dict[str, float]]] | None:
+    """Worker: load/align and compute radiomics per ROI for one subject.
+
+    Returns (pid, {roi: feature_dict}). On failure returns None.
+    """
+    hr_p, seg_p, sr_p, pulse, levels = args  # 'levels' kept for future tweaks
+    try:
+        hr, sr, seg = load_align_triplet(hr_p, seg_p, sr_p)
+        pid = hr_p.parent.name
+        # ROI labels map
+        roi_map = {"all": None, "core": 1, "edema": 2, "surround": 3}
+        out: Dict[str, Dict[str, float]] = {}
+        for roi_name in ROI_LABELS:
+            label = roi_map[roi_name]
+            mask = roi_mask_from_seg(seg, label)
+            if not mask.any():
+                out[roi_name] = {k: float('nan') for k in [
+                    "mean_HR","var_HR","skew_HR","kurt_HR","entropy_HR",
+                    "mean_SR","var_SR","skew_SR","kurt_SR","entropy_SR",
+                    "contr_HR","contr_SR","homog_HR","homog_SR","corr_HR","corr_SR",
+                ]}
+                continue
+
+            # first-order features
+            fo_hr = first_order_features(hr[mask])
+            fo_sr = first_order_features(sr[mask])
+
+            # Precompute global quantization params for this ROI across HR+SR
+            vals = np.concatenate([hr[mask].ravel(), sr[mask].ravel()])
+            vals = vals[np.isfinite(vals)]
+            if vals.size == 0:
+                vmin = vmax = np.nan
+            else:
+                vmin, vmax = np.percentile(vals, [1, 99])
+
+            contr_pairs: List[Tuple[float, float]] = []
+            homog_pairs: List[Tuple[float, float]] = []
+            corr_pairs:  List[Tuple[float, float]] = []
+            if (np.isfinite(vmin) and np.isfinite(vmax) and (vmax > vmin)):
+                scale = 31.0 / (vmax - vmin)
+                # iterate axial slices (axis=2 in RAS)
+                Z = hr.shape[2]
+                for z in range(Z):
+                    roi2d = mask[:, :, z]
+                    if not roi2d.any():
+                        continue
+                    # quantize using global ROI vmin/vmax
+                    q_hr = np.clip(((hr[:, :, z] - vmin) * scale).astype(np.uint8), 0, 31)
+                    q_sr = np.clip(((sr[:, :, z] - vmin) * scale).astype(np.uint8), 0, 31)
+                    # GLCM on quantized images; same behavior as previous (no mask support)
+                    gl_hr = graycomatrix(q_hr, distances=[1], angles=[0], levels=32, symmetric=True, normed=True)
+                    gl_sr = graycomatrix(q_sr, distances=[1], angles=[0], levels=32, symmetric=True, normed=True)
+                    contr_pairs.append((float(graycoprops(gl_hr, "contrast")[0,0]),
+                                        float(graycoprops(gl_sr, "contrast")[0,0])))
+                    homog_pairs.append((float(graycoprops(gl_hr, "homogeneity")[0,0]),
+                                        float(graycoprops(gl_sr, "homogeneity")[0,0])))
+                    corr_pairs.append((float(graycoprops(gl_hr, "correlation")[0,0]),
+                                       float(graycoprops(gl_sr, "correlation")[0,0])))
+            # aggregate
+            def _avg(pairs: List[Tuple[float, float]], idx: int) -> float:
+                arr = np.array([p[idx] for p in pairs if np.all(np.isfinite(p))], dtype=float)
+                return float(np.mean(arr)) if arr.size else float('nan')
+
+            feats: Dict[str, float] = {}
+            feats.update({f"{k}_HR": fo_hr[k] for k in ["mean","var","skew","kurt","entropy"]})
+            feats.update({f"{k}_SR": fo_sr[k] for k in ["mean","var","skew","kurt","entropy"]})
+            feats["contr_HR"] = _avg(contr_pairs, 0); feats["contr_SR"] = _avg(contr_pairs, 1)
+            feats["homog_HR"] = _avg(homog_pairs, 0); feats["homog_SR"] = _avg(homog_pairs, 1)
+            feats["corr_HR"]  = _avg(corr_pairs,  0); feats["corr_SR"]  = _avg(corr_pairs,  1)
+            out[roi_name] = feats
+        return pid, out
+    except Exception as e:
+        try:
+            pid = hr_p.parent.name
+        except Exception:
+            pid = "<unknown>"
+        LOG.error("Radiomics worker failed for %s (%s): %s", pid, pulse, e)
+        return None
+
+
+def run_radiomics(paths: Paths, pulses: List[str], resolutions: List[int], models: List[str], workers: int = 1) -> Dict[str, List[dict]]:
     """
     Compute ICC(2,1) for HR vs SR per feature, resolution, model, and ROI.
     Features: mean,var,skew,kurt,entropy,contr,homog,corr
@@ -848,17 +999,24 @@ def run_radiomics(paths: Paths, pulses: List[str], resolutions: List[int], model
                     continue
                 # accumulate per-subject features
                 per_roi_feats: Dict[str, Dict[str, Dict[str, float]]] = {roi: {} for roi in ROI_LABELS}
-                subj_ids = []
-                for hr_p, seg_p, sr_p in pairs:
-                    try:
-                        hr = load_vol(hr_p); sr = load_vol(sr_p); seg = load_vol(seg_p)
-                    except Exception:
-                        continue
-                    pid = hr_p.parent.name
-                    subj_ids.append(pid)
-                    for roi in ROI_LABELS:
-                        feats = extract_radiomics(hr, sr, seg, roi_map[roi])
-                        per_roi_feats[roi][pid] = feats
+                subj_ids: List[str] = []
+
+                n = len(pairs)
+                w = max(1, min(workers, n))
+                chunksize = max(1, n // (w * 4) or 1)
+                with mp.Pool(w) as pool:
+                    it = pool.imap_unordered(
+                        _radiomics_worker,
+                        [(hr_p, seg_p, sr_p, pulse, 32) for (hr_p, seg_p, sr_p) in pairs],
+                        chunksize=chunksize,
+                    )
+                    for res_item in tqdm(it, total=n, desc=f"Radiomics {pulse} {res}mm {model}", unit="subj"):
+                        if res_item is None:
+                            continue
+                        pid, roi_feats = res_item
+                        subj_ids.append(pid)
+                        for roi in ROI_LABELS:
+                            per_roi_feats[roi][pid] = roi_feats.get(roi, {})
                 # compute ICC per feature within each ROI
                 for roi in ROI_LABELS:
                     if not per_roi_feats[roi]:
@@ -885,6 +1043,7 @@ def main():
     ap.add_argument("--hr_root", type=pathlib.Path, required=True)
     ap.add_argument("--results_root", type=pathlib.Path, required=True)
     ap.add_argument("--out_npz", type=pathlib.Path, required=True)
+    ap.add_argument("--workers", type=int, default=max(1, mp.cpu_count() - 1), help="Parallel workers for radiomics stage")
     args = ap.parse_args()
     paths = Paths(args.metrics_npz, args.hr_root, args.results_root, args.out_npz)
 
@@ -912,14 +1071,14 @@ def main():
     # 2) LMM per pulse
     lmm_emm_all = {}
     lmm_contr_all = {}
-    for p in pulses:
+    for p in tqdm(pulses, desc="LMM (primary)", unit="pulse"):
         emm_table, contrasts = fit_lmm_primary(df, p)
         lmm_emm_all[p] = {"emm_table": pack_table(emm_table, f"EMM[{p}]")}
         lmm_contr_all[p] = {"contrasts": contrasts}
 
     # 3) Nonparametric confirmations
     friedman_all, wilcoxon_all = {}, {}
-    for p in pulses:
+    for p in tqdm(pulses, desc="Nonparametric tests", unit="pulse"):
         fr, wi = friedman_wilcoxon(df, p)
         # Holm across pairs grouped within each (p,res,roi)
         # Already applied inside; store raw dicts
@@ -927,7 +1086,7 @@ def main():
         wilcoxon_all[p] = {"pairs": wi}
 
     # 4) Radiomic stability ICC
-    icc_all = run_radiomics(paths, pulses, resolutions, models)
+    icc_all = run_radiomics(paths, pulses, resolutions, models, workers=args.workers)
 
     # 5) Persist everything needed for plotting
     meta_dict = {
