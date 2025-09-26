@@ -1,764 +1,482 @@
 #!/usr/bin/env python3
-# sr_stats_pipeline.py
-"""
-Statistical pipeline for SR benchmarking.
-
-Inputs
-------
-1) metrics.npz produced by metrics.py
-   shape: (P, 3, 3, M, 4, 4, 2) for mean/std over slices per patient & ROI
-2) Volume roots (for radiomics only):
-   HR_ROOT / <pid>/<pid>-{t1c,t2w,t2f}.nii.gz and <pid>-seg.nii.gz
-   RESULTS_ROOT / <MODEL>/<3mm|5mm|7mm>/output_volumes/<pid>-<pulse>.nii.gz
-
-Outputs
--------
-sr_stats_summary.npz  containing:
-  - meta: pulses, resolutions_mm, models, metric_names, roi_labels
-  - lmm_emm:  dict[pulse]['emm_table'] ndarray with columns:
-              ['pulse','resolution','model','n_subjects','mean','se','lcl','ucl']
-  - lmm_contrasts: dict[pulse]['contrasts'] list of dicts per (resolution, model)
-                   keys: estimate, se, z, p_raw, p_holm, hedges_g, g_ci
-  - friedman: dict[pulse]['by_res_roi'] list of dicts {res, roi, chi2, p}
-  - wilcoxon: dict[pulse]['pairs'] list of dicts per (res, roi, model_vs_baseline)
-              keys: n, W, z, p_raw, p_holm, dz, dz_ci
-  - icc: dict[pulse]['by_res_roi_model'] list of dicts with per-feature ICC(2,1)
-
-Usage
------
-
-python src/mgmGrowth/tasks/superresolution/statistics/analysis.py \
-    --metrics_npz /media/mpascual/PortableSSD/Meningiomas/tasks/superresolution/results/metrics/metrics.npz \ 
-    --hr_root /media/mpascual/PortableSSD/Meningiomas/tasks/superresolution/high_resolution \
-    --results_root /media/mpascual/PortableSSD/Meningiomas/tasks/superresolution/results \
-    --out_npz /media/mpascual/PortableSSD/Meningiomas/tasks/superresolution/results/stats.npz
-
-Notes
------
-- Primary endpoints by pulse: {'t1c':'SSIM','t2w':'SSIM','t2f':'PSNR'}
-- MixedLM: value ~ C(model)*C(resolution) + C(roi); random intercepts:
-           subject (group) and subjectxroi (variance component)
-- All p-value adjustments per family use Holm.
-"""
+# analysis.py — SR benchmarking: robust, parallel, reproducible
+# Sections:
+#   0) Imports and globals
+#   1) Configuration, errors, logging
+#   2) I/O helpers and sanity checks
+#   3) Data shaping
+#   4) Linear mixed models (EMM + contrasts)
+#   5) Nonparametric confirmation (Friedman + Wilcoxon)
+#   6) Radiomics engines (IBSI via PyRadiomics, light FO/GLCM)
+#   7) Parallel workers
+#   8) Orchestration and CLI
 
 from __future__ import annotations
-import argparse, json, logging, math, pathlib
+
+# ------------------------ 0) Imports and globals ---------------------------
+import os, sys, json, math, logging, argparse, pathlib, warnings, gc
 import multiprocessing as mp
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Iterable, Optional
 
 import numpy as np
 import pandas as pd
 from scipy import stats
+import patsy  # type: ignore
 import nibabel as nib
+from nibabel.processing import resample_from_to
 from skimage.feature import graycomatrix, graycoprops
-import statsmodels.formula.api as smf #type: ignore
-import patsy #type: ignore
-from statsmodels.stats.multitest import multipletests #type: ignore
-from tqdm import tqdm #type: ignore
-from nibabel.processing import resample_from_to #type: ignore
-import warnings
+from tqdm import tqdm # type: ignore
+from itertools import repeat
+import json
+from nibabel import filebasedimages as _nib_file_err
+
+# NEW: classify I/O errors we will trap
+IO_ERRORS = (EOFError, OSError, _nib_file_err.ImageFileError, ValueError)
+
+import statsmodels.formula.api as smf # type: ignore
+from statsmodels.stats.multitest import multipletests # type: ignore
+
 warnings.filterwarnings("ignore", category=UserWarning, module="statsmodels")
 
-# ----------------------------- logging ------------------------------------
-# Reuse the super-resolution logger so messages integrate with the rest
-# of the SR pipelines/tools12
-from mgmGrowth.tasks.superresolution import LOGGER as LOG
-import sys
+# Optional IBSI stack
+try:
+    import SimpleITK as sitk  # type: ignore
+    from radiomics import featureextractor  # type: ignore
+    _HAS_PYRADIOMICS = True
+except Exception:
+    _HAS_PYRADIOMICS = False
 
-def _configure_sr_logging():
-    """Ensure our logger emits to stdout with a clear format."""
-    if not LOG.handlers:
-        handler = logging.StreamHandler(sys.stdout)
-        handler.setFormatter(logging.Formatter("[SR:analysis] %(levelname)s | %(message)s"))
-        LOG.addHandler(handler)
-    # Be verbose for diagnostics
-    LOG.setLevel(logging.DEBUG)
-    LOG.propagate = False
-
-# ----------------------------- dataclass ----------------------------------
+# --------------------- 1) Configuration, errors, logging -------------------
 @dataclass(frozen=True)
 class Paths:
+    """CLI-resolved paths used across the pipeline."""
     metrics_npz: pathlib.Path
     hr_root: pathlib.Path
     results_root: pathlib.Path
     out_npz: pathlib.Path
 
-# ----------------------------- helpers ------------------------------------
-PRIMARY_BY_PULSE = {"t1c": "SSIM", "t2w": "SSIM", "t2f": "PSNR", "t1n": "SSIM"}
-ROI_LABELS = ("all", "core", "edema", "surround")
+class PipelineError(RuntimeError):
+    """User-facing fatal error for the SR stats pipeline."""
 
+PRIMARY_BY_PULSE: Dict[str, str] = {"t1c": "SSIM", "t2w": "SSIM", "t2f": "PSNR", "t1n": "SSIM"}
+ROI_LABELS: Tuple[str, ...] = ("all", "core", "edema", "surround")
 
-def sanity_check_metrics(metrics: Dict, hr_root: pathlib.Path, results_root: pathlib.Path) -> Dict[str, object]:
-    """
-    Perform a series of sanity checks on the loaded metrics and underlying volumes.
+# IBSI feature allow-list for stability and portability across pyradiomics versions
+_IBSI_KEEP = {
+    # first-order
+    "firstorder_Energy","firstorder_TotalEnergy","firstorder_Entropy","firstorder_Mean",
+    "firstorder_Median","firstorder_Variance","firstorder_Skewness","firstorder_Kurtosis",
+    # GLCM
+    "glcm_Autocorrelation","glcm_ClusterShade","glcm_ClusterProminence","glcm_Contrast",
+    "glcm_Correlation","glcm_Dissimilarity","glcm_Idmn","glcm_Idn","glcm_Imc1","glcm_Imc2",
+    "glcm_Homogeneity1",
+    # GLRLM
+    "glrlm_ShortRunEmphasis","glrlm_LongRunEmphasis","glrlm_GrayLevelNonUniformity",
+    "glrlm_RunLengthNonUniformity","glrlm_RunPercentage","glrlm_HighGrayLevelRunEmphasis",
+    "glrlm_LowGrayLevelRunEmphasis",
+    # GLSZM
+    "glszm_SmallAreaEmphasis","glszm_LargeAreaEmphasis","glszm_GrayLevelNonUniformity",
+    "glszm_ZoneSizeNonUniformity","glszm_ZoneEntropy","glszm_ZoneVariance",
+    # GLDM
+    "gldm_DependenceNonUniformity","gldm_DependenceEntropy","gldm_LargeDependenceEmphasis",
+    "gldm_SmallDependenceEmphasis","gldm_HighGrayLevelEmphasis","gldm_LowGrayLevelEmphasis",
+    # NGTDM
+    "ngtdm_Coarseness","ngtdm_Contrast","ngtdm_Busyness","ngtdm_Complexity","ngtdm_Strength",
+    # Shape
+    "shape_VoxelVolume","shape_SurfaceArea","shape_Sphericity","shape_Elongation",
+    "shape_Flatness","shape_Compactness2",
+}
 
-    This helper inspects the shape consistency of the metrics array, the presence of
-    NaNs, out-of-range values for each metric, completeness of panels required by the
-    linear mixed models, and verifies that all high-resolution (HR) and super-resolved
-    (SR) NIfTI volumes exist and can be aligned safely.
+# Use your SR logger if available; else a local logger
+try:
+    from mgmGrowth.tasks.superresolution import LOGGER as LOG  # noqa
+except Exception:
+    LOG = logging.getLogger("sr.analysis") # type: ignore
 
-    Parameters
-    ----------
-    metrics : Dict
-        The metrics dictionary loaded via ``load_metrics_npz``.
-    hr_root : pathlib.Path
-        Root directory containing HR volumes organised by patient.
-    results_root : pathlib.Path
-        Root directory containing SR volumes organised by model/resolution.
+def _configure_logging() -> None:
+    """Console logger. High signal format for reproducibility."""
+    if not LOG.handlers:
+        h = logging.StreamHandler(sys.stdout)
+        h.setFormatter(logging.Formatter("[SR:analysis] %(levelname)s | %(message)s"))
+        LOG.addHandler(h)
+    LOG.setLevel(logging.DEBUG)
+    LOG.propagate = False
 
-    Returns
-    -------
-    Dict[str, object]
-        A dictionary summarising issues discovered. Keys include ``shape_ok``,
-        ``nan_fraction``, ``out_of_range``, ``incomplete_panels`` and ``missing_volumes``.
-        This report is intended for logging/diagnostic purposes.
-    """
-    report: Dict[str, object] = {}
-
-    # --- check array shape consistency ------------------------------------
-    arr = metrics.get("metrics")
-    if arr is None or not isinstance(arr, np.ndarray) or arr.ndim != 7:
-        LOG.error("Metrics array missing or has unexpected dimension: %s", None if arr is None else arr.shape)
-        report["shape_ok"] = False
-    else:
-        # expected dimensions from meta arrays
-        expected = (
-            len(metrics.get("patient_ids", [])),
-            len(metrics.get("pulses", [])),
-            len(metrics.get("resolutions_mm", [])),
-            len(metrics.get("models", [])),
-            len(metrics.get("metric_names", [])),
-            len(metrics.get("roi_labels", [])),
-            len(metrics.get("stat_names", [])),
-        )
-        report["observed_shape"] = arr.shape
-        report["expected_shape"] = expected
-        report["shape_ok"] = arr.shape == expected
-        if not report["shape_ok"]:
-            LOG.warning("Metrics array shape %s does not match expected %s", arr.shape, expected)
-
-    # --- compute fraction of NaN entries (mean stat) ----------------------
-    stat_names = list(metrics.get("stat_names", []))
-    mean_idx = stat_names.index("mean") if "mean" in stat_names else 0
-    mean_values = arr[..., mean_idx] if arr is not None else np.array([])
-    nan_fraction = float(np.isnan(mean_values).sum() / mean_values.size) if mean_values.size > 0 else 1.0
-    report["nan_fraction"] = nan_fraction
-    if nan_fraction > 0:
-        LOG.info("Metrics contain %.2f%% NaN values (mean over slices)", nan_fraction * 100)
-
-    # --- out-of-range checks per metric ----------------------------------
-    out_of_range: Dict[str, float] = {}
-    metric_names = list(metrics.get("metric_names", []))
-    for m_idx, m_name in enumerate(metric_names):
-        vals = mean_values[..., m_idx, :]
-        finite = vals[np.isfinite(vals)]
-        if finite.size == 0:
-            out_of_range[m_name] = 0
-            continue
-        if m_name.upper() == "PSNR":
-            # PSNR should be positive; extremely high values (> 100 dB) are unlikely
-            bad_negative = (finite <= 0).sum()
-            bad_postitive = (finite > 100).sum()
-            bad = (bad_negative + bad_postitive) / finite.size * 100
-
-            LOG.warning(f"Bad PSNR: {bad_negative} out of {finite.size} finite values")
-        elif m_name.upper() == "SSIM":
-            # SSIM typically in [0,1]; negatives or >1 indicate problems
-            bad = ((finite < 0) | (finite > 1)).sum()
-        else:
-            bad = 0
-        if bad > 0:
-            LOG.warning("%d values of metric %s appear out of expected range.", bad, m_name)
-        out_of_range[m_name] = float(bad)
-    report["out_of_range_perc"] = out_of_range
-
-    # --- completeness of panels ------------------------------------------
-    try:
-        df = to_long_df(metrics)
-        incomplete_panels: Dict[str, int] = {}
-        pulses = list(metrics.get("pulses", []))
-        models = list(metrics.get("models", []))
-        resolutions = list(metrics.get("resolutions_mm", []))
-        for pulse in pulses:
-            primary = PRIMARY_BY_PULSE.get(str(pulse), None)
-            if primary is None:
-                continue
-            sub = df[(df["pulse"] == pulse) & (df["metric"] == primary)].copy()
-            full_n = len(models) * len(resolutions)
-            cnt = (
-                sub.assign(cell=sub["model"].astype(str) + "|" + sub["resolution"].astype(str))
-                   .groupby(["patient","roi"])["cell"].nunique().reset_index(name="n")
-            )
-            n_incomplete = int((cnt["n"] < full_n).sum())
-            if n_incomplete > 0:
-                LOG.warning("Pulse %s: %d (patient,roi) panels are incomplete (have < %d combos).",
-                            pulse, n_incomplete, full_n)
-            incomplete_panels[str(pulse)] = n_incomplete
-        report["incomplete_panels"] = incomplete_panels
-    except Exception as e:
-        LOG.error("Failed to check panel completeness: %s", e)
-        report["incomplete_panels"] = None
-
-    # --- check volume existence and shapes --------------------------------
-    missing_volumes: List[str] = []
-    mismatched_shapes: List[str] = []
-    patient_ids = list(metrics.get("patient_ids", []))
-    pulses = list(metrics.get("pulses", []))
-    models = list(metrics.get("models", []))
-    resolutions = list(metrics.get("resolutions_mm", []))
-
-    for pid in tqdm(patient_ids, desc="Verifying volumes", unit="patient"):
-        pid_dir = hr_root / str(pid)
-        seg_path = pid_dir / f"{pid}-seg.nii.gz"
-        if not seg_path.exists():
-            missing_volumes.append(str(seg_path))
-        hr_imgs: Dict[str, nib.Nifti1Image] = {}
-        for pulse in pulses:
-            hr_path = pid_dir / f"{pid}-{pulse}.nii.gz"
-            if not hr_path.exists():
-                missing_volumes.append(str(hr_path))
-                continue
-            try:
-                hr_imgs[pulse] = nib.load(str(hr_path))
-            except Exception:
-                missing_volumes.append(str(hr_path))
-        for pulse in pulses:
-            for res in resolutions:
-                for model in models:
-                    sr_path = results_root / str(model) / f"{res}mm" / "output_volumes" / f"{pid}-{pulse}.nii.gz"
-                    if not sr_path.exists():
-                        missing_volumes.append(str(sr_path))
-                        continue
-                    if pulse in hr_imgs:
-                        try:
-                            sr_img = nib.load(str(sr_path))
-                            hr_shape = hr_imgs[pulse].shape
-                            sr_shape = sr_img.shape
-                            diffs = np.abs(np.subtract(hr_shape, sr_shape))
-                            if np.any(diffs > 2):
-                                mismatched_shapes.append(f"{pid}-{pulse}-{res}-{model}: HR{hr_shape} vs SR{sr_shape}")
-                        except Exception:
-                            mismatched_shapes.append(str(sr_path))
-    report["missing_volumes"] = sorted(set(missing_volumes))
-    report["mismatched_shapes"] = mismatched_shapes
-    if report["mismatched_shapes"]:
-        LOG.warning("%d volume pairs have shape differences > 2 voxels.", len(report['mismatched_shapes']))
-        for s in report["mismatched_shapes"][:5]:
-            LOG.debug("Example mismatch: %s", s)
-
-    if report["missing_volumes"]:
-        LOG.warning("Missing %d volume files.", len(report['missing_volumes']))
-    if report["mismatched_shapes"]:
-        LOG.warning("%d volume pairs have shape differences > 2 voxels.", len(report['mismatched_shapes']))
-
-
-    return report
-
-def load_metrics_npz(path: pathlib.Path) -> Dict:
-    """Load metrics.npz from metrics.py with allow_pickle for lists."""
+# ----------------------- 2) I/O helpers and sanity checks ------------------
+def load_metrics_npz(path: pathlib.Path) -> Dict[str, Any]:
+    """Load metrics.npz with object arrays decoded to Python containers."""
     d = np.load(path, allow_pickle=True)
-    out = {k: d[k].tolist() if d[k].dtype == object else d[k] for k in d.files}
+    out = {k: (d[k].tolist() if d[k].dtype == object else d[k]) for k in d.files}
     return out
 
-def to_long_df(metrics: Dict) -> pd.DataFrame:
+def _strict_load(path: pathlib.Path) -> nib.Nifti1Image:
     """
-    Convert metrics arrays to a tidy DataFrame at patient level
-    using the 'mean' statistic across slices.
+    Load NIfTI with mmap disabled and force data read+scaling to surface I/O errors.
+    Returns a canonicalized image if successful, else raises an IO_ERRORS exception.
     """
-    arr = metrics["metrics"]  # (P,3,3,M,4,4,2)
-    patient_ids = metrics["patient_ids"]
-    pulses = list(metrics["pulses"])
-    resolutions = list(metrics["resolutions_mm"])
-    models = list(metrics["models"])
-    metric_names = list(metrics["metric_names"])
-    roi_labels = list(metrics["roi_labels"])
-    stat_names = list(metrics["stat_names"])
-    mean_idx = stat_names.index("mean")
+    img = nib.load(str(path), mmap=False)
+    _ = img.get_fdata(dtype=np.float32)  # force decompress + scale now
+    return nib.as_closest_canonical(img)
 
-    rows = []
-    P, n_pulses, n_res, n_models, n_metrics, n_rois, _ = arr.shape
-    for p in range(P):
-        for ip in range(n_pulses):
-            for ir in range(n_res):
-                for im in range(n_models):
-                    for imet in range(n_metrics):
-                        for iro in range(n_rois):
-                            val = arr[p, ip, ir, im, imet, iro, mean_idx]
-                            if np.isnan(val):
-                                continue
-                            rows.append({
-                                "patient": patient_ids[p],
-                                "pulse": pulses[ip],
-                                "resolution": resolutions[ir],
-                                "model": models[im],
-                                "metric": metric_names[imet],
-                                "roi": roi_labels[iro],
-                                "value": float(val)
-                            })
-    return pd.DataFrame(rows)
-
-def to_jsonable(obj):
-    """
-    Recursively convert NumPy/Pandas objects to built-in Python
-    so json.dumps never sees np.* dtypes.
-    """
-    if isinstance(obj, (np.integer,)):
-        return int(obj)
+def to_jsonable(obj: Any) -> Any:
+    """Cast numpy/pandas to Python built-ins for JSON serialization."""
     if isinstance(obj, (np.floating,)):
         return float(obj)
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
     if isinstance(obj, (np.bool_,)):
         return bool(obj)
-    if isinstance(obj, (np.ndarray,)):
+    if isinstance(obj, np.ndarray):
         return obj.tolist()
-    if isinstance(obj, (pd.Series,)):
-        return obj.tolist()
-    if isinstance(obj, (pd.DataFrame,)):
+    if isinstance(obj, pd.DataFrame):
         return obj.to_dict(orient="records")
+    if isinstance(obj, pd.Series):
+        return obj.tolist()
     if isinstance(obj, dict):
         return {str(k): to_jsonable(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple, set)):
         return [to_jsonable(v) for v in obj]
     return obj
 
-def holm_adjust(pvals: List[float]) -> List[float]:
-    """Holm step-down adjustment."""
-    if not pvals:
-        return []
-    return multipletests(pvals, alpha=0.05, method="holm")[1].tolist()
+def sanity_check_metrics(metrics: Dict[str, Any],
+                         hr_root: pathlib.Path,
+                         results_root: pathlib.Path) -> Dict[str, Any]:
+    """
+    Validate metrics integrity and on-disk volumes. Flags shape mismatches, NaNs,
+    out-of-range metrics, incomplete panels, and missing/misaligned NIfTI files.
+    """
+    report: Dict[str, Any] = {}
+    arr = metrics.get("metrics")
+    ok = isinstance(arr, np.ndarray) and arr.ndim == 7
+    report["shape_ok"] = bool(ok)
+    if not ok:
+        LOG.error("Bad metrics array. Expected 7-D, got %s", None if arr is None else arr.shape)
+        return report
 
-def fe_series(fit) -> pd.Series:
-    """
-    Return fixed-effect parameters as a named Series.
-    Works for MixedLM and OLS-robust fallback.
-    """
-    if hasattr(fit, "fe_params"):  # MixedLM
-        b = fit.fe_params
-    else:  # OLS robust wrapper in your fallback
-        b = fit.params
-    if isinstance(b, pd.Series):
-        return b
-    # last resort: build from model exog_names
-    names = fit.model.exog_names
-    return pd.Series(np.asarray(b).ravel(), index=names, dtype=float)
+    expected = (len(metrics.get("patient_ids", [])),
+                len(metrics.get("pulses", [])),
+                len(metrics.get("resolutions_mm", [])),
+                len(metrics.get("models", [])),
+                len(metrics.get("metric_names", [])),
+                len(metrics.get("roi_labels", [])),
+                len(metrics.get("stat_names", [])))
+    report["observed_shape"] = tuple(arr.shape) # type: ignore
+    report["expected_shape"] = expected
+    if tuple(arr.shape) != expected: # type: ignore
+        LOG.warning("Shape mismatch. observed=%s expected=%s", arr.shape, expected) # type: ignore
 
-def fe_cov(fit, names: List[str]) -> pd.DataFrame:
-    """
-    Return FE covariance aligned to 'names'.
-    If the returned matrix has a different shape, reindex or truncate safely.
-    """
-    V = fit.cov_params()
-    if isinstance(V, pd.DataFrame):
-        # some statsmodels builds include extra rows/cols (e.g., scale terms)
-        V = V.reindex(index=names, columns=names)
-    else:
-        V = np.asarray(V)
-        p = len(names)
-        if V.shape[0] != p:
-            V = V[:p, :p]  # truncate to FE dimension
-        V = pd.DataFrame(V, index=names, columns=names)
-    return V
+    # NaN rate on mean statistic
+    stat_names: List[str] = list(metrics.get("stat_names", []))
+    mean_idx = stat_names.index("mean") if "mean" in stat_names else 0
+    mean_vals = arr[..., mean_idx] # type: ignore
+    nan_frac = float(np.isnan(mean_vals).mean()) if mean_vals.size else 1.0
+    report["nan_fraction"] = nan_frac
+    if nan_frac > 0:
+        LOG.info("NaNs in metrics (mean): %.2f%%", 100 * nan_frac)
 
-def ensure_psd(V_df: pd.DataFrame, eps: float = 1e-9) -> np.ndarray:
-    """Return a symmetric positive semidefinite matrix from V_df.
+    # Ranges
+    oor: Dict[str, float] = {}
+    metric_names = list(metrics.get("metric_names", []))
+    for m_i, m_name in enumerate(metric_names):
+        vals = mean_vals[..., m_i, :]
+        finite = np.isfinite(vals)
+        bad = 0
+        if m_name.upper() == "SSIM":
+            bad = int(((vals[finite] < 0) | (vals[finite] > 1)).sum())
+        elif m_name.upper() == "PSNR":
+            bad = int(((vals[finite] <= 0) | (vals[finite] > 100)).sum())
+        oor[m_name] = float(bad)
+    report["out_of_range_counts"] = oor
 
-    - Symmetrize
-    - Eigen-decompose and clip negative eigenvalues to 0
-    - Add tiny jitter on the diagonal if everything is too close to 0
-    """
-    V = V_df.to_numpy(dtype=float)
-    V = 0.5 * (V + V.T)
-    try:
-        w, Q = np.linalg.eigh(V)
-    except np.linalg.LinAlgError:
-        # Strongly ill-conditioned – add jitter and retry
-        d = V.shape[0]
-        V = V + eps * np.eye(d)
-        w, Q = np.linalg.eigh(V)
-    w_clipped = np.clip(w, 0.0, None)
-    V_psd = (Q @ np.diag(w_clipped) @ Q.T)
-    # Enforce symmetry numerically
-    V_psd = 0.5 * (V_psd + V_psd.T)
-    if w_clipped.min(initial=0.0) < eps:
-        V_psd = V_psd + eps * np.eye(V_psd.shape[0])
-    return V_psd
+    # Completeness per (patient, roi)
+    df = to_long_df(metrics)
+    incomplete: Dict[str, int] = {}
+    for pulse in list(metrics.get("pulses", [])):
+        primary = PRIMARY_BY_PULSE.get(pulse)
+        if primary is None:
+            continue
+        sub = df[(df["pulse"] == pulse) & (df["metric"] == primary)].copy()
+        full_n = sub["model"].nunique() * sub["resolution"].nunique()
+        cells = (sub.assign(cell=sub["model"].astype(str) + "|" + sub["resolution"].astype(str))
+                    .groupby(["patient", "roi"])["cell"].nunique())
+        incomplete[pulse] = int((cells < full_n).sum())
+    report["incomplete_panels"] = incomplete
 
-def build_fe_X(fit, synth: pd.DataFrame, rhs: str, names: List[str]) -> np.ndarray:
-    """
-    Build a FE design matrix for 'synth' that exactly matches FE parameter names.
-    Drops unknown columns and adds missing zero-columns.
-    """
-    X = patsy.dmatrix("1 + " + rhs, synth, return_type="dataframe")
-    # align columns to FE names
-    for col in names:
-        if col not in X.columns:
-            X[col] = 0.0
-    X = X[names]  # drop extras
-    return X.to_numpy(dtype=float)
+    # Files on disk and shapes
+    miss: List[str] = []
+    mism: List[str] = []
+    patients = list(metrics.get("patient_ids", []))
+    pulses = list(metrics.get("pulses", []))
+    models = list(metrics.get("models", []))
+    resolutions = list(metrics.get("resolutions_mm", []))
+    for pid in tqdm(patients, desc="Verifying volumes", unit="patient"):
+        seg_p = hr_root / pid / f"{pid}-seg.nii.gz"
+        if not seg_p.exists():
+            miss.append(str(seg_p))
+        hr_imgs: Dict[str, nib.Nifti1Image] = {}
+        for pulse in pulses:
+            p = hr_root / pid / f"{pid}-{pulse}.nii.gz"
+            if not p.exists():
+                miss.append(str(p)); continue
+            try:
+                hr_imgs[pulse] = nib.as_closest_canonical(nib.load(str(p)))
+            except Exception:
+                miss.append(str(p))
+        for pulse in pulses:
+            for res in resolutions:
+                for model in models:
+                    sr = results_root / model / f"{res}mm" / "output_volumes" / f"{pid}-{pulse}.nii.gz"
+                    if not sr.exists():
+                        miss.append(str(sr)); continue
+                    if pulse in hr_imgs:
+                        try:
+                            sh = nib.load(str(sr)).shape # type: ignore
+                            if np.any(np.abs(np.subtract(hr_imgs[pulse].shape, sh)) > 2):
+                                mism.append(f"{pid}-{pulse}-{res}-{model}: HR{hr_imgs[pulse].shape} vs SR{sh}")
+                        except Exception:
+                            mism.append(str(sr))
+    report["missing_volumes"] = sorted(set(miss))
+    report["mismatched_shapes"] = mism
+    if miss: LOG.warning("Missing volumes: %d", len(miss))
+    if mism: LOG.warning("Shape mismatches > 2 vox: %d", len(mism))
+    return report
 
-def align_X_with_cov(fit, synth: pd.DataFrame, formula_rhs: str):
+# ------------------------------ 3) Data shaping ----------------------------
+def to_long_df(metrics: Dict[str, Any]) -> pd.DataFrame:
     """
-    Build FE design X for 'synth' and align its columns to the covariance
-    matrix order. Returns (X: ndarray, V: ndarray, cols: list[str]).
+    Build a tidy patient-level frame with the 'mean' stat across slices.
+    Returns columns: patient, pulse, resolution, model, metric, roi, value.
     """
-    # Raw covariance of FE params (DataFrame preferred)
-    V_raw = fit.cov_params()
-    if hasattr(V_raw, "index") and hasattr(V_raw, "columns"):
-        V_cols = list(V_raw.columns)
-        V = V_raw.to_numpy()
-    else:
-        # Fallback: use model exog names
-        V_cols = list(getattr(fit.model, "exog_names", []))
-        V = np.asarray(V_raw)
+    arr: np.ndarray = metrics["metrics"]
+    stat_names: List[str] = list(metrics["stat_names"])
+    mean_idx = stat_names.index("mean")
+    P, PUL, RES, MOD, MET, ROI, _ = arr.shape
 
-    # Build FE design matrix and align to V_cols
-    try:
-        X_df = patsy.dmatrix("1 + " + formula_rhs, synth, return_type="dataframe")
-    except Exception as e:
-        LOG.error("patsy.dmatrix failed for synth columns=%s → %s", list(synth.columns), e)
-        raise
-    missing = [c for c in V_cols if c not in X_df.columns]
-    for c in missing:
-        X_df[c] = 0.0
-    extra = [c for c in X_df.columns if c not in V_cols]
-    if extra:
-        LOG.debug("Design has extra columns not in cov: %s", extra)
-    X_df = X_df[V_cols]
-
-    X = X_df.to_numpy()
-    # Final sanity log
-    LOG.debug("Design/Cov alignment: X%s vs V%s | missing=%d extra=%d",
-              X.shape, V.shape, len(missing), len(extra))
-    return X, V, V_cols
+    # Cartesian product index
+    idx = pd.MultiIndex.from_product(
+        [metrics["patient_ids"], metrics["pulses"], metrics["resolutions_mm"],
+         metrics["models"], metrics["metric_names"], metrics["roi_labels"]],
+        names=["patient", "pulse", "resolution", "model", "metric", "roi"]
+    )
+    vals = arr[..., mean_idx].reshape(-1)
+    df = pd.DataFrame({"value": vals}, index=idx).reset_index()
+    df = df[np.isfinite(df["value"])]
+    return df
 
 def pack_table(df: pd.DataFrame, label: str) -> np.recarray:
-    """
-    Convert a DataFrame with mixed dtypes to a NumPy recarray for npz storage.
-    Logs schema. Returns empty recarray if df is empty.
-    """
+    """Convert mixed-dtype DataFrame to recarray for compact NPZ storage."""
     if df.empty:
-        LOG.warning("pack_table: %s is empty; storing empty recarray.", label)
+        LOG.warning("pack_table[%s]: empty", label)
         return np.recarray(0, dtype=[])
     rec = df.to_records(index=False)
-    LOG.debug("pack_table: %s schema=%s", label, rec.dtype)
+    LOG.debug("pack_table[%s]: dtype=%s", label, rec.dtype)
     return rec
 
+# ---------------- 4) Linear mixed models (EMM + contrasts) -----------------
+def fe_series(fit) -> pd.Series:
+    """Return named FE parameter vector for MixedLM or OLS-robust fallback."""
+    b = fit.fe_params if hasattr(fit, "fe_params") else fit.params
+    return b if isinstance(b, pd.Series) else pd.Series(np.asarray(b).ravel(), index=fit.model.exog_names, dtype=float)
+
+def fe_cov(fit, names: List[str]) -> pd.DataFrame:
+    """Return FE covariance aligned to `names` order."""
+    V = fit.cov_params()
+    if isinstance(V, pd.DataFrame):
+        return V.reindex(index=names, columns=names)
+    V = np.asarray(V)
+    p = len(names)
+    V = V[:p, :p]
+    return pd.DataFrame(V, index=names, columns=names)
+
 def ensure_psd(V_df: pd.DataFrame, eps: float = 1e-9) -> np.ndarray:
+    """Eigen-clip to nearest PSD."""
+    M = V_df.to_numpy(dtype=float)
+    M = 0.5 * (M + M.T)
+    w, Q = np.linalg.eigh(np.nan_to_num(M))
+    w = np.clip(w, a_min=eps, a_max=None)
+    return (Q * w) @ Q.T
+
+def build_fe_X(fit, synth: pd.DataFrame, rhs: str, names: List[str]) -> np.ndarray:
+    """DMATRIX for `1 + rhs` aligned to FE parameter names `names`."""
+    X = patsy.dmatrix("1 + " + rhs, synth, return_type="dataframe")
+    for c in names:
+        if c not in X.columns:
+            X[c] = 0.0
+    X = X[names]
+    return X.to_numpy(dtype=float)
+
+def fit_lmm_primary(df: pd.DataFrame, pulse: str) -> Tuple[pd.DataFrame, List[Dict[str, Any]]]:
     """
-    Project a symmetric covariance to the nearest PSD by eigenvalue clipping.
-    Returns numpy array. Logs when clipping/NaNs occur.
+    MixedLM on the primary endpoint of `pulse`.
+    Fixed: C(model)*C(resolution)+C(roi). Random: intercept per subject.
+    EMM over ROI and pairwise contrasts vs baseline (BSPLINE if present).
     """
-    V_sym = 0.5 * (V_df.values + V_df.values.T)
-    if np.isnan(V_sym).any():
-        LOG.warning("FE covariance contains NaNs; replacing NaNs with zero before PSD projection.")
-        V_sym = np.nan_to_num(V_sym, copy=False)
-
-    w, Q = np.linalg.eigh(V_sym)
-    n_neg = int((w < 0).sum())
-    if n_neg > 0:
-        LOG.warning("FE covariance not PSD: %d negative eigenvalues (min=%.2e). Clipping to ≥ %.1e.",
-                    n_neg, w.min(), eps)
-    w_clipped = np.clip(w, a_min=eps, a_max=None)
-    V_psd = (Q * w_clipped) @ Q.T
-    return V_psd
-
-
-def _as_float(img: nib.Nifti1Image) -> np.ndarray:
-    return img.get_fdata(dtype=np.float32)
-
-def _canonical(img: nib.Nifti1Image) -> nib.Nifti1Image:
-    """Reorient to RAS to standardize axes (axial is axis=2)."""
-    return nib.as_closest_canonical(img)
-
-def _pad_or_crop_to(arr: np.ndarray, target_shape: Tuple[int, int, int]) -> np.ndarray:
-    """
-    Center pad/crop to match target_shape. Only for small deltas (≤2 voxels/axis).
-    """
-    out = arr
-    diffs = np.array(target_shape) - np.array(arr.shape)
-    if np.all(diffs == 0):
-        return out
-    if np.any(np.abs(diffs) > 2):
-        LOG.error("pad/crop refused: shape delta %s too large vs target %s", diffs.tolist(), target_shape)
-        return out  # leave as-is; upstream checks will warn
-    # pad if positive diff, crop if negative
-    pads = [(max(0, d//2), max(0, d - d//2)) for d in diffs]
-    out = np.pad(out,
-                 pad_width=((pads[0][0], pads[0][1]),
-                            (pads[1][0], pads[1][1]),
-                            (pads[2][0], pads[2][1])),
-                 mode="constant", constant_values=0)
-    # crop negative diffs
-    for ax, d in enumerate(diffs):
-        if d < 0:
-            cutL = (-d)//2
-            cutR = (-d) - cutL
-            sl = [slice(None)]*3
-            sl[ax] = slice(cutL, out.shape[ax]-cutR)
-            out = out[tuple(sl)]
-    return out
-
-def load_align_triplet(hr_path: pathlib.Path,
-                       seg_path: pathlib.Path,
-                       sr_path: pathlib.Path) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Load HR, SEG, SR -> reorient all to RAS -> resample SEG and SR to HR grid.
-    Nearest for SEG, linear for SR. Pad/crop tiny residual shape deltas.
-    """
-    hr_img  = _canonical(nib.load(str(hr_path)))
-    seg_img = _canonical(nib.load(str(seg_path)))
-    sr_img  = _canonical(nib.load(str(sr_path)))
-
-    # resample_to=HR grid using affine+shape
-    seg_r = resample_from_to(seg_img, hr_img, order=0)  # nearest neighbor
-    sr_r  = resample_from_to(sr_img,  hr_img, order=1)  # linear
-
-    hr = _as_float(hr_img)
-    seg = _as_float(seg_r)
-    sr  = _as_float(sr_r)
-
-    # guard tiny residual mismatches
-    if seg.shape != hr.shape or sr.shape != hr.shape:
-        LOG.warning("Resampled shapes differ from HR: HR=%s SEG=%s SR=%s. Applying ≤2-voxel pad/crop.",
-                    hr.shape, seg.shape, sr.shape)
-        seg = _pad_or_crop_to(seg, hr.shape)
-        sr  = _pad_or_crop_to(sr,  hr.shape)
-    return hr, sr, seg
-
-# ----------------------------- LMM ----------------------------------------
-def fit_lmm_primary(df: pd.DataFrame, pulse: str):
     primary = PRIMARY_BY_PULSE[pulse]
-    sub = df.query("pulse == @pulse and metric == @primary").copy()
+    sub = df[(df["pulse"] == pulse) & (df["metric"] == primary)].copy()
     if sub.empty:
         return pd.DataFrame(), []
 
-    sub["subject"]       = sub["patient"].astype("category")
-    sub["roi_c"]         = sub["roi"].astype("category")
-    sub["resolution_c"]  = sub["resolution"].astype("category")
-    sub["model_c"]       = sub["model"].astype("category")
+    sub["subject"] = sub["patient"].astype("category")
+    sub["roi_c"] = sub["roi"].astype("category")
+    sub["resolution_c"] = sub["resolution"].astype("category")
+    sub["model_c"] = sub["model"].astype("category")
 
-    # keep complete panels (patient, roi) across all modelxresolution cells
+    # keep complete panels
     full_n = sub["model_c"].nunique() * sub["resolution_c"].nunique()
     cnt = (sub.assign(cell=sub["model_c"].astype(str) + "|" + sub["resolution_c"].astype(str))
-              .groupby(["patient","roi"])["cell"].nunique().reset_index(name="n"))
-    sub = sub.merge(cnt.loc[cnt["n"] == full_n, ["patient","roi"]], on=["patient","roi"], how="inner")
+             .groupby(["patient", "roi"])["cell"].nunique())
+    keep = cnt[cnt == full_n].index
+    sub = sub.set_index(["patient", "roi"]).loc[keep].reset_index()
     if sub.empty:
-        raise RuntimeError("No complete (patient, roi) panels. Fill or drop missing cells.")
+        raise PipelineError("No complete (patient, roi) panels for LMM.")
 
-    levels_roi = sub["roi_c"].cat.categories
-    levels_mod = sub["model_c"].cat.categories
-    levels_res = sub["resolution_c"].cat.categories
-    baseline   = "BSPLINE" if "BSPLINE" in levels_mod else levels_mod[0]
-    fe_rhs     = "C(model_c)*C(resolution_c) + C(roi_c)"  # reuse everywhere
+    lev_roi = sub["roi_c"].cat.categories
+    lev_mod = sub["model_c"].cat.categories
+    lev_res = sub["resolution_c"].cat.categories
+    baseline = "BSPLINE" if "BSPLINE" in lev_mod else lev_mod[0]
+    fe_rhs = "C(model_c)*C(resolution_c) + C(roi_c)"
 
-    # try MixedLM with subject random intercept, then without interaction; else OLS-CR
-    for formula in [f"value ~ {fe_rhs}", "value ~ C(model_c) + C(resolution_c) + C(roi_c)"]:
+    fit = None
+    for formula in (f"value ~ {fe_rhs}", "value ~ C(model_c) + C(resolution_c) + C(roi_c)"):
         try:
             m = smf.mixedlm(formula, data=sub, groups=sub["subject"])
             fit = m.fit(method="lbfgs", reml=True)
             break
         except Exception as e:
-            LOG.error("MixedLM failed for '%s' → %s", formula, type(e).__name__)
-            fit = None
+            LOG.error("MixedLM failed on '%s' → %s", formula, type(e).__name__)
     if fit is None:
-        import statsmodels.api as sm
+        import statsmodels.api as sm # type: ignore
         ols = smf.ols(f"value ~ {fe_rhs}", data=sub).fit()
         fit = ols.get_robustcov_results(cov_type="cluster", groups=sub["subject"])
-        # wrap to present .model and .cov_params like MixedLM
         class _Wrap:
-            fe_params = fit.params
+            fe_params = fit.params # type: ignore
             def cov_params(self): return fit.cov_params()
-            class _M:
-                exog_names = fit.model.exog_names
+            class _M: exog_names = fit.model.exog_names # type: ignore
             model = _M()
         fit = _Wrap()
-        LOG.info("Falling back to OLS with cluster-robust SEs.")
+        LOG.info("Fallback to OLS with cluster-robust SEs.")
 
-    # --- in fit_lmm_primary(), after you have 'fit' and before computing EMM/contrasts ---
-    # b = fe_series(fit)                 # named FE vector
-    # names = list(b.index)              # FE names
-    # V = fe_cov(fit, names)             # FE covariance aligned to names
-    # --- in fit_lmm_primary(), after you build b (fe_series) and V (fe_cov) ---
-    b = fe_series(fit)
-    names = list(b.index)
-    V_df = fe_cov(fit, names)
-    V_psd = ensure_psd(V_df)  # numpy array, PSD by construction
+    b = fe_series(fit); names = list(b.index); V = ensure_psd(fe_cov(fit, names))
+    emm_rows: List[Dict[str, Any]] = []
+    contrasts: List[Dict[str, Any]] = []
+    tmp: List[Tuple[Any, Any, float, float, float, float]] = []
+    pvals: List[float] = []
 
-    # EMM over ROI and pairwise contrasts vs baseline
-    emm_rows, contrasts, pvals, tmp = [], [], [], []
-    for r in tqdm(levels_res, desc=f"EMM[{pulse}]", leave=False):
-        for m_ in levels_mod:
-            # when you build 'synth' for EMMs and contrasts, keep categories explicit:
-            # synth = pd.DataFrame({
-            #     "model_c":      pd.Categorical([m]*len(levels_roi), categories=levels_mod),
-            #     "resolution_c": pd.Categorical([r]*len(levels_roi), categories=levels_res),
-            #     "roi_c":        pd.Categorical(levels_roi,          categories=levels_roi),
-            # })
+    # EMM per (model,res) marginal over ROI levels
+    for r in tqdm(lev_res, desc=f"EMM[{pulse}]", leave=False):
+        for m in lev_mod:
             synth = pd.DataFrame({
-                "model_c":      pd.Categorical([m_]*len(levels_roi), categories=levels_mod),
-                "resolution_c": pd.Categorical([r]*len(levels_roi),  categories=levels_res),
-                "roi_c":        pd.Categorical(levels_roi,            categories=levels_roi),
+                "model_c": pd.Categorical([m]*len(lev_roi), categories=lev_mod),
+                "resolution_c": pd.Categorical([r]*len(lev_roi), categories=lev_res),
+                "roi_c": pd.Categorical(list(lev_roi), categories=lev_roi)
             })
-            # then build X with aligned columns and use b,V
-            # X = build_fe_X(fit, synth, fe_rhs, names)
-            # pred = X @ b.values
-            # se = float(np.sqrt(np.mean(np.diag(X @ V.values @ X.T))))
-            # --- EMM block: replace SE computation and add debug logging ---
             X = build_fe_X(fit, synth, fe_rhs, names)
             pred = X @ b.values
             mean = float(np.mean(pred))
-            row_vars = np.einsum('ij,jk,ik->i', X, V_psd, X)  # safe even if nearly singular
-            if (not np.all(np.isfinite(row_vars))) or (np.nanmin(row_vars) < 0):
-                LOG.error("Row variances invalid for EMM (finite=%s, min=%.3e). Forcing nonneg.",
-                          np.all(np.isfinite(row_vars)), np.nanmin(row_vars))
-            row_vars = np.clip(row_vars, 0.0, None)
+            row_vars = np.clip(np.einsum("ij,jk,ik->i", X, V, X), 0.0, None)
             se = float(np.sqrt(np.mean(row_vars)))
             zc = stats.norm.ppf(0.975)
-            emm_rows.append({
-                "pulse": pulse, "resolution": str(r), "model": str(m_),
-                "n_subjects": sub["subject"].nunique(),
-                "mean": mean, "se": se, "lcl": mean - zc*se, "ucl": mean + zc*se
-            })
+            emm_rows.append({"pulse": pulse, "resolution": str(r), "model": str(m),
+                             "n_subjects": sub["subject"].nunique(),
+                             "mean": mean, "se": se, "lcl": mean - zc*se, "ucl": mean + zc*se})
 
-    for r in tqdm(levels_res, desc=f"Contrasts[{pulse}]", leave=False):
-        for m_ in levels_mod:
-            if m_ == baseline: 
-                continue
+    # Pairwise vs baseline at each resolution
+    for r in tqdm(lev_res, desc=f"Contrasts[{pulse}]", leave=False):
+        for m in lev_mod:
+            if m == baseline: continue
             synth = pd.DataFrame({
-                "model_c":      pd.Categorical([m_, baseline], categories=levels_mod),
-                "resolution_c": pd.Categorical([r, r],         categories=levels_res),
-                "roi_c":        pd.Categorical([levels_roi[0], levels_roi[0]], categories=levels_roi)
+                "model_c": pd.Categorical([m, baseline], categories=lev_mod),
+                "resolution_c": pd.Categorical([r, r], categories=lev_res),
+                "roi_c": pd.Categorical([lev_roi[0], lev_roi[0]], categories=lev_roi)
             })
-            LOG.debug("CONTRAST: building design for r=%s, m=%s vs baseline=%s", r, m_, baseline)
-            # for pairwise contrasts:
-            # synth2 = pd.DataFrame({
-            #     "model_c":      pd.Categorical([m_, baseline], categories=levels_mod),
-            #     "resolution_c": pd.Categorical([r, r],         categories=levels_res),
-            #     "roi_c":        pd.Categorical([levels_roi[0], levels_roi[0]], categories=levels_roi),
-            # })
-            # X2 = build_fe_X(fit, synth2, fe_rhs, names)
-            # c = (X2[0] - X2[1]).reshape(-1, 1)
-            # est = float((c.T @ b.values)[0])
-            # se  = float(np.sqrt((c.T @ V.values @ c)[0, 0]))
-            # --- CONTRAST block: replace SE computation and add guards ---
             X2 = build_fe_X(fit, synth, fe_rhs, names)
-            cvec = (X2[0] - X2[1]).reshape(-1, 1)
-            est = float((cvec.T @ b.values)[0])
-            var = float((cvec.T @ V_psd @ cvec)[0, 0])
-            if (not np.isfinite(var)) or (var < 0):
-                LOG.warning("Contrast variance invalid (var=%.3e). Forcing nonneg.", var)
-                var = max(var, 0.0)
-            se  = math.sqrt(var) if var > 0 else float("nan")
-            z   = est / se if (se and np.isfinite(se)) else float("nan")
-            p   = 2 * stats.norm.sf(abs(z)) if np.isfinite(z) else float("nan")
-            tmp.append((r, m_, est, se, z, p)); pvals.append(p)
+            c = (X2[0] - X2[1]).reshape(-1, 1)
+            est = float((c.T @ b.values)[0])
+            var = float((c.T @ V @ c)[0, 0]); var = max(var, 0.0)
+            se = math.sqrt(var) if var > 0 else float("nan")
+            z = est / se if np.isfinite(se) else float("nan")
+            p = 2 * stats.norm.sf(abs(z)) if np.isfinite(z) else float("nan")
+            tmp.append((r, m, est, se, z, p)); pvals.append(p)
 
     padj = multipletests(pvals, alpha=0.05, method="holm")[1].tolist() if pvals else []
-    for (r, m_, est, se, z, p), p_h in zip(tmp, padj):
-        # --- CONTRAST pairing: replace .query(...) with boolean indexing (no int() inside query) ---
-        r_val = int(r)  # r is a Categorical level; cast in Python, not inside query
-        paired = sub[(sub["resolution"] == r_val) & (sub["model"] == m_)]
-        base   = sub[(sub["resolution"] == r_val) & (sub["model"] == baseline)]
+    for (r, m, est, se, z, p), p_h in zip(tmp, padj):
+        r_val = int(r)
+        paired = sub[(sub["resolution"] == r_val) & (sub["model"] == m)]
+        base = sub[(sub["resolution"] == r_val) & (sub["model"] == baseline)]
         if paired.empty or base.empty:
-            LOG.warning("No paired rows for contrast pulse=%s res=%s model=%s vs %s; skipping effect size.",
-                        pulse, r_val, m_, baseline)
-            n = 0; g = np.nan; g_ci = (np.nan, np.nan)
+            contrasts.append({"pulse": pulse, "resolution": str(r), "model": str(m),
+                              "baseline": baseline, "estimate": est, "se": se,
+                              "z": z, "p_raw": p, "p_holm": p_h,
+                              "hedges_g": np.nan, "g_ci": (np.nan, np.nan), "n_pairs": 0})
+            continue
+        merged = pd.merge(
+            paired[["patient","roi","value"]].rename(columns={"value":"v1"}),
+            base[["patient","roi","value"]].rename(columns={"value":"v0"}),
+            on=["patient","roi"], how="inner"
+        )
+        d = (merged["v1"] - merged["v0"]).to_numpy()
+        n = d.size
+        sd = np.std(d, ddof=1) if n > 1 else np.nan
+        dz = np.mean(d) / sd if sd and sd > 0 else np.nan
+        J = 1 - 3/(4*n - 1) if n > 1 else np.nan
+        g = dz * J if np.isfinite(dz) else np.nan
+        if n > 1 and np.isfinite(dz):
+            se_dz = math.sqrt((1/n) + (dz**2)/(2*(n-1)))
+            zcrit = stats.norm.ppf(0.975)
+            g_ci = (g - zcrit*se_dz*J, g + zcrit*se_dz*J)
         else:
-            merged = pd.merge(
-                paired[["patient","roi","value"]].rename(columns={"value":"v1"}),
-                base  [["patient","roi","value"]].rename(columns={"value":"v0"}),
-                on=["patient","roi"], how="inner"
-            )
-            diffs = (merged["v1"] - merged["v0"]).to_numpy()
-            n  = diffs.size
-            sd = np.std(diffs, ddof=1) if n > 1 else np.nan
-            dz = np.mean(diffs) / sd if sd and sd > 0 else np.nan
-            J  = 1 - 3/(4*n - 1) if n > 1 else np.nan
-            g  = dz * J if np.isfinite(dz) else np.nan
-            if n > 1 and np.isfinite(dz):
-                se_dz = math.sqrt((1/n) + (dz**2)/(2*(n-1)))
-                zcrit = stats.norm.ppf(0.975)
-                g_ci = (g - zcrit*se_dz*J, g + zcrit*se_dz*J)
-            else:
-                g_ci = (np.nan, np.nan)
-        contrasts.append({
-            "pulse": pulse, "resolution": str(r),
-            "model": str(m_), "baseline": baseline,
-            "estimate": est, "se": se, "z": z,
-            "p_raw": p, "p_holm": p_h, "hedges_g": g, "g_ci": g_ci, "n_pairs": int(n)
-        })
-
+            g_ci = (np.nan, np.nan)
+        contrasts.append({"pulse": pulse, "resolution": str(r), "model": str(m),
+                          "baseline": baseline, "estimate": est, "se": se, "z": z,
+                          "p_raw": p, "p_holm": p_h, "hedges_g": g, "g_ci": g_ci, "n_pairs": int(n)})
     return pd.DataFrame(emm_rows), contrasts
 
+# -------- 5) Nonparametric confirmation (Friedman + Wilcoxon) -------------
+def holm_adjust(pvals: List[float]) -> List[float]:
+    """Holm step-down family-wise adjustment."""
+    return multipletests(pvals, alpha=0.05, method="holm")[1].tolist() if pvals else []
 
-
-# ----------------------- Nonparametric confirmation -----------------------
-def friedman_wilcoxon(df: pd.DataFrame, pulse: str) -> Tuple[List[dict], List[dict]]:
-    """
-    Friedman omnibus and Wilcoxon signed-rank confirmations per (resolution, roi)
-    for the pulse-specific primary endpoint. Uses boolean indexing to avoid
-    pandas.query/numexpr pitfalls.
-    """
+def friedman_wilcoxon(df: pd.DataFrame, pulse: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Omnibus Friedman per (resolution, roi) and Wilcoxon vs baseline per model."""
     primary = PRIMARY_BY_PULSE[pulse]
-    # filter once for pulse + primary metric
     sub = df[(df["pulse"] == pulse) & (df["metric"] == primary)].copy()
     if sub.empty:
-        LOG.warning("NP tests[%s]: empty after filtering to primary=%s", pulse, primary)
         return [], []
-
     models = sorted(sub["model"].unique().tolist())
     baseline = "BSPLINE" if "BSPLINE" in models else models[0]
-    friedman_out, wilcoxon_out = [], []
-
-    LOG.debug(
-        "NP tests[%s]: rows=%d subjects=%d models=%s baseline=%s",
-        pulse, len(sub), sub["patient"].nunique(), models, baseline
-    )
+    fr_out: List[Dict[str, Any]] = []
+    wi_out: List[Dict[str, Any]] = []
 
     for res in sorted(sub["resolution"].unique()):
         for roi in ROI_LABELS:
             mask = (sub["resolution"] == res) & (sub["roi"] == roi)
-            piv = (
-                sub.loc[mask]
-                   .pivot_table(index="patient", columns="model", values="value", aggfunc="mean")
-                   .dropna(axis=0, how="any")
-            )
-            LOG.debug("Pivot[%s]: res=%s roi=%s shape=%s", pulse, res, roi, tuple(piv.shape))
+            piv = (sub.loc[mask]
+                      .pivot_table(index="patient", columns="model", values="value", aggfunc="mean")
+                      .dropna(axis=0, how="any"))
             if piv.shape[0] < 3 or piv.shape[1] < 2:
                 continue
-
-            # Friedman omnibus across available models in this pivot
             cols = [m for m in models if m in piv.columns]
             try:
-                chi2, p = stats.friedmanchisquare(*[piv[m].to_numpy(dtype=float) for m in cols])
-                friedman_out.append({
-                    "pulse": pulse, "resolution": int(res), "roi": roi,
-                    "n": int(piv.shape[0]), "chi2": float(chi2), "p_raw": float(p)
-                })
-            except Exception as e:
-                LOG.warning("Friedman[%s]: res=%s roi=%s failed → %s", pulse, res, roi, type(e).__name__)
+                chi2, p = stats.friedmanchisquare(*[piv[m].to_numpy(float) for m in cols])
+                fr_out.append({"pulse": pulse, "resolution": int(res), "roi": roi,
+                               "n": int(piv.shape[0]), "chi2": float(chi2), "p_raw": float(p)})
+            except Exception:
                 continue
-
-            # Wilcoxon vs baseline, per non-baseline model
-            pairs = []
+            pairs, p_raws = [], []
             for m in cols:
-                if m == baseline:
-                    continue
-                x = piv[m].to_numpy(dtype=float)
-                y = piv[baseline].to_numpy(dtype=float)
-                if x.size < 5:
-                    continue
+                if m == baseline: continue
+                x = piv[m].to_numpy(float); y = piv[baseline].to_numpy(float)
+                if x.size < 5: continue
                 W, p = stats.wilcoxon(x, y, zero_method="wilcox", alternative="two-sided", method="approx")
                 diffs = x - y
                 n = diffs.size
                 sd = np.std(diffs, ddof=1) if n > 1 else np.nan
                 dz = np.mean(diffs) / sd if sd and sd > 0 else np.nan
-                pairs.append((m, W, p, n, dz))
-
+                pairs.append((m, W, p, n, dz)); p_raws.append(p)
             if not pairs:
                 continue
-            adj = holm_adjust([p for (_, _, p, _, _) in pairs])
-
+            adj = holm_adjust(p_raws)
             for (m, W, p, n, dz), p_h in zip(pairs, adj):
                 sign = np.sign(np.nanmean(piv[m] - piv[baseline]))
                 z = stats.norm.ppf(1 - p/2) * sign if np.isfinite(p) and p > 0 else np.nan
@@ -768,133 +486,242 @@ def friedman_wilcoxon(df: pd.DataFrame, pulse: str) -> Tuple[List[dict], List[di
                     dz_ci = (dz - zcrit*se_dz, dz + zcrit*se_dz)
                 else:
                     dz_ci = (np.nan, np.nan)
-                wilcoxon_out.append({
-                    "pulse": pulse, "resolution": int(res), "roi": roi,
-                    "model": m, "baseline": baseline,
-                    "n": int(n), "W": float(W), "z": float(z),
-                    "p_raw": float(p), "p_holm": float(p_h),
-                    "dz": float(dz) if np.isfinite(dz) else np.nan,
-                    "dz_ci": dz_ci
-                })
+                wi_out.append({"pulse": pulse, "resolution": int(res), "roi": roi,
+                               "model": m, "baseline": baseline, "n": int(n),
+                               "W": float(W), "z": float(z), "p_raw": float(p),
+                               "p_holm": float(p_h), "dz": float(dz) if np.isfinite(dz) else np.nan,
+                               "dz_ci": dz_ci})
+    return fr_out, wi_out
 
-    return friedman_out, wilcoxon_out
+# --------------------- 6) Radiomics engines and ICC(2,1) -------------------
+def _as_float(img: nib.Nifti1Image) -> np.ndarray:
+    return img.get_fdata(dtype=np.float32)
+
+def _err_record(stage: str, paths: Dict[str, str], exc: Exception) -> Dict[str, Any]:
+    return {"__error__": True, "stage": stage, "paths": paths, "error": f"{type(exc).__name__}: {exc}"}
 
 
-# ----------------------- Radiomic stability (ICC) -------------------------
-def load_vol(path: pathlib.Path, like_img: nib.Nifti1Image | None = None, order: int = 1) -> np.ndarray:
-    """Load NIfTI as float32 array in voxel space of 'like_img' if provided."""
-    img = nib.load(str(path))
-    data = img.get_fdata(dtype=np.float32)
-    return np.asarray(data)
+def _pad_or_crop_to(arr: np.ndarray, target: Tuple[int, int, int]) -> np.ndarray:
+    """Center pad/crop ≤2 voxels per axis to match `target`."""
+    dif = np.array(target) - np.array(arr.shape)
+    if np.all(dif == 0):
+        return arr
+    if np.any(np.abs(dif) > 2):
+        LOG.error("Refusing pad/crop. Δshape=%s target=%s", dif.tolist(), target); return arr
+    out = np.pad(arr,
+                 ((max(0, dif[0]//2), max(0, dif[0]-dif[0]//2)),
+                  (max(0, dif[1]//2), max(0, dif[1]-dif[1]//2)),
+                  (max(0, dif[2]//2), max(0, dif[2]-dif[2]//2))),
+                 mode="constant", constant_values=0)
+    for ax, d in enumerate(dif):
+        if d < 0:
+            L = (-d)//2; R = (-d) - L
+            sl = [slice(None)]*3; sl[ax] = slice(L, out.shape[ax]-R)
+            out = out[tuple(sl)]
+    return out
 
-def roi_mask_from_seg(seg: np.ndarray, label: int | None) -> np.ndarray:
-    return np.ones_like(seg, dtype=bool) if label is None else (seg == label)
+def load_align_triplet(hr_p: pathlib.Path, seg_p: pathlib.Path, sr_p: pathlib.Path
+                       ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    hr_i = _strict_load(hr_p)
+    seg_i = _strict_load(seg_p)
+    sr_i = _strict_load(sr_p)
+    seg_r = resample_from_to(seg_i, hr_i, order=0)
+    sr_r  = resample_from_to(sr_i,  hr_i, order=1)
+    hr = _as_float(hr_i); seg = _as_float(seg_r); sr = _as_float(sr_r)
+    if seg.shape != hr.shape or sr.shape != hr.shape:
+        LOG.warning("Pad/crop to HR grid. HR=%s SEG=%s SR=%s", hr.shape, seg.shape, sr.shape)
+        seg = _pad_or_crop_to(seg, hr.shape); sr = _pad_or_crop_to(sr, hr.shape)
+    return hr, sr, seg
 
-def first_order_features(a: np.ndarray) -> Dict[str, float]:
-    """Simple, robust first-order features inside a mask."""
+def roi_mask(seg: np.ndarray, label: Optional[int]) -> np.ndarray:
+    """ROI mask. None → union of tumor labels >0."""
+    return (seg > 0) if label is None else (seg == label)
+
+def first_order(a: np.ndarray) -> Dict[str, float]:
+    """Robust FO inside mask."""
     a = a[np.isfinite(a)]
     if a.size == 0:
         return {k: np.nan for k in ["mean","var","skew","kurt","entropy"]}
-    hist, edges = np.histogram(a, bins=256, density=True)
-    p = hist/np.sum(hist)
-    p = p[p>0]
-    entr = -np.sum(p*np.log2(p))
+    hist, _ = np.histogram(a, bins=256, density=True)
+    p = hist / max(np.sum(hist), 1.0); p = p[p > 0]
     return {
         "mean": float(np.mean(a)),
-        "var": float(np.var(a, ddof=1)) if a.size>1 else np.nan,
-        "skew": float(stats.skew(a, bias=False)) if a.size>2 else np.nan,
-        "kurt": float(stats.kurtosis(a, fisher=True, bias=False)) if a.size>3 else np.nan,
-        "entropy": float(entr)
+        "var": float(np.var(a, ddof=1)) if a.size > 1 else np.nan,
+        "skew": float(stats.skew(a, bias=False)) if a.size > 2 else np.nan,
+        "kurt": float(stats.kurtosis(a, fisher=True, bias=False)) if a.size > 3 else np.nan,
+        "entropy": float(-np.sum(p * np.log2(p)))
     }
 
-def glcm_features(slice2d: np.ndarray, mask2d: np.ndarray) -> Dict[str, float]:
-    """
-    Few texture features from GLCM on a single axial slice.
-    Intensities are quantized to 32 levels.
-    """
-    if not mask2d.any():
+def glcm_slice_feats(im2d: np.ndarray, m2d: np.ndarray) -> Dict[str, float]:
+    """Texture on axial slice, masked, 32 levels, 1-pixel distance."""
+    if not m2d.any():
         return {"contr": np.nan, "homog": np.nan, "corr": np.nan}
-    try:
-        vals = slice2d[mask2d]
-    except Exception:
-        # Let me visualize the mask and the slice in the calling function
-        LOG.error("glcm_features: mask application failed with shapes %s vs %s", slice2d.shape, mask2d.shape)
+    vals = im2d[m2d]
+    vmin, vmax = np.percentile(vals, [1, 99]) if vals.size else (np.nan, np.nan)
+    if not np.isfinite(vmin) or not np.isfinite(vmax) or vmax <= vmin:
         return {"contr": np.nan, "homog": np.nan, "corr": np.nan}
-    vmin, vmax = np.percentile(vals, [1, 99])
-    if vmax <= vmin:
-        return {"contr": np.nan, "homog": np.nan, "corr": np.nan}
-    q = np.clip(((slice2d - vmin) / (vmax - vmin) * 31).astype(np.uint8), 0, 31)
-    # 1-pixel distance, 0 deg; average over directions could be added if desired
-    glcm = graycomatrix(q, distances=[1], angles=[0], levels=32, symmetric=True, normed=True)
+    q = np.clip(((im2d - vmin) / (vmax - vmin) * 31).astype(np.uint8), 0, 31)
+    G = graycomatrix(q, distances=[1], angles=[0], levels=32, symmetric=True, normed=True)
     return {
-        "contr": float(graycoprops(glcm, "contrast")[0,0]),
-        "homog": float(graycoprops(glcm, "homogeneity")[0,0]),
-        "corr":  float(graycoprops(glcm, "correlation")[0,0]),
+        "contr": float(graycoprops(G, "contrast")[0, 0]),
+        "homog": float(graycoprops(G, "homogeneity")[0, 0]),
+        "corr":  float(graycoprops(G, "correlation")[0, 0]),
     }
 
-def extract_radiomics(hr_vol: np.ndarray, sr_vol: np.ndarray, seg_vol: np.ndarray, roi_label: int | None) -> Dict[str, float]:
-    feats: Dict[str, float] = {}
-    mask = roi_mask_from_seg(seg_vol, roi_label)
-    if not mask.any():
-        return {k: np.nan for k in ["mean","var","skew","kurt","entropy","contr","homog","corr"]}
+def _icc2_1_two_raters(hr: np.ndarray, sr: np.ndarray) -> float:
+    """ICC(2,1) closed-form for two 'raters' HR vs SR."""
+    X = np.vstack([hr, sr]).T
+    X = X[np.all(np.isfinite(X), axis=1)]
+    n = X.shape[0]
+    if n < 2:
+        return np.nan
+    grand = X.mean()
+    m_rows = X.mean(axis=1, keepdims=True)
+    m_cols = X.mean(axis=0, keepdims=True)
+    ss_total = ((X - grand)**2).sum()
+    ss_rows = 2 * ((m_rows - grand)**2).sum()
+    ss_cols = n * ((m_cols - grand)**2).sum()
+    ss_err = ss_total - ss_rows - ss_cols
+    ms_rows = ss_rows / (n - 1)
+    ms_cols = ss_cols / (2 - 1)
+    ms_err = ss_err / ((n - 1) * (2 - 1))
+    denom = ms_rows + (2 - 1)*ms_err + 2*(ms_cols - ms_err)/n
+    if not np.isfinite(denom) or denom <= 0:
+        return np.nan
+    return float((ms_rows - ms_err) / denom)
 
-    # first-order on all voxels inside ROI
-    fo_hr = first_order_features(hr_vol[mask])
-    fo_sr = first_order_features(sr_vol[mask])
+# --------------------------- 7) Parallel workers ---------------------------
+# PyRadiomics: per-process extractor via initializer to avoid pickling
+_PYRAD_SETTINGS: Optional[Dict[str, Any]] = None
+_PYRAD_EXTRACTOR: Any = None
 
-    # texture: axial slices (axis=2 in RAS). Avoid axis=0 sagittal error.
-    contr, homog, corr = [], [], []
-    Z = hr_vol.shape[2]
-    for z in range(Z):
-        roi2d = mask[:, :, z]
-        if not roi2d.any():
-            continue
-        f_hr = glcm_features(hr_vol[:, :, z], roi2d)
-        f_sr = glcm_features(sr_vol[:, :, z], roi2d)
-        contr.append((f_hr["contr"], f_sr["contr"]))
-        homog.append((f_hr["homog"], f_sr["homog"]))
-        corr.append((f_hr["corr"],  f_sr["corr"]))
+def _pyrad_init(settings: Dict[str, Any]) -> None:
+    """Process initializer: cache settings and build extractor once."""
+    global _PYRAD_SETTINGS, _PYRAD_EXTRACTOR
+    _PYRAD_SETTINGS = settings
+    if _HAS_PYRADIOMICS:
+        _PYRAD_EXTRACTOR = featureextractor.RadiomicsFeatureExtractor(**settings)
+        _PYRAD_EXTRACTOR.disableAllFeatures()
+        for cls in ("firstorder","glcm","glrlm","glszm","gldm","ngtdm","shape"):
+            _PYRAD_EXTRACTOR.enableFeatureClassByName(cls)
 
-    def avg(pairs, idx):
-        arr = np.array([p[idx] for p in pairs if np.all(np.isfinite(p))], dtype=float)
-        return float(np.mean(arr)) if arr.size else np.nan
-
-    out = {f"{k}_HR": fo_hr[k] for k in ["mean","var","skew","kurt","entropy"]}
-    out.update({f"{k}_SR": fo_sr[k] for k in ["mean","var","skew","kurt","entropy"]})
-    out["contr_HR"] = avg(contr, 0); out["contr_SR"] = avg(contr, 1)
-    out["homog_HR"] = avg(homog, 0); out["homog_SR"] = avg(homog, 1)
-    out["corr_HR"]  = avg(corr,  0); out["corr_SR"]  = avg(corr,  1)
+def _clean_ibsi(d: Dict[str, Any], prefix: str) -> Dict[str, float]:
+    """Subset pyradiomics output to _IBSI_KEEP and add HR_/SR_ prefix."""
+    out: Dict[str, float] = {}
+    for k, v in d.items():
+        if k in _IBSI_KEEP and isinstance(v, (int, float)) and np.isfinite(v):
+            out[f"{k}_{prefix}"] = float(v)
     return out
 
-def icc2_1(values: np.ndarray) -> float:
-    """
-    ICC(2,1): two-way random, absolute agreement, single measurement.
-    values shape: (n_subjects, k_raters)
-    """
-    if values.ndim != 2 or values.shape[0] < 2 or values.shape[1] < 2:
-        return np.nan
-    n, k = values.shape
-    x = values
-    mpt = np.nanmean(x, axis=1, keepdims=True)
-    mtr = np.nanmean(x, axis=0, keepdims=True)
-    m = np.nanmean(x)
-    # sums of squares with nan-handling
-    ss_total = np.nansum((x - m)**2)
-    ss_rows = k * np.nansum((mpt - m)**2)
-    ss_cols = n * np.nansum((mtr - m)**2)
-    ss_err  = ss_total - ss_rows - ss_cols
-    df_rows, df_cols, df_err = n-1, k-1, (n-1)*(k-1)
-    ms_rows = ss_rows/df_rows if df_rows>0 else np.nan
-    ms_cols = ss_cols/df_cols if df_cols>0 else np.nan
-    ms_err  = ss_err/df_err  if df_err>0  else np.nan
-    if any(np.isnan([ms_rows, ms_cols, ms_err])):
-        return np.nan
-    return (ms_rows - ms_err) / (ms_rows + (k-1)*ms_err + k*(ms_cols - ms_err)/n)
+# UPDATED: _worker_ibsi_one — same robust handling
+def _worker_ibsi_one(triple: Tuple[pathlib.Path, pathlib.Path, pathlib.Path],
+                     pulse: str, res: int, model: str,
+                     roi_map: Dict[str, Optional[int]]) -> List[Dict[str, Any]] | Dict[str, Any]:
+    hr_p, seg_p, sr_p = triple
+    try:
+        hr, sr, seg = load_align_triplet(hr_p, seg_p, sr_p)
+    except IO_ERRORS as e:
+        return _err_record(
+            stage="ibsi_load",
+            paths={"hr": str(hr_p), "seg": str(seg_p), "sr": str(sr_p),
+                   "pulse": pulse, "res": str(res), "model": model},
+            exc=e,
+        )
+    pid = hr_p.parent.name
+    rows: List[Dict[str, Any]] = []
+    if not _HAS_PYRADIOMICS:
+        return rows
+    for roi_name, label in roi_map.items():
+        m = roi_mask(seg, label)
+        if not m.any():
+            continue
+        try:
+            sitk_mask = sitk.GetImageFromArray(m.astype(np.uint8))
+            img_hr = sitk.GetImageFromArray(hr.astype(np.float32))
+            img_sr = sitk.GetImageFromArray(sr.astype(np.float32))
+            res_hr = _PYRAD_EXTRACTOR.execute(img_hr, sitk_mask)
+            res_sr = _PYRAD_EXTRACTOR.execute(img_sr, sitk_mask)
+        except Exception as e:
+            # return a per-ROI error record rather than failing the subject
+            rows.append(_err_record(
+                stage="ibsi_execute",
+                paths={"patient": pid, "roi": roi_name, "pulse": pulse,
+                       "res": str(res), "model": model},
+                exc=e,
+            ))
+            continue
+        feats = {}
+        feats.update(_clean_ibsi(res_hr, "HR"))
+        feats.update(_clean_ibsi(res_sr, "SR"))
+        if feats:
+            row = {"patient": pid, "pulse": pulse, "resolution": int(res),
+                   "model": model, "roi": roi_name}
+            row.update(feats)
+            rows.append(row)
+    return rows
 
-def collect_paths(hr_root: pathlib.Path, results_root: pathlib.Path, pulse: str, model: str, res_mm: int) -> List[Tuple[pathlib.Path, pathlib.Path, pathlib.Path]]:
-    """Return list of (hr, seg, sr) paths for patients available in both roots."""
-    out = []
+
+def _dispatch_ibsi(args):
+    """Unpack tuple and call _worker_ibsi_one."""
+    triple, pulse, res, model, roi_map = args
+    return _worker_ibsi_one(triple, pulse, res, model, roi_map)
+
+
+def run_radiomics_ibsi(paths: Paths,
+                       pulses: List[str], resolutions: List[int], models: List[str],
+                       ibsi_bin_width: float, ibsi_distances: List[int],
+                       ibsi_min_roi_vox: int, workers: int) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    PyRadiomics IBSI features (HR/SR) per ROI. Parallel by subject with safe per-process extractor.
+    """
+    errors: List[Dict[str, Any]] = []
+    if not _HAS_PYRADIOMICS:
+        LOG.error("Install 'pyradiomics' + 'SimpleITK' for IBSI features.")
+        return {}
+
+    settings = {
+        "normalize": False, "resampledPixelSpacing": None, "interpolator": "sitkBSpline",
+        "force2D": False, "force2Ddimension": 0, "distances": list(ibsi_distances),
+        "symmetricalGLCM": True, "minimumROIDimensions": 2, "minimumROISize": ibsi_min_roi_vox,
+        "resegmentRange": None, "additionalInfo": True,
+        **({"binWidth": float(ibsi_bin_width)} if ibsi_bin_width and ibsi_bin_width > 0 else {})
+    }
+    out: Dict[str, List[Dict[str, Any]]] = {p: [] for p in pulses}
+    roi_map = {"all": None, "core": 1, "edema": 2, "surround": 3}
+    
+    ctx = mp.get_context("spawn")
+    for pulse in pulses:
+        for res in resolutions:
+            for model in models:
+                pairs = collect_paths(paths.hr_root, paths.results_root, pulse, model, res)
+                if not pairs:
+                    continue
+                with ctx.Pool(processes=max(1, workers),
+                              initializer=_pyrad_init, initargs=(settings,)) as pool:
+                    tasks = ((tr, pulse, res, model, roi_map) for tr in pairs)
+                    it = pool.imap_unordered(
+                        _dispatch_ibsi, tasks,
+                        chunksize=max(1, len(pairs)//(4*max(1, workers)) or 1),
+                    )
+                    for rows in tqdm(it, total=len(pairs),
+                                     desc=f"IBSI {pulse} {res}mm {model}", unit="subj"):
+                        if isinstance(rows, dict) and rows.get("__error__"):
+                            errors.append(rows); LOG.warning("IBSI skip: %s", rows["error"]); continue
+                        out[pulse].extend(rows)
+                gc.collect()
+    if errors:
+        err_path = paths.out_npz.parent / (paths.out_npz.stem + "_ibsi_errors.json")
+        with open(err_path, "w", encoding="utf-8") as f:
+            json.dump(errors, f, indent=2, ensure_ascii=False)
+        LOG.info("IBSI errors logged → %s (%d records)", err_path, len(errors))
+    return out
+
+def collect_paths(hr_root: pathlib.Path, results_root: pathlib.Path,
+                  pulse: str, model: str, res_mm: int
+                  ) -> List[Tuple[pathlib.Path, pathlib.Path, pathlib.Path]]:
+    """Collect (HR, SEG, SR) triplets present in both roots."""
     sr_dir = results_root / model / f"{res_mm}mm" / "output_volumes"
+    out: List[Tuple[pathlib.Path, pathlib.Path, pathlib.Path]] = []
     for patient_dir in sorted(hr_root.iterdir()):
         pid = patient_dir.name
         hr_p = patient_dir / f"{pid}-{pulse}.nii.gz"
@@ -904,217 +731,223 @@ def collect_paths(hr_root: pathlib.Path, results_root: pathlib.Path, pulse: str,
             out.append((hr_p, seg_p, sr_p))
     return out
 
-def _radiomics_worker(args: Tuple[pathlib.Path, pathlib.Path, pathlib.Path, str, int]) -> Tuple[str, Dict[str, Dict[str, float]]] | None:
-    """Worker: load/align and compute radiomics per ROI for one subject.
+def _dispatch_one_subject(args):
+    """Unpack tuple and call _one_subject."""
+    triple, pulse = args
+    return _one_subject(triple, pulse)
 
-    Returns (pid, {roi: feature_dict}). On failure returns None.
-    """
-    hr_p, seg_p, sr_p, pulse, levels = args  # 'levels' kept for future tweaks
+def _one_subject(triple: Tuple[pathlib.Path, pathlib.Path, pathlib.Path],
+                 pulse: str) -> Tuple[str, Dict[str, Dict[str, float]]] | Dict[str, Any]:
+    hr_p, seg_p, sr_p = triple
     try:
         hr, sr, seg = load_align_triplet(hr_p, seg_p, sr_p)
-        pid = hr_p.parent.name
-        # ROI labels map
-        roi_map = {"all": None, "core": 1, "edema": 2, "surround": 3}
-        out: Dict[str, Dict[str, float]] = {}
-        for roi_name in ROI_LABELS:
-            label = roi_map[roi_name]
-            mask = roi_mask_from_seg(seg, label)
-            if not mask.any():
-                out[roi_name] = {k: float('nan') for k in [
-                    "mean_HR","var_HR","skew_HR","kurt_HR","entropy_HR",
-                    "mean_SR","var_SR","skew_SR","kurt_SR","entropy_SR",
-                    "contr_HR","contr_SR","homog_HR","homog_SR","corr_HR","corr_SR",
-                ]}
-                continue
+    except IO_ERRORS as e:
+        return _err_record(
+            stage="icc_light_load",
+            paths={"hr": str(hr_p), "seg": str(seg_p), "sr": str(sr_p), "pulse": pulse},
+            exc=e,
+        )
+    pid = hr_p.parent.name
+    rows: Dict[str, Dict[str, float]] = {}
+    for roi_name, label in {"all": None, "core": 1, "edema": 2, "surround": 3}.items():
+        m = roi_mask(seg, label)
+        if not m.any():
+            continue
+        fo_hr = first_order(hr[m]); fo_sr = first_order(sr[m])
+        contr, homog, corr = [], [], []
+        Z = hr.shape[2]
+        for z in range(Z):
+            m2d = m[:, :, z]
+            if not m2d.any(): continue
+            f_hr = glcm_slice_feats(hr[:, :, z], m2d)
+            f_sr = glcm_slice_feats(sr[:, :, z], m2d)
+            contr.append((f_hr["contr"], f_sr["contr"]))
+            homog.append((f_hr["homog"], f_sr["homog"]))
+            corr.append((f_hr["corr"],  f_sr["corr"]))
+        def _avg(pairs, i):
+            a = np.array([p[i] for p in pairs if np.all(np.isfinite(p))], float)
+            return float(np.mean(a)) if a.size else np.nan
+        feats = {}
+        for k in ["mean","var","skew","kurt","entropy"]:
+            feats[f"{k}_HR"] = fo_hr[k]; feats[f"{k}_SR"] = fo_sr[k]
+        feats["contr_HR"] = _avg(contr,0); feats["contr_SR"] = _avg(contr,1)
+        feats["homog_HR"] = _avg(homog,0); feats["homog_SR"] = _avg(homog,1)
+        feats["corr_HR"]  = _avg(corr,0);  feats["corr_SR"]  = _avg(corr,1)
+        rows[roi_name] = feats
+    return pid, rows
 
-            # first-order features
-            fo_hr = first_order_features(hr[mask])
-            fo_sr = first_order_features(sr[mask])
-
-            # Precompute global quantization params for this ROI across HR+SR
-            vals = np.concatenate([hr[mask].ravel(), sr[mask].ravel()])
-            vals = vals[np.isfinite(vals)]
-            if vals.size == 0:
-                vmin = vmax = np.nan
-            else:
-                vmin, vmax = np.percentile(vals, [1, 99])
-
-            contr_pairs: List[Tuple[float, float]] = []
-            homog_pairs: List[Tuple[float, float]] = []
-            corr_pairs:  List[Tuple[float, float]] = []
-            if (np.isfinite(vmin) and np.isfinite(vmax) and (vmax > vmin)):
-                scale = 31.0 / (vmax - vmin)
-                # iterate axial slices (axis=2 in RAS)
-                Z = hr.shape[2]
-                for z in range(Z):
-                    roi2d = mask[:, :, z]
-                    if not roi2d.any():
-                        continue
-                    # quantize using global ROI vmin/vmax
-                    q_hr = np.clip(((hr[:, :, z] - vmin) * scale).astype(np.uint8), 0, 31)
-                    q_sr = np.clip(((sr[:, :, z] - vmin) * scale).astype(np.uint8), 0, 31)
-                    # GLCM on quantized images; same behavior as previous (no mask support)
-                    gl_hr = graycomatrix(q_hr, distances=[1], angles=[0], levels=32, symmetric=True, normed=True)
-                    gl_sr = graycomatrix(q_sr, distances=[1], angles=[0], levels=32, symmetric=True, normed=True)
-                    contr_pairs.append((float(graycoprops(gl_hr, "contrast")[0,0]),
-                                        float(graycoprops(gl_sr, "contrast")[0,0])))
-                    homog_pairs.append((float(graycoprops(gl_hr, "homogeneity")[0,0]),
-                                        float(graycoprops(gl_sr, "homogeneity")[0,0])))
-                    corr_pairs.append((float(graycoprops(gl_hr, "correlation")[0,0]),
-                                       float(graycoprops(gl_sr, "correlation")[0,0])))
-            # aggregate
-            def _avg(pairs: List[Tuple[float, float]], idx: int) -> float:
-                arr = np.array([p[idx] for p in pairs if np.all(np.isfinite(p))], dtype=float)
-                return float(np.mean(arr)) if arr.size else float('nan')
-
-            feats: Dict[str, float] = {}
-            feats.update({f"{k}_HR": fo_hr[k] for k in ["mean","var","skew","kurt","entropy"]})
-            feats.update({f"{k}_SR": fo_sr[k] for k in ["mean","var","skew","kurt","entropy"]})
-            feats["contr_HR"] = _avg(contr_pairs, 0); feats["contr_SR"] = _avg(contr_pairs, 1)
-            feats["homog_HR"] = _avg(homog_pairs, 0); feats["homog_SR"] = _avg(homog_pairs, 1)
-            feats["corr_HR"]  = _avg(corr_pairs,  0); feats["corr_SR"]  = _avg(corr_pairs,  1)
-            out[roi_name] = feats
-        return pid, out
-    except Exception as e:
-        try:
-            pid = hr_p.parent.name
-        except Exception:
-            pid = "<unknown>"
-        LOG.error("Radiomics worker failed for %s (%s): %s", pid, pulse, e)
-        return None
-
-
-def run_radiomics(paths: Paths, pulses: List[str], resolutions: List[int], models: List[str], workers: int = 1) -> Dict[str, List[dict]]:
-    """
-    Compute ICC(2,1) for HR vs SR per feature, resolution, model, and ROI.
-    Features: mean,var,skew,kurt,entropy,contr,homog,corr
-    """
-    icc_out: Dict[str, List[dict]] = {p: [] for p in pulses}
-    roi_map = {"all": None, "core": 1, "edema": 2, "surround": 3}
+# UPDATED: run_icc_light — consume error records, continue, and log to JSON
+def run_icc_light(paths: Paths, pulses: List[str], resolutions: List[int],
+                  models: List[str], workers: int) -> Dict[str, List[Dict[str, Any]]]:
+    icc_out: Dict[str, List[Dict[str, Any]]] = {p: [] for p in pulses}
+    errors: List[Dict[str, Any]] = []
+    ctx = mp.get_context("spawn")
     for pulse in pulses:
         for res in resolutions:
             for model in models:
                 pairs = collect_paths(paths.hr_root, paths.results_root, pulse, model, res)
                 if not pairs:
                     continue
-                # accumulate per-subject features
                 per_roi_feats: Dict[str, Dict[str, Dict[str, float]]] = {roi: {} for roi in ROI_LABELS}
-                subj_ids: List[str] = []
-
-                n = len(pairs)
-                w = max(1, min(workers, n))
-                chunksize = max(1, n // (w * 4) or 1)
-                with mp.Pool(w) as pool:
+                with ctx.Pool(processes=max(1, workers)) as pool:
+                    tasks = zip(pairs, repeat(pulse))
                     it = pool.imap_unordered(
-                        _radiomics_worker,
-                        [(hr_p, seg_p, sr_p, pulse, 32) for (hr_p, seg_p, sr_p) in pairs],
-                        chunksize=chunksize,
+                        _dispatch_one_subject,
+                        tasks,
+                        chunksize=max(1, len(pairs)//(4*max(1, workers)) or 1),
                     )
-                    for res_item in tqdm(it, total=n, desc=f"Radiomics {pulse} {res}mm {model}", unit="subj"):
-                        if res_item is None:
+                    for res_item in tqdm(it, total=len(pairs),
+                                         desc=f"Radiomics {pulse} {res}mm {model}", unit="subj"):
+                        if isinstance(res_item, dict) and res_item.get("__error__"):
+                            errors.append(res_item)
+                            LOG.warning("Skipped subject due to I/O: %s", res_item["error"])
                             continue
                         pid, roi_feats = res_item
-                        subj_ids.append(pid)
                         for roi in ROI_LABELS:
-                            per_roi_feats[roi][pid] = roi_feats.get(roi, {})
-                # compute ICC per feature within each ROI
+                            if roi in roi_feats:
+                                per_roi_feats[roi][pid] = roi_feats[roi]
+                # compute ICC as before ...
                 for roi in ROI_LABELS:
                     if not per_roi_feats[roi]:
                         continue
-                    # build arrays HR vs SR across subjects
                     keys = sorted(per_roi_feats[roi].keys())
                     feat_names = [k[:-3] for k in per_roi_feats[roi][keys[0]].keys() if k.endswith("_HR")]
                     for feat in feat_names:
                         hr_vals = np.array([per_roi_feats[roi][k][f"{feat}_HR"] for k in keys], float)
                         sr_vals = np.array([per_roi_feats[roi][k][f"{feat}_SR"] for k in keys], float)
-                        X = np.vstack([hr_vals, sr_vals]).T
-                        icc = float(icc2_1(X))
-                        icc_out[pulse].append({
-                            "pulse": pulse, "resolution": int(res), "model": model,
-                            "roi": roi, "feature": feat, "n": int(len(keys)), "ICC2_1": icc
-                        })
+                        mask = np.isfinite(hr_vals) & np.isfinite(sr_vals)
+                        if mask.sum() < 2: continue
+                        icc = _icc2_1_two_raters(hr_vals[mask], sr_vals[mask])
+                        icc_out[pulse].append({"pulse": pulse, "resolution": int(res), "model": model,
+                                               "roi": roi, "feature": feat, "n": int(mask.sum()),
+                                               "ICC2_1": float(icc)})
+                gc.collect()
+    # persist error ledger next to main NPZ
+    try:
+        err_path = paths.out_npz.parent / (paths.out_npz.stem + "_radiomics_errors.json")
+        with open(err_path, "w", encoding="utf-8") as f:
+            json.dump(errors, f, indent=2, ensure_ascii=False)
+        if errors:
+            LOG.info("Radiomics errors logged → %s (%d records)", err_path, len(errors))
+    except Exception:
+        pass
     return icc_out
 
-# ----------------------------- main orchestration -------------------------
-def main():
-    _configure_sr_logging()
+
+# ------------------------- 8) Orchestration and CLI ------------------------
+def main() -> None:
+    _configure_logging()
+    # avoid BLAS oversubscription inside forked workers
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
+    os.environ.setdefault("MKL_NUM_THREADS", "1")
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--metrics_npz", type=pathlib.Path, required=True)
     ap.add_argument("--hr_root", type=pathlib.Path, required=True)
     ap.add_argument("--results_root", type=pathlib.Path, required=True)
     ap.add_argument("--out_npz", type=pathlib.Path, required=True)
-    ap.add_argument("--workers", type=int, default=max(1, mp.cpu_count() - 1), help="Parallel workers for radiomics stage")
+
+    # Radiomics NPZ
+    ap.add_argument("--radiomics_out", type=pathlib.Path, required=False,
+                    help="If set, save per-subject IBSI radiomics (HR/SR) to a second NPZ.")
+    ap.add_argument("--ibsi_bin_width", type=float, default=25.0,
+                    help="IBSI fixed bin width. Set ≤0 to skip binWidth and let pyradiomics decide.")
+    ap.add_argument("--ibsi_distances", type=int, nargs="+", default=[1, 2, 3],
+                    help="Distances for GLCM/GLRLM.")
+    ap.add_argument("--ibsi_min_roi_vox", type=int, default=500,
+                    help="Skip IBSI if ROI voxels < threshold.")
+    ap.add_argument("--workers", type=int, default=max(1, mp.cpu_count() - 1),
+                    help="Process workers for radiomics stages.")
     args = ap.parse_args()
     paths = Paths(args.metrics_npz, args.hr_root, args.results_root, args.out_npz)
 
-    LOG.info("Starting SR statistics analysis …")
-    # 1) Load and tidy metrics
+    LOG.info("SR statistics analysis started.")
+
+    # 1) Load and sanity report
     metr = load_metrics_npz(paths.metrics_npz)
-    # Run sanity checks on metrics and underlying volumes.  The report
-    # summarises potential issues (NaNs, shape mismatches, missing files, etc.).
     try:
-        check_report = sanity_check_metrics(metr, paths.hr_root, paths.results_root)
-        # Save in the same directory as out_npz
-        json_saving_path = paths.out_npz.parent / (paths.out_npz.stem + "_sanity_report.json")
-        with open(json_saving_path, "w", encoding="utf-8") as f:
-            json.dump(check_report, f, indent=2, ensure_ascii=False)
-        # Log the report as JSON for readability
-        LOG.info("Sanity check report saved to %s", json_saving_path)
+        report = sanity_check_metrics(metr, paths.hr_root, paths.results_root)
+        rep_path = paths.out_npz.parent / (paths.out_npz.stem + "_sanity_report.json")
+        with open(rep_path, "w", encoding="utf-8") as f:
+            json.dump(report, f, indent=2, ensure_ascii=False)
+        LOG.info("Sanity report → %s", rep_path)
     except Exception as e:
-        # Do not abort the entire analysis if checks fail; just log the error
         LOG.error("Sanity check failed: %s", e)
+
+    # 2) Tidy frame
     df = to_long_df(metr)
     pulses = list(metr["pulses"]); resolutions = list(metr["resolutions_mm"]); models = list(metr["models"])
-    LOG.info("Loaded metrics: rows=%d | pulses=%s | resolutions=%s | models=%s",
+    LOG.info("Dataset: n=%d rows | pulses=%s | resolutions=%s | models=%s",
              len(df), pulses, resolutions, models)
 
-    # 2) LMM per pulse
-    lmm_emm_all = {}
-    lmm_contr_all = {}
-    for p in tqdm(pulses, desc="LMM (primary)", unit="pulse"):
-        emm_table, contrasts = fit_lmm_primary(df, p)
-        lmm_emm_all[p] = {"emm_table": pack_table(emm_table, f"EMM[{p}]")}
-        lmm_contr_all[p] = {"contrasts": contrasts}
+    if not paths.out_npz.exists():
+        # 3) LMM per pulse
+        lmm_emm_all: Dict[str, Any] = {}
+        lmm_contr_all: Dict[str, Any] = {}
+        for p in tqdm(pulses, desc="LMM (primary)", unit="pulse"):
+            emm_table, contrasts = fit_lmm_primary(df, p)
+            lmm_emm_all[p] = {"emm_table": pack_table(emm_table, f"EMM[{p}]")}
+            lmm_contr_all[p] = {"contrasts": contrasts}
 
-    # 3) Nonparametric confirmations
-    friedman_all, wilcoxon_all = {}, {}
-    for p in tqdm(pulses, desc="Nonparametric tests", unit="pulse"):
-        fr, wi = friedman_wilcoxon(df, p)
-        # Holm across pairs grouped within each (p,res,roi)
-        # Already applied inside; store raw dicts
-        friedman_all[p] = {"by_res_roi": fr}
-        wilcoxon_all[p] = {"pairs": wi}
+        # 4) Nonparametric confirmation
+        friedman_all: Dict[str, Any] = {}
+        wilcoxon_all: Dict[str, Any] = {}
+        for p in tqdm(pulses, desc="Nonparametric tests", unit="pulse"):
+            fr, wi = friedman_wilcoxon(df, p)
+            friedman_all[p] = {"by_res_roi": fr}
+            wilcoxon_all[p] = {"pairs": wi}
 
-    # 4) Radiomic stability ICC
-    icc_all = run_radiomics(paths, pulses, resolutions, models, workers=args.workers)
+        # 5) Radiomic stability ICC (light FO/GLCM, fast)
+        icc_all = run_icc_light(paths, pulses, resolutions, models, workers=args.workers)
 
-    # 5) Persist everything needed for plotting
-    meta_dict = {
-        "pulses": [str(x) for x in pulses],
-        "resolutions_mm": [int(x) for x in resolutions],
-        "models": [str(x) for x in models],
-        "metric_names": [str(x) for x in metr["metric_names"]],
-        "roi_labels": [str(x) for x in metr["roi_labels"]],
-        "primary_by_pulse": {str(k): str(v) for k, v in PRIMARY_BY_PULSE.items()},
-    }
-
-    try:
-        meta_json = json.dumps(meta_dict, ensure_ascii=False)
-    except TypeError as e:
-        LOG.warning("meta_dict not JSON-serializable (%s). Coercing to built-ins.", e)
-        meta_json = json.dumps(to_jsonable(meta_dict), ensure_ascii=False)
-
-    np.savez_compressed(
-        paths.out_npz,
-        meta=meta_json,
-        lmm_emm=np.array(lmm_emm_all, dtype=object),
-        lmm_contrasts=np.array(lmm_contr_all, dtype=object),
-        friedman=np.array(friedman_all, dtype=object),
-        wilcoxon=np.array(wilcoxon_all, dtype=object),
-        icc=np.array(icc_all, dtype=object),
-    )
-    LOG.info("Saved: %s", paths.out_npz)
+        LOG.debug(f"ICC results: {icc_all}")
         
+        # 6) Persist main NPZ for plotting
+        meta = {
+            "pulses": [str(x) for x in pulses],
+            "resolutions_mm": [int(x) for x in resolutions],
+            "models": [str(x) for x in models],
+            "metric_names": [str(x) for x in metr["metric_names"]],
+            "roi_labels": [str(x) for x in metr["roi_labels"]],
+            "primary_by_pulse": {str(k): str(v) for k, v in PRIMARY_BY_PULSE.items()},
+        }
+        meta_json = json.dumps(meta, ensure_ascii=False)
+        np.savez_compressed(
+            paths.out_npz,
+            meta=meta_json,
+            lmm_emm=np.array(lmm_emm_all, dtype=object),
+            lmm_contrasts=np.array(lmm_contr_all, dtype=object),
+            friedman=np.array(friedman_all, dtype=object),
+            wilcoxon=np.array(wilcoxon_all, dtype=object),
+            icc=np.array(icc_all, dtype=object),
+        )
+        LOG.info("Saved primary stats NPZ → %s", paths.out_npz)
+    else:
+        LOG.info("Primary stats NPZ already exists → %s", paths.out_npz)
+
+    # 7) Optional: IBSI radiomics NPZ (heavier; parallelized; per-subject rows)
+    if args.radiomics_out is not None:
+        ibsi = run_radiomics_ibsi(paths, pulses, resolutions, models,
+                                  ibsi_bin_width=args.ibsi_bin_width,
+                                  ibsi_distances=args.ibsi_distances,
+                                  ibsi_min_roi_vox=args.ibsi_min_roi_vox,
+                                  workers=args.workers)
+        meta_r = {
+            "pulses": [str(x) for x in pulses],
+            "resolutions_mm": [int(x) for x in resolutions],
+            "models": [str(x) for x in models],
+            "roi_labels": list(ROI_LABELS),
+            "ibsi_features": sorted(_IBSI_KEEP),
+            "ibsi_bin_width": int(args.ibsi_bin_width),
+            "ibsi_distances": list(args.ibsi_distances),
+            "ibsi_min_roi_vox": int(args.ibsi_min_roi_vox),
+        }
+        np.savez_compressed(args.radiomics_out,
+                            meta=json.dumps(meta_r, ensure_ascii=False),
+                            radiomics=np.array(ibsi, dtype=object))
+        LOG.info("Saved IBSI radiomics NPZ → %s", args.radiomics_out)
+
+    LOG.info("Done.")
 
 if __name__ == "__main__":
     main()

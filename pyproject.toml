@@ -52,7 +52,8 @@ dependencies = [
     "seaborn",
     "pyyaml",
     "scienceplots",
-    "lpips" # Perceptual Similarity Metric, for Super-resolution https://github.com/richzhang/PerceptualSimilarity 
+    "lpips", # Perceptual Similarity Metric, for Super-resolution https://github.com/richzhang/PerceptualSimilarity 
+    "pyradiomics"
 ]
 
 [build-system]

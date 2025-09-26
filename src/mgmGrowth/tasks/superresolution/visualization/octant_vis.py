@@ -15,20 +15,20 @@ from pathlib import Path
 # ───────────────────── user configuration ──────────────────────────────
 PATIENT   = "BraTS-MEN-00231-000"
 COORDS    = (65, 120, 135)                 # (x, y, z) slice indices
-PULSES    = ("t1c", "t2w", "t2f")
+PULSES    = ("t1c", "t1n", "t2w", "t2f")
 RES_MM    = (3, 5, 7)
 MODELS    = ("BSPLINE", "SMORE", "UNIRES", "ECLARE")           # add more if available
 # Where to save screenshots (same tree as metric plots)
 OUT_ROOT  = pathlib.Path(
-    "/home/mpascual/research/datasets/meningiomas/BraTS/super_resolution/results/metrics/vis/octant"
+    "/media/mpascual/PortableSSD/Meningiomas/tasks/superresolution/results/figures/octant"
 )
 FORMAT = "pdf"
 
 # roots for data
 HR_ROOT   = pathlib.Path(
-    "/home/mpascual/research/datasets/meningiomas/BraTS/super_resolution/subset")
+    "/media/mpascual/PortableSSD/Meningiomas/tasks/superresolution/high_resolution")
 MODEL_ROOT = pathlib.Path(
-    "/home/mpascual/research/datasets/meningiomas/BraTS/super_resolution/results/models")
+    "/media/mpascual/PortableSSD/Meningiomas/tasks/superresolution/results/models")
 
 # ───────────────────── path helpers ────────────────────────────────────
 def hr_path(pulse: str) -> pathlib.Path:

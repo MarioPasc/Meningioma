@@ -33,6 +33,8 @@ from matplotlib.colors import ListedColormap, BoundaryNorm
 from matplotlib.colors import LinearSegmentedColormap, BoundaryNorm
 from matplotlib.gridspec import GridSpec
 from matplotlib import lines as mlines
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="pandas")
 # ------------------------- logging and style ------------------------------
 
 LOG = logging.getLogger("SR:plots")
