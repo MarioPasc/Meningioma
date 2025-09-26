@@ -318,8 +318,6 @@ def plot_octant(volume: np.ndarray,
     if save is not None:
         fig.savefig(save, dpi=300,
                     bbox_inches="tight", pad_inches=-0.3)   # <-- add kwargs
-    else:
-        plt.show()
     return fig
 
 def _cube_wireframe(ax: plt.Axes, dx: int, dy: int, dz: int) -> None:

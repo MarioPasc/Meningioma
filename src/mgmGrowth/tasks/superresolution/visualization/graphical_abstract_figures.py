@@ -125,6 +125,20 @@ class Args:
 
 
 def parse_args() -> Args:
+    """
+    
+    Example:
+    python src/mgmGrowth/tasks/superresolution/visualization/graphical_abstract_figures.py \
+        --subject BraTS-MEN-00231-000 \
+        --highres_dir /media/mpascual/PortableSSD/Meningiomas/tasks/superresolution/high_resolution \
+        --models_dir /media/mpascual/PortableSSD/Meningiomas/tasks/superresolution/results/models \
+        --pulses t1c t1n t2f t2w \
+        --coords 65 120 135 \
+        --out  /media/mpascual/PortableSSD/Meningiomas/tasks/superresolution/results/graphical_abstract \
+        --workers 8 \
+        --roi_core_label 1 \
+        --roi_edema_label 2 
+    """
     p = argparse.ArgumentParser(description="Create graphical abstract figures (octants, residuals, radiomics)")
     p.add_argument("--subject", required=True)
     p.add_argument("--highres_dir", required=True, type=Path)
@@ -178,27 +192,53 @@ def configure_matplotlib_white() -> None:
 
 def load_nii(path: Path):
     try:
+        logging.debug("Loading NIfTI: %s", path)
         return nib.load(str(path))
     except Exception as e:
         raise FileNotFoundError(f"Failed to load NIfTI: {path}") from e
 
 
 def load_hr_and_seg(args: Args, pulse: str) -> Tuple[object, np.ndarray, Optional[np.ndarray]]:
+    logging.info("[HR] Loading subject=%s pulse=%s", args.subject, pulse)
     hr_path = hr_pulse_path(args.highres_dir, args.subject, pulse)
     hr_nii = load_nii(hr_path)
     hr_LPS = data_LPS(hr_nii)
     seg_path = hr_seg_path(args.highres_dir, args.subject)
-    seg_LPS = data_LPS(load_nii(seg_path)) if seg_path.exists() else None
+    if seg_path.exists():
+        seg_LPS = data_LPS(load_nii(seg_path))
+        logging.debug(
+            "[SEG] Found segmentation for subject=%s at %s (hr shape=%s)",
+            args.subject,
+            seg_path,
+            tuple(hr_LPS.shape),
+        )
+    else:
+        seg_LPS = None
+        logging.debug("[SEG] No segmentation found at %s", seg_path)
+    try:
+        zooms = tuple(map(float, nib.as_closest_canonical(hr_nii).header.get_zooms()[:3]))
+    except Exception:
+        zooms = (np.nan, np.nan, np.nan)
+    logging.info("[HR] Loaded %s | shape=%s | zooms=%s", hr_path.name, tuple(hr_LPS.shape), zooms)
     return hr_nii, hr_LPS, seg_LPS
 
 
 def compute_coords(args: Args, hr_LPS: np.ndarray, seg_LPS: Optional[np.ndarray]) -> Tuple[int, int, int]:
+    logging.debug(
+        "Computing coords | explicit=%s | mode=%s | seg_present=%s",
+        args.coords is not None,
+        args.coord_mode,
+        seg_LPS is not None,
+    )
     if args.coords is not None:
-        return args.coords
-    if seg_LPS is not None and args.coord_mode in ("auto", "com"):
-        return center_of_mass(seg_LPS > 0)
-    nz = np.array(hr_LPS.shape) // 2
-    return int(nz[2]), int(nz[0]), int(nz[1])
+        coords = args.coords
+    elif seg_LPS is not None and args.coord_mode in ("auto", "com"):
+        coords = center_of_mass(seg_LPS > 0)
+    else:
+        nz = np.array(hr_LPS.shape) // 2
+        coords = (int(nz[2]), int(nz[0]), int(nz[1]))
+    logging.info("Using coordinates (k,i,j)=%s", coords)
+    return coords
 
 
 def nn_degrade_and_restore_to_hr(hr_vol: np.ndarray, hr_zooms: Tuple[float, float, float], target_mm: float) -> np.ndarray:
@@ -208,6 +248,7 @@ def nn_degrade_and_restore_to_hr(hr_vol: np.ndarray, hr_zooms: Tuple[float, floa
     """
     from scipy.ndimage import zoom  # type: ignore
 
+    logging.debug("NN degrade+restore | target=%.2f mm | hr_zooms=%s | hr_shape=%s", target_mm, tuple(hr_zooms), tuple(hr_vol.shape))
     tz = np.asarray(hr_zooms, dtype=float)
     tz[tz <= 0] = 1.0
     # downsample factors to achieve approx target_mm spacing
@@ -219,6 +260,7 @@ def nn_degrade_and_restore_to_hr(hr_vol: np.ndarray, hr_zooms: Tuple[float, floa
     back = zoom(low, zoom=np.array(hr_vol.shape) / np.array(low.shape), order=0, prefilter=False)
     # ensure exact shape
     back = _center_crop_or_pad_to(back, hr_vol.shape)
+    logging.debug("NN degrade+restore done | low_shape=%s | back_shape=%s", tuple(low.shape), tuple(back.shape))
     return back.astype(np.float32, copy=False)
 
 
@@ -251,6 +293,7 @@ def signed_residual(sr: np.ndarray, hr: np.ndarray) -> np.ndarray:
     def crop(x, t):
         return x[tuple(slice(0, s) for s in t)]
     a = crop(a, tgt); b = crop(b, tgt)
+    logging.debug("Residual | shape=%s", tgt)
     return a - b
 
 
@@ -261,7 +304,9 @@ def symmetric_rmax(residuals: Sequence[np.ndarray], q: float = 99.0) -> float:
         if m.any():
             v = np.percentile(np.abs(r[m]).ravel(), q)
             vals.append(float(v))
-    return float(max(vals)) if vals else 1.0
+    r = float(max(vals)) if vals else 1.0
+    logging.debug("Symmetric residual vmax (q=%.1f) => %.6f", q, r)
+    return r
 
 
 # ------------------------------- Radiomics ---------------------------------
@@ -317,6 +362,7 @@ def render_octant_pdf(vol: np.ndarray, coords: Tuple[int, int, int], out_path: P
                       cmap: str = "gray",
                       fig_size: Tuple[int, int] = (6, 6)) -> None:
     ensure_dir(out_path.parent)
+    logging.info("Render octant -> %s | coords=%s | cmap=%s", out_path, coords, cmap)
     fig = plot_octant(vol, coords, cmap=cmap, alpha=0.95, segmentation=segmentation,
                       seg_alpha=0.5, only_line=True, figsize=fig_size, save=out_path)
     plt.close(fig)
@@ -327,6 +373,7 @@ def render_residual_octant_pdf(res: np.ndarray, coords: Tuple[int, int, int], ou
     ensure_dir(out_path.parent)
     # Diverging cmap centered at 0 using standard 'coolwarm'
     vmin, vmax = -vmax_abs, vmax_abs
+    logging.info("Render residual octant -> %s | coords=%s | window=[%.6f, %.6f]", out_path, coords, vmin, vmax)
     # inject sentinels to enforce global window used by plot_octant
     k, i, j = coords
     vol = res.copy()
@@ -347,6 +394,7 @@ def render_radiomics_pdf(hr_LPS: np.ndarray, seg_LPS: Optional[np.ndarray], coor
                          out_path: Path, title: str,
                          fig_size: Tuple[int, int] = (9, 3)) -> None:
     ensure_dir(out_path.parent)
+    logging.info("Render radiomics -> %s | ROI=%s | roi_label=%s", out_path, title, str(roi_label))
     if seg_LPS is None and roi_label is not None and mask_override is None:
         logging.warning("No segmentation found; skipping ROI '%s' for %s", title, out_path.name)
         return
@@ -373,6 +421,7 @@ def render_radiomics_pdf(hr_LPS: np.ndarray, seg_LPS: Optional[np.ndarray], coor
     axial = hr_LPS[:, :, k]
     axial_mask = mask_roi[:, :, k]
     glcm = glcm_props_slice(axial, axial_mask)
+    logging.debug("Radiomics stats | FO=%s | GLCM=%s", fo, glcm)
 
     fig, axs = plt.subplots(1, 3, figsize=fig_size)
 
@@ -417,6 +466,7 @@ def render_radiomics_pdf(hr_LPS: np.ndarray, seg_LPS: Optional[np.ndarray], coor
 
     fig.tight_layout()
     fig.savefig(out_path, bbox_inches='tight')
+    logging.info("Saved radiomics figure: %s", out_path)
     plt.close(fig)
 
 
@@ -425,6 +475,7 @@ def render_radiomics_pdf(hr_LPS: np.ndarray, seg_LPS: Optional[np.ndarray], coor
 def _prefetch_sr_for_pulse(args: Args, pulse: str, hr_nii, hr_LPS: np.ndarray) -> Tuple[Dict[Tuple[str, int], np.ndarray], List[np.ndarray]]:
     """Load and resample SR volumes (optionally in parallel) for a pulse."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
+    logging.info("[SR] Prefetching SR volumes for pulse=%s (models=%d, scales=%s)", pulse, len(args.models), RES_ROWS)
 
     def _load_one(model: str, rmm: int) -> Tuple[Tuple[str, int], Optional[np.ndarray]]:
         sr_path = sr_model_path(args.models_dir, model, rmm, args.subject, pulse)
@@ -435,6 +486,7 @@ def _prefetch_sr_for_pulse(args: Args, pulse: str, hr_nii, hr_LPS: np.ndarray) -
             sr_nii = nib.load(str(sr_path))
             sr_r = resample_like(sr_nii, nib.as_closest_canonical(hr_nii), order=1)
             sr_LPS = data_LPS(sr_r)
+            logging.debug("[SR] Loaded %s | shape=%s", sr_path.name, tuple(sr_LPS.shape))
             return (model, rmm), sr_LPS
         except Exception as e:
             logging.error("Failed SR resample %s: %s", sr_path.name, e)
@@ -459,6 +511,7 @@ def _prefetch_sr_for_pulse(args: Args, pulse: str, hr_nii, hr_LPS: np.ndarray) -
                     sr_pre[key] = vol
                     residuals_for_window.append(signed_residual(vol, hr_LPS))
 
+    logging.info("[SR] Prefetch complete for pulse=%s | loaded=%d volumes | residuals=%d", pulse, len(sr_pre), len(residuals_for_window))
     return sr_pre, residuals_for_window
 
 
@@ -466,6 +519,15 @@ def main() -> None:
     args = parse_args()
     logging.basicConfig(level=getattr(logging, args.log, logging.INFO), format="%(levelname)s: %(message)s")
     configure_matplotlib_white()
+    logging.info(
+        "Start graphical abstract generation | subject=%s | pulses=%s | models=%s | coord_mode=%s | workers=%d | out=%s",
+        args.subject,
+        ",".join(args.pulses),
+        ",".join(args.models),
+        args.coord_mode,
+        args.workers,
+        args.out_dir,
+    )
 
     # Prepare output structure
     out_oct_hr = args.out_dir / "octants" / "hr"
@@ -495,6 +557,7 @@ def main() -> None:
         return
 
     # 1) HR and NN-degraded octants
+    logging.info("Step 1/3: Rendering HR and NN-degraded octants")
     for pulse, (hr_nii, hr_LPS, seg_LPS) in hr_cache.items():
         # HR octant
         render_octant_pdf(hr_LPS, coords, out_oct_hr / f"{args.subject}_{pulse}_HR.pdf",
@@ -508,12 +571,14 @@ def main() -> None:
                               segmentation=seg_LPS, fig_size=args.fig_size)
 
     # 2) SR octants and residuals
+    logging.info("Step 2/3: Rendering SR octants and residuals")
     for pulse, (hr_nii, hr_LPS, seg_LPS) in hr_cache.items():
         # Preload SR volumes (resampled to HR geometry)
         sr_pre, residuals_for_window = _prefetch_sr_for_pulse(args, pulse, hr_nii, hr_LPS)
 
         # Global residual window for this pulse
         rmax = max(symmetric_rmax(residuals_for_window, q=99.0), 1e-6)
+        logging.info("[SR] Pulse=%s | residual window=±%.6f", pulse, rmax)
 
         # Render SR octants + residuals
         for (model, rmm), sr_LPS in sr_pre.items():
@@ -532,6 +597,7 @@ def main() -> None:
 
     # 3) Radiomics per ROI (using HR only)
     # ROI map: all (union), core (label args.roi_core_label), edema (args.roi_edema_label), surround (head − tumor)
+    logging.info("Step 3/3: Rendering radiomics panels (HR)")
     for pulse, (_, hr_LPS, seg_LPS) in hr_cache.items():
         head = compute_head_mask_from_hr(hr_LPS)
         tumor = (seg_LPS > 0) if seg_LPS is not None else np.zeros_like(hr_LPS, dtype=bool)
