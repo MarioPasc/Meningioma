@@ -36,48 +36,9 @@ except ModuleNotFoundError:
 # skimage is used only for surface extraction; fail clearly if missing
 from skimage import measure  # marching_cubes
 
+from mgmGrowth.tasks.superresolution.visualization.mask_brain import compute_head_mask_from_hr, laplacian_smooth
+
 # ──────────────────────────────────────────────────────────────────────────
-# Mask utilities (as provided)
-def compute_head_mask_from_hr(hr_vol_LPS: np.ndarray) -> np.ndarray:
-    """
-    Head/background mask from HR magnitude using the largest 3D connected component.
-
-    Steps:
-      1) Robust low-percentile threshold to drop speckle (no Otsu).
-      2) Keep the largest connected component (18-connectivity).
-      3) Fill internal holes and lightly close gaps.
-
-    Returns
-    -------
-    np.ndarray
-        Boolean mask with True for head/skull/brain and False for air/background.
-    """
-    v = np.abs(hr_vol_LPS.astype(np.float32))
-    v[~np.isfinite(v)] = 0.0
-    nz = v[v > 0]
-    if nz.size == 0:
-        return np.zeros_like(v, dtype=bool)
-    thr = max(1e-6, float(np.percentile(nz, 0.5)))
-    fg = v > thr
-    try:
-        from scipy.ndimage import (
-            binary_opening, binary_closing, binary_fill_holes,
-            label, generate_binary_structure,
-        )
-        st = generate_binary_structure(3, 2)  # 18-connectivity
-        fg = binary_opening(fg, structure=st, iterations=1)
-        labels, nlab = label(fg, structure=st)
-        if nlab == 0:
-            return np.zeros_like(fg, dtype=bool)
-        counts = np.bincount(labels.ravel())
-        counts[0] = 0
-        keep = int(counts.argmax())
-        mask = labels == keep
-        mask = binary_fill_holes(mask)
-        mask = binary_closing(mask, structure=st, iterations=1)
-        return mask
-    except Exception:
-        return fg
 
 def apply_background_black(vol: np.ndarray, mask: np.ndarray) -> np.ndarray:
     """Zero out everything outside the head mask."""
@@ -231,45 +192,49 @@ def plot_cutaway_octant(
     j = int(np.clip(j_sagittal, cfg.min_margin, ny - 1 - cfg.min_margin))
 
 
+    # figure and equal aspect
+    fig = plt.figure(figsize=(7, 5))
+    ax = fig.add_subplot(111, projection="3d")
+    ax.set_box_aspect((nx, ny, nz))
+
+
     # head mask and background zeroing
     mask = compute_head_mask_from_hr(vol)
     vol = apply_background_black(vol, mask)
 
-    # surface from mask
+    # surface from mask  → smooth it
     verts, faces = marching_surface_from_mask(mask, cfg.iso_level)
+    verts = laplacian_smooth(verts, faces, iterations=5, lam=0.45)
 
     # remove faces inside the octant
     faces_kept = drop_faces_in_first_octant(verts, faces, i, j, k)
-    log.info("mesh: %d verts, %d faces → %d faces kept", len(verts), len(faces), len(faces_kept))
-
-    # figure and equal aspect
-    fig = plt.figure(figsize=(7, 7))
-    ax = fig.add_subplot(111, projection="3d")
-    ax.set_box_aspect((nx, ny, nz))
-
-    # draw mesh
     mesh = Poly3DCollection(verts[faces_kept], alpha=cfg.mesh_alpha, linewidths=0.2)
-    mesh.set_zsort('min')  # helps mpl 3D transparency
+    mesh.set_zsort('min')
     mesh.set_facecolor(cfg.mesh_color)
     mesh.set_edgecolor((0, 0, 0))
     ax.add_collection3d(mesh)
 
-    # slice patches restricted to Ω
+    # percentile window from in-mask voxels
     inside = vol[mask]
-    if inside.size:
-        vmin, vmax = np.percentile(inside, [1.0, 99.0])
-        if not np.isfinite(vmin) or not np.isfinite(vmax) or vmin >= vmax:
-            vmin, vmax = float(inside.min()), float(inside.max())
-    else:
-        vmin, vmax = float(vol.min()), float(vol.max())
+    vmin, vmax = (np.percentile(inside, [1.0, 99.0]) if inside.size
+                  else (float(vol.min()), float(vol.max())))
 
     add_axial_patch(ax, vol, k, i, j, vmin, vmax, cfg, mask)
     add_coronal_patch(ax, vol, i, j, k, vmin, vmax, cfg, mask)
     add_sagittal_patch(ax, vol, j, i, k, vmin, vmax, cfg, mask)
 
 
-    # axes and view
-    ax.set_xlim(0, nx); ax.set_ylim(0, ny); ax.set_zlim(0, nz)
+    # axes: crop to mask bbox if requested
+    if use_mask_extent and mask.any():
+        idx = np.argwhere(mask)
+        (xmin, ymin, zmin), (xmax, ymax, zmax) = idx.min(0), idx.max(0)
+        pad = 2
+        ax.set_xlim(max(0, xmin - pad), min(vol.shape[0], xmax + pad))
+        ax.set_ylim(max(0, ymin - pad), min(vol.shape[1], ymax + pad))
+        ax.set_zlim(max(0, zmin - pad), min(vol.shape[2], zmax + pad))
+    else:
+        ax.set_xlim(0, nx); ax.set_ylim(0, ny); ax.set_zlim(0, nz)
+
     ax.set_xlabel("Δx anterior"); ax.set_ylabel("Δy right"); ax.set_zlabel("Δz cranial")
     ax.view_init(elev=22, azim=45)
     ax.set_axis_off()
@@ -279,6 +244,9 @@ def plot_cutaway_octant(
 # ──────────────────────────────────────────────────────────────────────────
 # CLI
 def parse_args() -> argparse.Namespace:
+    """
+    python src/mgmGrowth/tasks/superresolution/visualization/octant_surface.py /media/mpascual/PortableSSD/Meningiomas/tasks/superresolution/high_resolution/BraTS-MEN-00231-000/BraTS-MEN-00231-000-t1c.nii.gz 70 100 110 --save /media/mpascual/PortableSSD/Meningiomas/tasks/superresolution/results/octant_surface.png --no_mask_extent
+    """
     p = argparse.ArgumentParser(description="Cut-away octant 3-D visualisation.")
     p.add_argument("volume", type=pathlib.Path, help="Path to .nii/.nii.gz or .npy")
     p.add_argument("axial_k", type=int, help="Axial index k (z)")
