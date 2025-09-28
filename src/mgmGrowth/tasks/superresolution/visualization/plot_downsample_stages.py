@@ -14,7 +14,16 @@ import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib import gridspec
 from pathlib import Path
-
+# add near the other imports
+from matplotlib.patches import Patch
+from scipy.ndimage import zoom
+# prefer local octant_surface, then package path
+try:
+    from mgmGrowth.tasks.superresolution.visualization.octant_surface import plot_cutaway_octant, CutawayConfig  # type: ignore
+except Exception:
+    from mgmGrowth.tasks.superresolution.visualization.octant_surface import (  # type: ignore
+        plot_cutaway_octant, CutawayConfig
+    )
 try:
     # Prefer project import path if available
     from mgmGrowth.tasks.superresolution.visualization.octant import plot_octant  # type: ignore
@@ -108,6 +117,17 @@ def gaussian_blur_z(vol: np.ndarray, sigma_vox_z: float) -> np.ndarray:
 # -------------------------------
 # Masking utilities
 # -------------------------------
+
+
+
+def _strip_axes(ax) -> None:
+    """Remove axes, ticks, and titles for a clean IEEE-style figure."""
+    ax.set_title("")
+    if hasattr(ax, "set_axis_off"):
+        ax.set_axis_off()
+    else:
+        ax.axis("off")
+
 
 def compute_head_mask_from_hr(hr_vol_LPS: np.ndarray) -> np.ndarray:
     """
@@ -274,6 +294,41 @@ def _with_global_minmax_for_plot_octant(
     out[ib, jb, kb] = vmin
     return out
 
+def render_cutaway_png_from_array(
+    volume: np.ndarray,
+    coords: Tuple[int, int, int],
+    save_png: Optional[str] = None,
+    figsize: Tuple[float, float] = (4.5, 4.0),
+) -> np.ndarray:
+    """
+    Render the cut-away octant surface as an RGBA image using nearest-neighbour
+    faces (one quad per voxel). Uses your plot_cutaway_octant(). Axes/titles off.
+
+    Parameters
+    ----------
+    volume : (nx,ny,nz) float array
+    coords : (k,i,j) indices
+    save_png : optional path to also persist the PNG
+    figsize : figure size in inches
+
+    Returns
+    -------
+    (H,W,3) float image for imshow
+    """
+    k, i, j = coords
+    cfg = CutawayConfig(mesh_alpha=1.0, slice_alpha=0.95, cmap="gray")
+    fig = plot_cutaway_octant(volume, k, i, j, cfg=cfg, use_mask_extent=True)  # axes already off
+    fig.set_size_inches(*figsize)
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+        tmp_path = tmp.name
+    fig.savefig(tmp_path, dpi=300, bbox_inches="tight", transparent=True)
+    plt.close(fig)
+    img = plt.imread(tmp_path)[..., :3]
+    os.remove(tmp_path)
+    if save_png:
+        plt.imsave(save_png, img)
+    return img
+
 
 def render_octant_png(
     volume: np.ndarray,
@@ -312,157 +367,231 @@ def render_octant_png(
     return img
 
 
-def plot_S0(ax, vol: np.ndarray, spacing: Spacing) -> None:
-    fig = ax.get_figure()
-    bbox = ax.get_position()
-    fig.delaxes(ax)  # remove placeholder axes
-    slice_idx = central_indices(vol)
-    # re-create a 2D axes at the same position and draw PNG
-    ax2 = fig.add_axes(bbox)
-    img = render_octant_png(
-        vol, slice_idx,
-        segmentation=None, cmap='gray', seg_alpha=0.0,
-        only_line=True, enforce_minmax=None, figsize=(4, 4),
-    )
-    ax2.imshow(img)
-    ax2.set_xticks([]); ax2.set_yticks([])
-    ax2.set_title(f"S0 · HR input\nd=({spacing.dx:.2f},{spacing.dy:.2f},{spacing.dz:.2f}) mm", pad=10)
+def plot_stack(ax, vol: np.ndarray, spacing: Spacing, mask: Optional[np.ndarray] = None,
+               n_planes: int = 10) -> None:
+    """
+    Plot evenly spaced axial slices as semi-transparent surfaces with background removed.
 
-
-def plot_stack(ax, vol: np.ndarray, spacing: Spacing, n_planes: int = 10, title: str = "") -> None:
+    Parameters
+    ----------
+    vol : (X,Y,Z) float
+    spacing : voxel spacing in mm
+    mask : optional boolean head mask; outside gets alpha=0
+    n_planes : number of axial slices to display
+    """
     Z = vol.shape[2]
-    if Z <= 2:
-        indices = np.arange(Z)
-    else:
-        # Skip first and last slice
-        indices = np.linspace(1, Z - 2, n_planes).astype(int)
-        indices = np.unique(indices)
+    idx = np.linspace(1, max(Z - 2, 1), n_planes).astype(int)
+    idx = np.unique(np.clip(idx, 0, Z - 1))
 
     X = np.arange(vol.shape[0]) * spacing.dx
     Y = np.arange(vol.shape[1]) * spacing.dy
     Xg, Yg = np.meshgrid(X, Y, indexing="ij")
-    norm = matplotlib.colors.Normalize(vmin=vol.min(), vmax=vol.max())
-    for k, iz in enumerate(indices):
-        Zg = np.full_like(Xg, iz * spacing.dz + k * 0.4 * spacing.dz)
-        slice2d = vol[:, :, iz]
-        facecolors = plt.cm.gray(norm(slice2d))
-        ax.plot_surface(Xg, Yg, Zg, rstride=1, cstride=1, facecolors=facecolors,
-                        linewidth=0, antialiased=False, shade=False)
+    norm = matplotlib.colors.Normalize(vmin=float(vol.min()), vmax=float(vol.max()))
 
-    ax.set_title(title)
-    ax.set_xlabel("x [mm]")
-    ax.set_ylabel("y [mm]")
-    ax.set_zlabel("z [mm]")
-    ax.view_init(elev=8, azim=-60)  # lower camera
+    for k in idx:
+        Zg = np.full_like(Xg, k * spacing.dz)
+        sl = vol[:, :, k]
+        fc = plt.cm.gray(norm(sl))               # (X,Y,4) RGBA
+        if mask is not None:
+            ma = mask[:, :, k].astype(float)     # 1 inside, 0 outside
+            fc[..., -1] = ma                     # set alpha
+        ax.plot_surface(Xg, Yg, Zg, rstride=1, cstride=1,
+                        facecolors=fc, linewidth=0, antialiased=False,
+                        shade=False)
+    ax.view_init(elev=8, azim=-60)
     ax.grid(False)
+    _strip_axes(ax)
 
 
-def plot_S1(ax, vol: np.ndarray, spacing: Spacing) -> None:
-    plot_stack(ax, vol, spacing, n_planes=10, title="S1 · Thin-slice stack\n(native, ends skipped)")
+def save_kernel_figure(outdir: str, sigma_mm: float, dz_mm: float) -> str:
+    """
+    Save a standalone Gaussian kernel figure (filled, no axes). Returns path.
+    """
+    sigma_vox = sigma_mm / dz_mm
+    half = int(4 * sigma_vox) + 1
+    z = np.arange(-half, half + 1) * dz_mm
+    G = np.exp(-(z ** 2) / (2 * sigma_mm ** 2))
+    G = G / (G.sum() * dz_mm)  # discrete normalization
+
+    fig, ax = plt.subplots(figsize=(5, 3))
+    ax.fill_between(z, 0.0, G, linewidth=0, alpha=1.0)
+    ax.plot(z, G, linewidth=1.8)
+    ax.legend([f"σ={sigma_mm:.2f} mm • FWHM={2.355*sigma_mm:.2f} mm • Δz={dz_mm:.2f} mm • ΣG·Δz=1"],
+              loc="upper right", frameon=False)
+    _strip_axes(ax)
+
+    ensure_dir(os.path.join(outdir, "tmp"))
+    pth = os.path.join(outdir, "S2a_Gaussian_kernel.png")
+    fig.tight_layout()
+    fig.savefig(pth, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    return pth
+
+
+def plot_S2_cutaway(ax, vol_blur: np.ndarray) -> None:
+    """
+    Show the blurred volume as a cut-away octant surface. Axes off.
+    """
+    fig = ax.get_figure()
+    bbox = ax.get_position(); fig.delaxes(ax)
+    ax2 = fig.add_axes(bbox)
+    k, i, j = central_indices(vol_blur)
+    img = render_cutaway_png_from_array(vol_blur, (k, i, j), save_png=None)
+    ax2.imshow(img)
+    ax2.set_xticks([]); ax2.set_yticks([])
+    _strip_axes(ax2)
+
+
+def plot_S3_grouping(ax, vol_blur: np.ndarray, mask_hr: np.ndarray,
+                     spacing: Spacing, f: int) -> None:
+    """
+    Visualize how r=f consecutive slices are averaged into one thick slice.
+    For each block:
+      - draw the f input slices with low alpha and background removed,
+      - overlay a single opaque surface at the block center with the mean.
+    """
+    Z = vol_blur.shape[2]
+    X = np.arange(vol_blur.shape[0]) * spacing.dx
+    Y = np.arange(vol_blur.shape[1]) * spacing.dy
+    Xg, Yg = np.meshgrid(X, Y, indexing="ij")
+    norm = matplotlib.colors.Normalize(vmin=float(vol_blur.min()),
+                                       vmax=float(vol_blur.max()))
+
+    for start in range(0, Z, f):
+        stop = min(start + f, Z)
+        # input slices, faint, background removed
+        for k in range(start, stop):
+            Zg = np.full_like(Xg, k * spacing.dz)
+            sl = vol_blur[:, :, k]
+            fc = plt.cm.gray(norm(sl))
+            if mask_hr is not None:
+                ma = mask_hr[:, :, k].astype(float)
+                fc[..., -1] = 0.25 * ma       # faint inputs
+            ax.plot_surface(Xg, Yg, Zg, rstride=1, cstride=1,
+                            facecolors=fc, linewidth=0, antialiased=False, shade=False)
+        # averaged thick slice at block center, opaque
+        thick = vol_blur[:, :, start:stop].mean(axis=2)
+        zc = ((start + stop - 1) / 2.0) * spacing.dz
+        Zg = np.full_like(Xg, zc)
+        fc = plt.cm.gray(norm(thick))
+        if mask_hr is not None:
+            ma = mask_hr[:, :, min(stop-1, mask_hr.shape[2]-1)].astype(float)
+            fc[..., -1] = ma
+        ax.plot_surface(Xg, Yg, Zg, rstride=1, cstride=1,
+                        facecolors=fc, linewidth=0, antialiased=False, shade=False)
+
+    ax.view_init(elev=8, azim=-60)
+    ax.grid(False)
+    _strip_axes(ax)
+
+
 
 
 def plot_kernel(ax, sigma_mm: float, dz_mm: float) -> None:
+    # discrete z-grid, ~±4σ
     sigma_vox = sigma_mm / dz_mm
-    extent = int(4 * sigma_vox) + 1
-    z = np.arange(-extent, extent + 1) * dz_mm
-    kernel = np.exp(-(z ** 2) / (2 * sigma_mm ** 2))
-    kernel /= kernel.sum() * dz_mm
-    ax.plot(z, kernel)
-    ax.set_title(f"S2 · z-Gaussian (1D)\nσ={sigma_mm:.2f} mm")
-    ax.set_xlabel("z [mm]")
-    ax.set_ylabel("G(z) [a.u.]")
+    half = int(4 * sigma_vox) + 1
+    z = np.arange(-half, half + 1) * dz_mm
+    # normalized discrete kernel: sum(G)·Δz = 1
+    G = np.exp(-(z**2) / (2 * sigma_mm**2))
+    G = G / (G.sum() * dz_mm)
 
+    # darker edge, lighter fill
+    ax.fill_between(z, 0.0, G, linewidth=0, alpha=1.0)
+    ax.plot(z, G, linewidth=1.75)
+
+    # legend text with distribution facts
+    fwhm = 2.355 * sigma_mm  # ties to SimpleITK pipeline as well :contentReference[oaicite:3]{index=3}
+    txt = (r"$G(z)=\frac{1}{\sqrt{2\pi}\sigma}\exp\!\left(-\frac{z^2}{2\sigma^2}\right)$"
+           f"\nσ={sigma_mm:.2f} mm, FWHM={fwhm:.2f} mm"
+           f"\nΔz={dz_mm:.2f} mm,  Σ G·Δz=1")
+    ax.legend(handles=[Patch(label=txt)], loc="upper right", frameon=False)
+    _strip_axes(ax)
+
+
+def central_indices(vol: np.ndarray) -> tuple[int, int, int]:
+    # (z,x,y) as before
+    return (vol.shape[2] // 2, vol.shape[0] // 2, vol.shape[1] // 2)
+
+def plot_S0(ax, vol: np.ndarray, spacing: Spacing, tmpdir: Optional[str] = None) -> None:
+    fig = ax.get_figure()
+    bbox = ax.get_position(); fig.delaxes(ax)
+    ax2 = fig.add_axes(bbox)
+    k,i,j = central_indices(vol)
+    png_path = None if tmpdir is None else os.path.join(tmpdir, "S0_cutaway.png")
+    img = render_cutaway_png_from_array(vol, (k,i,j), save_png=png_path)
+    ax2.imshow(img); ax2.set_xticks([]); ax2.set_yticks([]); _strip_axes(ax2)
+
+def plot_S1(ax, vol: np.ndarray, spacing: Spacing, mask: np.ndarray) -> None:
+    plot_stack(ax, vol, spacing, mask=mask, n_planes=10)
 
 def plot_fft_compare(ax, vol_hr: np.ndarray, vol_blur: np.ndarray, dz_mm: float) -> None:
-    s_hr = vol_hr.mean(axis=(0, 1))
-    s_bl = vol_blur.mean(axis=(0, 1))
-    s_hr = s_hr - s_hr.mean()
-    s_bl = s_bl - s_bl.mean()
-
-    F_hr = np.abs(np.fft.rfft(s_hr))
-    F_bl = np.abs(np.fft.rfft(s_bl))
+    s_hr = vol_hr.mean(axis=(0, 1)) - vol_hr.mean()
+    s_bl = vol_blur.mean(axis=(0, 1)) - vol_blur.mean()
+    F_hr = np.abs(np.fft.rfft(s_hr)); F_bl = np.abs(np.fft.rfft(s_bl))
+    F_hr /= (F_hr.max() + 1e-12); F_bl /= (F_hr.max() + 1e-12)
     f = np.fft.rfftfreq(s_hr.size, d=dz_mm)
-
-    F_hr /= (F_hr.max() + 1e-12)
-    F_bl /= (F_hr.max() + 1e-12)
-
-    ax.plot(f, F_hr, label="HR")
-    ax.plot(f, F_bl, label="Blurred")
-    ax.set_xlim(0, f.max())
-    ax.set_xlabel("frequency [cycles/mm]")
-    ax.set_ylabel("|F(z)| (norm.)")
-    ax.set_title("S2 · |F(z)| before vs after blur")
+    ax.plot(f, F_hr, label="HR"); ax.plot(f, F_bl, label="Blurred")
     ax.legend(loc="upper right", frameon=False)
+    _strip_axes(ax)
 
-
-def plot_S2(ax_kernel, ax_fft, ax_stack3d, vol_blur: np.ndarray, spacing: Spacing, sigma_mm: float, vol_hr: np.ndarray) -> None:
+def plot_S2(ax_kernel, ax_fft, ax_stack3d, vol_blur: np.ndarray,
+            spacing: Spacing, sigma_mm: float, vol_hr: np.ndarray) -> None:
     plot_kernel(ax_kernel, sigma_mm, spacing.dz)
     plot_fft_compare(ax_fft, vol_hr, vol_blur, spacing.dz)
-    plot_stack(ax_stack3d, vol_blur, spacing, n_planes=10, title="S2 · Blurred stack")
-
+    plot_stack(ax_stack3d, vol_blur, spacing, n_planes=10)
 
 def plot_S3(ax, vol_blur: np.ndarray, spacing: Spacing, f: int) -> None:
+    # just show the *averaged* thick-slice stacks at the new effective spacing
     Z = vol_blur.shape[2]
-    # Choose two central groups around the mid-plane
-    mid_group = max(0, (Z // f) // 2 - 1)
-    groups = [mid_group, min(mid_group + 1, max(0, Z // f - 1))]
-    groups = sorted(set(groups))
-
     X = np.arange(vol_blur.shape[0]) * spacing.dx
     Y = np.arange(vol_blur.shape[1]) * spacing.dy
     Xg, Yg = np.meshgrid(X, Y, indexing="ij")
     norm = matplotlib.colors.Normalize(vmin=vol_blur.min(), vmax=vol_blur.max())
 
-    z_offset = 0.0
-    for g in groups:
-        start = g * f
+    for start in range(0, Z, f):
         stop = min(start + f, Z)
-        # plot f semi-transparent planes
-        for k in range(start, stop):
-            Zg = np.full_like(Xg, k * spacing.dz + z_offset)
-            slice2d = vol_blur[:, :, k]
-            facecolors = plt.cm.gray(norm(slice2d))
-            ax.plot_surface(Xg, Yg, Zg, rstride=1, cstride=1, facecolors=facecolors,
-                            linewidth=0, antialiased=False, shade=False, alpha=0.6)
-
-        # averaged thick slice at group center
         thick = vol_blur[:, :, start:stop].mean(axis=2)
-        z_center = ((start + stop - 1) / 2.0) * spacing.dz + z_offset
+        z_center = ((start + stop - 1) / 2.0) * spacing.dz
         Zg_center = np.full_like(Xg, z_center)
         facecolors = plt.cm.gray(norm(thick))
-        ax.plot_surface(Xg, Yg, Zg_center, rstride=1, cstride=1, facecolors=facecolors,
-                        linewidth=0, antialiased=False, shade=False, alpha=1.0)
+        ax.plot_surface(Xg, Yg, Zg_center, rstride=1, cstride=1,
+                        facecolors=facecolors, linewidth=0,
+                        antialiased=False, shade=False, alpha=1.0)
+    ax.view_init(elev=8, azim=-60); ax.grid(False); _strip_axes(ax)
 
-        # left-side “brace” and label
-        z_top = (start) * spacing.dz + z_offset
-        z_bot = (stop - 1) * spacing.dz + z_offset
-        ax.plot([X[0], X[0]], [Y[0], Y[0]], [z_top, z_bot], lw=2)
-        ax.text(X[0], Y[0], z_center, "f×dz", fontsize=10, ha="left", va="center")
+def resample_iso_nearest(vol: np.ndarray, spacing: Spacing,
+                         target_mm: float = 1.0) -> tuple[np.ndarray, Spacing]:
+    """
+    Nearest-neighbour resample to isotropic target_mm spacing.
 
-        z_offset += (stop - start) * spacing.dz + 0.6 * spacing.dz
+    Returns
+    -------
+    vol_iso, new_spacing
+    """
+    zx = spacing.dx / target_mm
+    zy = spacing.dy / target_mm
+    zz = spacing.dz / target_mm
+    vol_iso = zoom(vol, zoom=(zx, zy, zz), order=0, mode="nearest",
+                   grid_mode=True, prefilter=False)
+    return vol_iso, Spacing(target_mm, target_mm, target_mm)
 
-    ax.set_title("S3 · Block-average by f (central groups)")
-    ax.set_xlabel("x [mm]")
-    ax.set_ylabel("y [mm]")
-    ax.set_zlabel("z [mm]")
-    ax.view_init(elev=8, azim=-60)
-    ax.grid(False)
+def plot_S4(ax, vol_lr: np.ndarray, spacing_lr: Spacing, tmpdir: Optional[str] = None) -> None:
+    """
+    Resample LR to 1×1×1 mm with nearest neighbour, save, then cut-away.
+    """
+    vol_iso, sp_iso = resample_iso_nearest(vol_lr, spacing_lr, target_mm=1.0)
+    if tmpdir is not None:
+        ensure_dir(tmpdir)
+        np.save(os.path.join(tmpdir, "vol_lr_iso_1mm.npy"), vol_iso)
 
-
-def plot_S4(ax, vol_lr: np.ndarray, spacing_lr: Spacing) -> None:
     fig = ax.get_figure()
-    bbox = ax.get_position()
-    fig.delaxes(ax)
-    slice_idx = central_indices(vol_lr)
+    bbox = ax.get_position(); fig.delaxes(ax)
     ax2 = fig.add_axes(bbox)
-    img = render_octant_png(
-        vol_lr, slice_idx,
-        segmentation=None, cmap='gray', seg_alpha=0.0,
-        only_line=True, enforce_minmax=None, figsize=(4, 4),
-    )
-    ax2.imshow(img)
-    ax2.set_xticks([]); ax2.set_yticks([])
-    ax2.set_title(f"S4 · LR output\nd'=({spacing_lr.dx:.2f},{spacing_lr.dy:.2f},{spacing_lr.dz:.2f}) mm", pad=10)
+    k, i, j = central_indices(vol_iso)
+    img = render_cutaway_png_from_array(vol_iso, (k, i, j), save_png=None)
+    ax2.imshow(img); ax2.set_xticks([]); ax2.set_yticks([])
+    _strip_axes(ax2)
 
 
 # -------------------------------
@@ -470,68 +599,58 @@ def plot_S4(ax, vol_lr: np.ndarray, spacing_lr: Spacing) -> None:
 # -------------------------------
 
 def save_stage_images(outdir: str, prods: StageProducts) -> None:
+    tmpdir = os.path.join(outdir, "tmp"); ensure_dir(tmpdir)
+    # save intermediates for reuse
+    np.save(os.path.join(tmpdir, "vol_hr.npy"), prods.vol_hr)
+    np.save(os.path.join(tmpdir, "vol_blur.npy"), prods.vol_blur)
+    np.save(os.path.join(tmpdir, "vol_lr.npy"), prods.vol_lr)
+    np.save(os.path.join(tmpdir, "mask_hr.npy"), prods.mask_hr.astype(np.uint8))
+    np.save(os.path.join(tmpdir, "mask_lr.npy"), prods.mask_lr.astype(np.uint8))
+
     # S0
-    fig = plt.figure(figsize=(6.5, 6))
-    ax = fig.add_subplot(111, projection="3d")
-    plot_S0(ax, prods.vol_hr, prods.spacing_hr)
-    fig.tight_layout()
-    fig.savefig(os.path.join(outdir, "S0_HR_input.png"), dpi=250)
-    plt.close(fig)
+    fig = plt.figure(figsize=(6.5, 6)); ax = fig.add_subplot(111, projection="3d")
+    plot_S0(ax, prods.vol_hr, prods.spacing_hr, tmpdir=tmpdir)
+    fig.tight_layout(); fig.savefig(os.path.join(outdir, "S0_HR_input.png"), dpi=250); plt.close(fig)
 
     # S1
-    fig = plt.figure(figsize=(7, 6))
-    ax = fig.add_subplot(111, projection="3d")
-    plot_S1(ax, prods.vol_hr, prods.spacing_hr)
-    fig.tight_layout()
-    fig.savefig(os.path.join(outdir, "S1_Thin_slice_stack.png"), dpi=250)
-    plt.close(fig)
+    fig = plt.figure(figsize=(7, 6)); ax = fig.add_subplot(111, projection="3d")
+    plot_S1(ax, prods.vol_hr, prods.spacing_hr, prods.mask_hr)
+    fig.tight_layout(); fig.savefig(os.path.join(outdir, "S1_Thin_slice_stack.png"), dpi=250); plt.close(fig)
 
-    # S2 (kernel + FFT + blurred stack)
-    fig = plt.figure(figsize=(16, 5))
-    gs = gridspec.GridSpec(1, 3, width_ratios=[1.0, 1.2, 1.8])
-    ax0 = fig.add_subplot(gs[0, 0])
-    ax1 = fig.add_subplot(gs[0, 1])
-    ax2 = fig.add_subplot(gs[0, 2], projection="3d")
-    plot_S2(ax0, ax1, ax2, prods.vol_blur, prods.spacing_hr, prods.sigma_mm, prods.vol_hr)
-    fig.tight_layout()
-    fig.savefig(os.path.join(outdir, "S2_Gaussian_FFT_and_blurred.png"), dpi=250)
-    plt.close(fig)
+    # S2a kernel (separate file)
+    save_kernel_figure(outdir, prods.sigma_mm, prods.spacing_hr.dz)
+
+    # S2b blurred as cut-away
+    fig = plt.figure(figsize=(6.5, 6)); ax = fig.add_subplot(111, projection="3d")
+    plot_S2_cutaway(ax, prods.vol_blur)
+    fig.tight_layout(); fig.savefig(os.path.join(outdir, "S2b_Blur_cutaway.png"), dpi=250); plt.close(fig)
 
     # S3
-    fig = plt.figure(figsize=(7, 6))
-    ax = fig.add_subplot(111, projection="3d")
-    plot_S3(ax, prods.vol_blur, prods.spacing_hr, prods.f)
-    fig.tight_layout()
-    fig.savefig(os.path.join(outdir, "S3_Block_average.png"), dpi=250)
-    plt.close(fig)
+    fig = plt.figure(figsize=(7, 6)); ax = fig.add_subplot(111, projection="3d")
+    plot_S3_grouping(ax, prods.vol_blur, prods.mask_hr, prods.spacing_hr, prods.f)
+    fig.tight_layout(); fig.savefig(os.path.join(outdir, "S3_Block_grouping.png"), dpi=250); plt.close(fig)
 
     # S4
-    fig = plt.figure(figsize=(6.5, 6))
-    ax = fig.add_subplot(111, projection="3d")
-    plot_S4(ax, prods.vol_lr, prods.spacing_lr)
-    fig.tight_layout()
-    fig.savefig(os.path.join(outdir, "S4_LR_output.png"), dpi=250)
-    plt.close(fig)
-
+    fig = plt.figure(figsize=(6.5, 6)); ax = fig.add_subplot(111, projection="3d")
+    plot_S4(ax, prods.vol_lr, prods.spacing_lr, tmpdir=tmpdir)
+    fig.tight_layout(); fig.savefig(os.path.join(outdir, "S4_LR_iso1mm_cutaway.png"), dpi=250); plt.close(fig)
 
 def save_panel(outdir: str, prods: StageProducts) -> None:
+    """
+    Compact 1×4 panel: S0 cut-away | S1 stack | S2b blurred cut-away | S4 iso-1mm cut-away.
+    Kernel is saved separately.
+    """
+    tmpdir = os.path.join(outdir, "tmp"); ensure_dir(tmpdir)
     fig = plt.figure(figsize=(22, 5))
-    gs = gridspec.GridSpec(1, 5, width_ratios=[1.1, 1.1, 1.4, 1.2, 1.1])
+    gs = gridspec.GridSpec(1, 4, width_ratios=[1.1, 1.3, 1.1, 1.1])
 
-    ax0 = fig.add_subplot(gs[0, 0], projection="3d")
-    plot_S0(ax0, prods.vol_hr, prods.spacing_hr)
+    ax0 = fig.add_subplot(gs[0, 0], projection="3d"); plot_S0(ax0, prods.vol_hr, prods.spacing_hr, tmpdir=tmpdir)
+    ax1 = fig.add_subplot(gs[0, 1], projection="3d"); plot_S1(ax1, prods.vol_hr, prods.spacing_hr, prods.mask_hr)
+    ax2 = fig.add_subplot(gs[0, 2], projection="3d"); plot_S2_cutaway(ax2, prods.vol_blur)
+    ax3 = fig.add_subplot(gs[0, 3], projection="3d"); plot_S4(ax3, prods.vol_lr, prods.spacing_lr, tmpdir=tmpdir)
 
-    ax1 = fig.add_subplot(gs[0, 1], projection="3d")
-    plot_S1(ax1, prods.vol_hr, prods.spacing_hr)
+    fig.tight_layout(); fig.savefig(os.path.join(outdir, "Panel_S0_S1_S2b_S4.png"), dpi=280); plt.close(fig)
 
-    ax2a = fig.add_subplot(gs[0, 2])
-    ax2b = fig.add_subplot(gs[0, 3])
-    ax2c = fig.add_subplot(gs[0, 4], projection="3d")
-    plot_S2(ax2a, ax2b, ax2c, prods.vol_blur, prods.spacing_hr, prods.sigma_mm, prods.vol_hr)
-
-    fig.tight_layout()
-    fig.savefig(os.path.join(outdir, "Panel_S0_to_S4.png"), dpi=280)
-    plt.close(fig)
 
 
 # -------------------------------
