@@ -7,10 +7,12 @@ import math
 import os
 import tempfile
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Any, Callable, cast, TYPE_CHECKING
 
 import numpy as np
 import matplotlib
+# Non-interactive backend for headless, faster rendering
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib import gridspec
 from pathlib import Path
@@ -24,20 +26,24 @@ except Exception:
     from mgmGrowth.tasks.superresolution.visualization.octant_surface import (  # type: ignore
         plot_cutaway_octant, CutawayConfig
     )
+plot_octant_fn: Optional[Callable[..., plt.Figure]] = None
 try:
     # Prefer project import path if available
-    from mgmGrowth.tasks.superresolution.visualization.octant import plot_octant  # type: ignore
+    from mgmGrowth.tasks.superresolution.visualization.octant import plot_octant as _plot_octant  # type: ignore
+    plot_octant_fn = _plot_octant
 except Exception:
     # Fallback to colocated module
     try:
-        from octant import plot_octant  # type: ignore
+        from octant import plot_octant as _plot_octant  # type: ignore
+        plot_octant_fn = _plot_octant
     except Exception:
-        plot_octant = None  # late check
+        plot_octant_fn = None  # late check
 
 try:
-    import nibabel as nib  # type: ignore
+    import nibabel as _nib  # type: ignore
+    nib: Any = _nib
 except Exception:
-    nib = None
+    nib = cast(Any, None)
 
 from scipy.ndimage import gaussian_filter, binary_opening, binary_closing, binary_fill_holes, label, generate_binary_structure  # type: ignore
 from skimage.measure import marching_cubes  # noqa: F401  # kept for completeness
@@ -267,11 +273,37 @@ def compute_products(vol_hr: np.ndarray, spacing_hr: Spacing, target_dz_mm: floa
 # -------------------------------
 
 def central_indices(vol: np.ndarray) -> tuple[int, int, int]:
+    """Return center coordinates as (k_axial=z, i_coronal=x, j_sagittal=y)."""
     x = vol.shape[0] // 2
     y = vol.shape[1] // 2
     z = vol.shape[2] // 2
-    # octant.plot expects (k_axial, i_coronal, j_sagittal) → (z, x, y)
     return (z, x, y)
+
+
+def resolve_coords(
+    vol: np.ndarray,
+    k_axial: Optional[int] = None,
+    i_coronal: Optional[int] = None,
+    j_sagittal: Optional[int] = None,
+) -> tuple[int, int, int]:
+    """Resolve requested coords (allowing negative indices) with clamping.
+
+    If any of k/i/j is None, the center index along that axis is used.
+    """
+    nx, ny, nz = vol.shape
+    kc, ic, jc = central_indices(vol)
+
+    def _norm(idx: Optional[int], dim: int, center: int) -> int:
+        if idx is None:
+            return center
+        if idx < 0:
+            idx = dim + idx
+        return max(0, min(idx, dim - 1))
+
+    k = _norm(k_axial, nz, kc)
+    i = _norm(i_coronal, nx, ic)
+    j = _norm(j_sagittal, ny, jc)
+    return (k, i, j)
 
 
 # -------------------------------
@@ -293,6 +325,29 @@ def _with_global_minmax_for_plot_octant(
     out[ia, ja, ka] = vmax
     out[ib, jb, kb] = vmin
     return out
+
+
+def _fig_to_rgb_image(fig: plt.Figure) -> np.ndarray:
+    """Convert a Matplotlib figure to an RGB image (premultiplied alpha)."""
+    fig.canvas.draw()
+    # Prefer buffer_rgba when available (Agg), fallback to ARGB string
+    try:
+        canvas_any = cast(Any, fig.canvas)
+        buf = np.asarray(canvas_any.buffer_rgba())  # (H,W,4) uint8
+        rgba = buf
+    except Exception:
+        canvas_any = cast(Any, fig.canvas)
+        w, h = canvas_any.get_width_height()
+        argb = np.frombuffer(canvas_any.tostring_argb(), dtype=np.uint8).reshape(h, w, 4)
+        rgba = np.empty_like(argb)
+        rgba[..., 0] = argb[..., 1]  # R
+        rgba[..., 1] = argb[..., 2]  # G
+        rgba[..., 2] = argb[..., 3]  # B
+        rgba[..., 3] = argb[..., 0]  # A
+    rgb = rgba[..., :3].astype(np.float32) / 255.0
+    a = rgba[..., 3:4].astype(np.float32) / 255.0
+    return rgb * a
+
 
 def render_cutaway_png_from_array(
     volume: np.ndarray,
@@ -317,16 +372,13 @@ def render_cutaway_png_from_array(
     """
     k, i, j = coords
     cfg = CutawayConfig(mesh_alpha=1.0, slice_alpha=0.95, cmap="gray")
-    fig = plot_cutaway_octant(volume, k, i, j, cfg=cfg, use_mask_extent=True)  # axes already off
+    
+    fig = plot_cutaway_octant(volume, k, i, j, cfg=cfg, use_mask_extent=False)  # axes already off
     fig.set_size_inches(*figsize)
-    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-        tmp_path = tmp.name
-    fig.savefig(tmp_path, dpi=300, bbox_inches="tight", transparent=True)
-    plt.close(fig)
-    img = plt.imread(tmp_path)[..., :3]
-    os.remove(tmp_path)
+    img = _fig_to_rgb_image(fig)
     if save_png:
         plt.imsave(save_png, img)
+    plt.close(fig)
     return img
 
 
@@ -341,34 +393,22 @@ def render_octant_png(
     enforce_minmax: Optional[Tuple[float, float]] = None,
     figsize: Tuple[int, int] = (4, 4),
 ) -> np.ndarray:
-    if plot_octant is None:
+    if plot_octant_fn is None:
         raise RuntimeError("octant.plot_octant is not available.")
     k, i, j = coords
     vol = volume if enforce_minmax is None else _with_global_minmax_for_plot_octant(volume, k, i, j, enforce_minmax[0], enforce_minmax[1])
-    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-        tmp_path = Path(tmp.name)
-    try:
-        fig = plot_octant(
-            vol, coords, cmap=cmap, alpha=0.95,
-            segmentation=segmentation, seg_alpha=seg_alpha,
-            only_line=only_line, figsize=figsize, save=tmp_path
-        )
-        plt.close(fig)
-        img = plt.imread(tmp_path)
-        if img.ndim == 3 and img.shape[-1] == 4:
-            rgb = img[..., :3]
-            alpha = img[..., 3:4]
-            img = rgb * alpha
-    finally:
-        try:
-            os.remove(tmp_path)
-        except Exception:
-            pass
+    fig = plot_octant_fn(
+        vol, coords, cmap=cmap, alpha=0.95,
+        segmentation=segmentation, seg_alpha=seg_alpha,
+        only_line=only_line, figsize=figsize, save=None
+    )
+    img = _fig_to_rgb_image(fig)
+    plt.close(fig)
     return img
 
 
 def plot_stack(ax, vol: np.ndarray, spacing: Spacing, mask: Optional[np.ndarray] = None,
-               n_planes: int = 10) -> None:
+               n_planes: int = 10, vis_stride: int = 1) -> None:
     """
     Plot evenly spaced axial slices as semi-transparent surfaces with background removed.
 
@@ -378,6 +418,7 @@ def plot_stack(ax, vol: np.ndarray, spacing: Spacing, mask: Optional[np.ndarray]
     spacing : voxel spacing in mm
     mask : optional boolean head mask; outside gets alpha=0
     n_planes : number of axial slices to display
+    vis_stride : subsampling stride in X/Y to speed 3D plotting
     """
     Z = vol.shape[2]
     idx = np.linspace(1, max(Z - 2, 1), n_planes).astype(int)
@@ -386,14 +427,22 @@ def plot_stack(ax, vol: np.ndarray, spacing: Spacing, mask: Optional[np.ndarray]
     X = np.arange(vol.shape[0]) * spacing.dx
     Y = np.arange(vol.shape[1]) * spacing.dy
     Xg, Yg = np.meshgrid(X, Y, indexing="ij")
+    if vis_stride > 1:
+        Xg = Xg[::vis_stride, ::vis_stride]
+        Yg = Yg[::vis_stride, ::vis_stride]
     norm = matplotlib.colors.Normalize(vmin=float(vol.min()), vmax=float(vol.max()))
+    cmap = plt.get_cmap("gray")
 
     for k in idx:
         Zg = np.full_like(Xg, k * spacing.dz)
         sl = vol[:, :, k]
-        fc = plt.cm.gray(norm(sl))               # (X,Y,4) RGBA
+        if vis_stride > 1:
+            sl = sl[::vis_stride, ::vis_stride]
+        fc = cmap(norm(sl))               # (X,Y,4) RGBA
         if mask is not None:
             ma = mask[:, :, k].astype(float)     # 1 inside, 0 outside
+            if vis_stride > 1:
+                ma = ma[::vis_stride, ::vis_stride]
             fc[..., -1] = ma                     # set alpha
         ax.plot_surface(Xg, Yg, Zg, rstride=1, cstride=1,
                         facecolors=fc, linewidth=0, antialiased=False,
@@ -428,14 +477,17 @@ def save_kernel_figure(outdir: str, sigma_mm: float, dz_mm: float) -> str:
     return pth
 
 
-def plot_S2_cutaway(ax, vol_blur: np.ndarray) -> None:
+def plot_S2_cutaway(ax, vol_blur: np.ndarray, coords: Optional[Tuple[int, int, int]] = None) -> None:
     """
     Show the blurred volume as a cut-away octant surface. Axes off.
     """
     fig = ax.get_figure()
     bbox = ax.get_position(); fig.delaxes(ax)
     ax2 = fig.add_axes(bbox)
-    k, i, j = central_indices(vol_blur)
+    if coords is None:
+        k, i, j = central_indices(vol_blur)
+    else:
+        k, i, j = coords
     img = render_cutaway_png_from_array(vol_blur, (k, i, j), save_png=None)
     ax2.imshow(img)
     ax2.set_xticks([]); ax2.set_yticks([])
@@ -443,7 +495,7 @@ def plot_S2_cutaway(ax, vol_blur: np.ndarray) -> None:
 
 
 def plot_S3_grouping(ax, vol_blur: np.ndarray, mask_hr: np.ndarray,
-                     spacing: Spacing, f: int) -> None:
+                     spacing: Spacing, f: int, vis_stride: int = 1) -> None:
     """
     Visualize how r=f consecutive slices are averaged into one thick slice.
     For each block:
@@ -454,8 +506,12 @@ def plot_S3_grouping(ax, vol_blur: np.ndarray, mask_hr: np.ndarray,
     X = np.arange(vol_blur.shape[0]) * spacing.dx
     Y = np.arange(vol_blur.shape[1]) * spacing.dy
     Xg, Yg = np.meshgrid(X, Y, indexing="ij")
+    if vis_stride > 1:
+        Xg = Xg[::vis_stride, ::vis_stride]
+        Yg = Yg[::vis_stride, ::vis_stride]
     norm = matplotlib.colors.Normalize(vmin=float(vol_blur.min()),
                                        vmax=float(vol_blur.max()))
+    cmap = plt.get_cmap("gray")
 
     for start in range(0, Z, f):
         stop = min(start + f, Z)
@@ -463,19 +519,27 @@ def plot_S3_grouping(ax, vol_blur: np.ndarray, mask_hr: np.ndarray,
         for k in range(start, stop):
             Zg = np.full_like(Xg, k * spacing.dz)
             sl = vol_blur[:, :, k]
-            fc = plt.cm.gray(norm(sl))
+            if vis_stride > 1:
+                sl = sl[::vis_stride, ::vis_stride]
+            fc = cmap(norm(sl))
             if mask_hr is not None:
                 ma = mask_hr[:, :, k].astype(float)
+                if vis_stride > 1:
+                    ma = ma[::vis_stride, ::vis_stride]
                 fc[..., -1] = 0.25 * ma       # faint inputs
             ax.plot_surface(Xg, Yg, Zg, rstride=1, cstride=1,
                             facecolors=fc, linewidth=0, antialiased=False, shade=False)
         # averaged thick slice at block center, opaque
         thick = vol_blur[:, :, start:stop].mean(axis=2)
+        if vis_stride > 1:
+            thick = thick[::vis_stride, ::vis_stride]
         zc = ((start + stop - 1) / 2.0) * spacing.dz
         Zg = np.full_like(Xg, zc)
-        fc = plt.cm.gray(norm(thick))
+        fc = cmap(norm(thick))
         if mask_hr is not None:
             ma = mask_hr[:, :, min(stop-1, mask_hr.shape[2]-1)].astype(float)
+            if vis_stride > 1:
+                ma = ma[::vis_stride, ::vis_stride]
             fc[..., -1] = ma
         ax.plot_surface(Xg, Yg, Zg, rstride=1, cstride=1,
                         facecolors=fc, linewidth=0, antialiased=False, shade=False)
@@ -509,21 +573,22 @@ def plot_kernel(ax, sigma_mm: float, dz_mm: float) -> None:
     _strip_axes(ax)
 
 
-def central_indices(vol: np.ndarray) -> tuple[int, int, int]:
-    # (z,x,y) as before
-    return (vol.shape[2] // 2, vol.shape[0] // 2, vol.shape[1] // 2)
-
-def plot_S0(ax, vol: np.ndarray, spacing: Spacing, tmpdir: Optional[str] = None) -> None:
+def plot_S0(ax, vol: np.ndarray, spacing: Spacing, tmpdir: Optional[str] = None,
+            coords: Optional[Tuple[int, int, int]] = None) -> None:
     fig = ax.get_figure()
     bbox = ax.get_position(); fig.delaxes(ax)
     ax2 = fig.add_axes(bbox)
-    k,i,j = central_indices(vol)
+    if coords is None:
+        k, i, j = central_indices(vol)
+    else:
+        k, i, j = coords
     png_path = None if tmpdir is None else os.path.join(tmpdir, "S0_cutaway.png")
     img = render_cutaway_png_from_array(vol, (k,i,j), save_png=png_path)
     ax2.imshow(img); ax2.set_xticks([]); ax2.set_yticks([]); _strip_axes(ax2)
 
-def plot_S1(ax, vol: np.ndarray, spacing: Spacing, mask: np.ndarray) -> None:
-    plot_stack(ax, vol, spacing, mask=mask, n_planes=10)
+def plot_S1(ax, vol: np.ndarray, spacing: Spacing, mask: np.ndarray,
+            n_planes: int = 10, vis_stride: int = 1) -> None:
+    plot_stack(ax, vol, spacing, mask=mask, n_planes=n_planes, vis_stride=vis_stride)
 
 def plot_fft_compare(ax, vol_hr: np.ndarray, vol_blur: np.ndarray, dz_mm: float) -> None:
     s_hr = vol_hr.mean(axis=(0, 1)) - vol_hr.mean()
@@ -554,7 +619,7 @@ def plot_S3(ax, vol_blur: np.ndarray, spacing: Spacing, f: int) -> None:
         thick = vol_blur[:, :, start:stop].mean(axis=2)
         z_center = ((start + stop - 1) / 2.0) * spacing.dz
         Zg_center = np.full_like(Xg, z_center)
-        facecolors = plt.cm.gray(norm(thick))
+        facecolors = plt.get_cmap("gray")(norm(thick))
         ax.plot_surface(Xg, Yg, Zg_center, rstride=1, cstride=1,
                         facecolors=facecolors, linewidth=0,
                         antialiased=False, shade=False, alpha=1.0)
@@ -576,7 +641,8 @@ def resample_iso_nearest(vol: np.ndarray, spacing: Spacing,
                    grid_mode=True, prefilter=False)
     return vol_iso, Spacing(target_mm, target_mm, target_mm)
 
-def plot_S4(ax, vol_lr: np.ndarray, spacing_lr: Spacing, tmpdir: Optional[str] = None) -> None:
+def plot_S4(ax, vol_lr: np.ndarray, spacing_lr: Spacing, tmpdir: Optional[str] = None,
+            coords: Optional[Tuple[int, int, int]] = None) -> None:
     """
     Resample LR to 1×1×1 mm with nearest neighbour, save, then cut-away.
     """
@@ -588,7 +654,10 @@ def plot_S4(ax, vol_lr: np.ndarray, spacing_lr: Spacing, tmpdir: Optional[str] =
     fig = ax.get_figure()
     bbox = ax.get_position(); fig.delaxes(ax)
     ax2 = fig.add_axes(bbox)
-    k, i, j = central_indices(vol_iso)
+    if coords is None:
+        k, i, j = central_indices(vol_iso)
+    else:
+        k, i, j = resolve_coords(vol_iso, coords[0], coords[1], coords[2])
     img = render_cutaway_png_from_array(vol_iso, (k, i, j), save_png=None)
     ax2.imshow(img); ax2.set_xticks([]); ax2.set_yticks([])
     _strip_axes(ax2)
@@ -598,7 +667,9 @@ def plot_S4(ax, vol_lr: np.ndarray, spacing_lr: Spacing, tmpdir: Optional[str] =
 # Figure assembly
 # -------------------------------
 
-def save_stage_images(outdir: str, prods: StageProducts) -> None:
+def save_stage_images(outdir: str, prods: StageProducts,
+                      *, coords: Optional[Tuple[int, int, int]] = None,
+                      n_planes: int = 10, vis_stride: int = 1) -> None:
     tmpdir = os.path.join(outdir, "tmp"); ensure_dir(tmpdir)
     # save intermediates for reuse
     np.save(os.path.join(tmpdir, "vol_hr.npy"), prods.vol_hr)
@@ -609,12 +680,12 @@ def save_stage_images(outdir: str, prods: StageProducts) -> None:
 
     # S0
     fig = plt.figure(figsize=(6.5, 6)); ax = fig.add_subplot(111, projection="3d")
-    plot_S0(ax, prods.vol_hr, prods.spacing_hr, tmpdir=tmpdir)
+    plot_S0(ax, prods.vol_hr, prods.spacing_hr, tmpdir=tmpdir, coords=coords)
     fig.tight_layout(); fig.savefig(os.path.join(outdir, "S0_HR_input.png"), dpi=250); plt.close(fig)
 
     # S1
     fig = plt.figure(figsize=(7, 6)); ax = fig.add_subplot(111, projection="3d")
-    plot_S1(ax, prods.vol_hr, prods.spacing_hr, prods.mask_hr)
+    plot_S1(ax, prods.vol_hr, prods.spacing_hr, prods.mask_hr, n_planes=n_planes, vis_stride=vis_stride)
     fig.tight_layout(); fig.savefig(os.path.join(outdir, "S1_Thin_slice_stack.png"), dpi=250); plt.close(fig)
 
     # S2a kernel (separate file)
@@ -622,20 +693,22 @@ def save_stage_images(outdir: str, prods: StageProducts) -> None:
 
     # S2b blurred as cut-away
     fig = plt.figure(figsize=(6.5, 6)); ax = fig.add_subplot(111, projection="3d")
-    plot_S2_cutaway(ax, prods.vol_blur)
+    plot_S2_cutaway(ax, prods.vol_blur, coords=coords)
     fig.tight_layout(); fig.savefig(os.path.join(outdir, "S2b_Blur_cutaway.png"), dpi=250); plt.close(fig)
 
     # S3
     fig = plt.figure(figsize=(7, 6)); ax = fig.add_subplot(111, projection="3d")
-    plot_S3_grouping(ax, prods.vol_blur, prods.mask_hr, prods.spacing_hr, prods.f)
+    plot_S3_grouping(ax, prods.vol_blur, prods.mask_hr, prods.spacing_hr, prods.f, vis_stride=vis_stride)
     fig.tight_layout(); fig.savefig(os.path.join(outdir, "S3_Block_grouping.png"), dpi=250); plt.close(fig)
 
     # S4
     fig = plt.figure(figsize=(6.5, 6)); ax = fig.add_subplot(111, projection="3d")
-    plot_S4(ax, prods.vol_lr, prods.spacing_lr, tmpdir=tmpdir)
+    plot_S4(ax, prods.vol_lr, prods.spacing_lr, tmpdir=tmpdir, coords=coords)
     fig.tight_layout(); fig.savefig(os.path.join(outdir, "S4_LR_iso1mm_cutaway.png"), dpi=250); plt.close(fig)
 
-def save_panel(outdir: str, prods: StageProducts) -> None:
+def save_panel(outdir: str, prods: StageProducts,
+               *, coords: Optional[Tuple[int, int, int]] = None,
+               n_planes: int = 10, vis_stride: int = 1) -> None:
     """
     Compact 1×4 panel: S0 cut-away | S1 stack | S2b blurred cut-away | S4 iso-1mm cut-away.
     Kernel is saved separately.
@@ -644,10 +717,10 @@ def save_panel(outdir: str, prods: StageProducts) -> None:
     fig = plt.figure(figsize=(22, 5))
     gs = gridspec.GridSpec(1, 4, width_ratios=[1.1, 1.3, 1.1, 1.1])
 
-    ax0 = fig.add_subplot(gs[0, 0], projection="3d"); plot_S0(ax0, prods.vol_hr, prods.spacing_hr, tmpdir=tmpdir)
-    ax1 = fig.add_subplot(gs[0, 1], projection="3d"); plot_S1(ax1, prods.vol_hr, prods.spacing_hr, prods.mask_hr)
-    ax2 = fig.add_subplot(gs[0, 2], projection="3d"); plot_S2_cutaway(ax2, prods.vol_blur)
-    ax3 = fig.add_subplot(gs[0, 3], projection="3d"); plot_S4(ax3, prods.vol_lr, prods.spacing_lr, tmpdir=tmpdir)
+    ax0 = fig.add_subplot(gs[0, 0], projection="3d"); plot_S0(ax0, prods.vol_hr, prods.spacing_hr, tmpdir=tmpdir, coords=coords)
+    ax1 = fig.add_subplot(gs[0, 1], projection="3d"); plot_S1(ax1, prods.vol_hr, prods.spacing_hr, prods.mask_hr, n_planes=n_planes, vis_stride=vis_stride)
+    ax2 = fig.add_subplot(gs[0, 2], projection="3d"); plot_S2_cutaway(ax2, prods.vol_blur, coords=coords)
+    ax3 = fig.add_subplot(gs[0, 3], projection="3d"); plot_S4(ax3, prods.vol_lr, prods.spacing_lr, tmpdir=tmpdir, coords=coords)
 
     fig.tight_layout(); fig.savefig(os.path.join(outdir, "Panel_S0_S1_S2b_S4.png"), dpi=280); plt.close(fig)
 
@@ -665,6 +738,12 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--dy", type=float, default=None, help="Override dy [mm] for phantom.")
     ap.add_argument("--dz", type=float, default=None, help="Override dz [mm] for phantom.")
     ap.add_argument("--target_dz", type=float, required=True, help="Target through-plane spacing dz' [mm].")
+    # Visualization controls
+    ap.add_argument("--slice_axial", type=int, default=None, help="Axial index k (z) for octant cut-away. Negative allowed.")
+    ap.add_argument("--slice_coronal", type=int, default=None, help="Coronal index i (x) for octant cut-away. Negative allowed.")
+    ap.add_argument("--slice_sagittal", type=int, default=None, help="Sagittal index j (y) for octant cut-away. Negative allowed.")
+    ap.add_argument("--n_planes", type=int, default=10, help="Number of axial planes for stack rendering.")
+    ap.add_argument("--vis_stride", type=int, default=1, help="Pixel stride for 3D surfaces (>=1). Use 2+ for speed.")
     ap.add_argument("--loglevel", type=str, default="INFO", help="Logging level.")
     return ap.parse_args()
 
@@ -681,8 +760,22 @@ def main() -> None:
         if args.dz: spacing.dz = float(args.dz)
 
     prods = compute_products(vol, spacing, target_dz_mm=float(args.target_dz))
-    save_stage_images(args.outdir, prods)
-    save_panel(args.outdir, prods)
+
+    # Resolve plotting coordinates if any were provided
+    coords = None
+    if any(v is not None for v in (args.slice_axial, args.slice_coronal, args.slice_sagittal)):
+        coords = resolve_coords(
+            prods.vol_hr,
+            k_axial=args.slice_axial,
+            i_coronal=args.slice_coronal,
+            j_sagittal=args.slice_sagittal,
+        )
+
+    vis_stride = max(1, int(args.vis_stride))
+    n_planes = max(1, int(args.n_planes))
+
+    save_stage_images(args.outdir, prods, coords=coords, n_planes=n_planes, vis_stride=vis_stride)
+    save_panel(args.outdir, prods, coords=coords, n_planes=n_planes, vis_stride=vis_stride)
 
     meta = {
         "native_spacing_mm": {"dx": prods.spacing_hr.dx, "dy": prods.spacing_hr.dy, "dz": prods.spacing_hr.dz},

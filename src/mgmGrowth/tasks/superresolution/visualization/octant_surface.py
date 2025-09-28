@@ -293,7 +293,7 @@ def main() -> None:
     fig = plot_cutaway_octant(vol, k, i, j, cfg=cfg, use_mask_extent=not args.no_mask_extent)
 
     if args.save:
-        fig.savefig(args.save, dpi=300, bbox_inches="tight")
+        fig.savefig(args.save, dpi=800, bbox_inches="tight")
     else:
         plt.show()
 
