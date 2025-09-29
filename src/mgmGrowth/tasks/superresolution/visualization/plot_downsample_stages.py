@@ -188,6 +188,22 @@ def apply_background_black(vol: np.ndarray, mask: np.ndarray) -> np.ndarray:
 def load_volume(path: Optional[str]) -> tuple[np.ndarray, Spacing]:
     if path and nib is not None and os.path.exists(path):
         img = nib.load(path)
+        try:
+            ax_pre = getattr(nib.orientations, "aff2axcodes")(img.affine)
+        except Exception:
+            ax_pre = None
+        # Reorient to canonical RAS+
+        try:
+            img = nib.as_closest_canonical(img)
+        except Exception:
+            pass
+        try:
+            ax_post = getattr(nib.orientations, "aff2axcodes")(img.affine)
+        except Exception:
+            ax_post = None
+        if ax_pre is not None and ax_post is not None and ax_pre != ax_post:
+            logging.info(f"Reoriented input from {ax_pre} to canonical {ax_post} (RAS+)")
+
         data = np.asanyarray(img.dataobj).astype(np.float32)
         zooms = img.header.get_zooms()[:3]
         spacing = Spacing(float(zooms[0]), float(zooms[1]), float(zooms[2]))
@@ -304,6 +320,54 @@ def resolve_coords(
     i = _norm(i_coronal, nx, ic)
     j = _norm(j_sagittal, ny, jc)
     return (k, i, j)
+
+
+# -------------------------------
+# NIfTI saving utilities
+# -------------------------------
+
+def _affine_from_spacing(sp: Spacing) -> np.ndarray:
+    """Build a simple RAS-like affine with voxel spacing on the diagonal."""
+    aff = np.eye(4, dtype=float)
+    aff[0, 0] = float(sp.dx)
+    aff[1, 1] = float(sp.dy)
+    aff[2, 2] = float(sp.dz)
+    return aff
+
+
+def save_nifti(volume: np.ndarray, spacing: Spacing, out_path: str, *, dtype: Optional[np.dtype] = None) -> str:
+    """Save 3D volume to NIfTI (.nii.gz) if nibabel is available; otherwise save .npy with a warning.
+
+    Returns the path actually written.
+    """
+    arr = volume.astype(dtype) if dtype is not None else volume
+    # Ensure parent dir exists
+    ensure_dir(os.path.dirname(out_path) or ".")
+    if nib is None:
+        # Fallback to .npy
+        alt = os.path.splitext(out_path)[0] + ".npy"
+        logging.warning(f"Nibabel not available; saving array to {alt} instead of NIfTI.")
+        np.save(alt, arr)
+        return alt
+
+    aff = _affine_from_spacing(spacing)
+    img = nib.Nifti1Image(arr, aff)
+    # Try to set header zooms, and sform/qform for better compatibility
+    try:
+        img.header.set_zooms((float(spacing.dx), float(spacing.dy), float(spacing.dz)))
+        img.header.set_xyzt_units('mm')
+    except Exception:
+        pass
+    try:
+        # code=1 (scanner anat) is a common default; RAS implied by the affine
+        img.set_sform(aff, code=1)
+        img.set_qform(aff, code=1)
+    except Exception:
+        pass
+    if not out_path.endswith(".nii.gz"):
+        out_path = os.path.splitext(out_path)[0] + ".nii.gz"
+    nib.save(img, out_path)
+    return out_path
 
 
 # -------------------------------
@@ -465,8 +529,8 @@ def save_kernel_figure(outdir: str, sigma_mm: float, dz_mm: float) -> str:
     fig, ax = plt.subplots(figsize=(5, 3))
     ax.fill_between(z, 0.0, G, linewidth=0, alpha=1.0)
     ax.plot(z, G, linewidth=1.8)
-    ax.legend([f"σ={sigma_mm:.2f} mm • FWHM={2.355*sigma_mm:.2f} mm • Δz={dz_mm:.2f} mm • ΣG·Δz=1"],
-              loc="upper right", frameon=False)
+    #ax.legend([f"σ={sigma_mm:.2f} mm • FWHM={2.355*sigma_mm:.2f} mm • Δz={dz_mm:.2f} mm • ΣG·Δz=1"],
+              #loc="upper right", frameon=False)
     _strip_axes(ax)
 
     ensure_dir(os.path.join(outdir, "tmp"))
@@ -649,7 +713,8 @@ def plot_S4(ax, vol_lr: np.ndarray, spacing_lr: Spacing, tmpdir: Optional[str] =
     vol_iso, sp_iso = resample_iso_nearest(vol_lr, spacing_lr, target_mm=1.0)
     if tmpdir is not None:
         ensure_dir(tmpdir)
-        np.save(os.path.join(tmpdir, "vol_lr_iso_1mm.npy"), vol_iso)
+        # Save as NIfTI with isotropic spacing
+        save_nifti(vol_iso.astype(np.float32), sp_iso, os.path.join(tmpdir, "vol_lr_iso_1mm.nii.gz"))
 
     fig = ax.get_figure()
     bbox = ax.get_position(); fig.delaxes(ax)
@@ -671,12 +736,12 @@ def save_stage_images(outdir: str, prods: StageProducts,
                       *, coords: Optional[Tuple[int, int, int]] = None,
                       n_planes: int = 10, vis_stride: int = 1) -> None:
     tmpdir = os.path.join(outdir, "tmp"); ensure_dir(tmpdir)
-    # save intermediates for reuse
-    np.save(os.path.join(tmpdir, "vol_hr.npy"), prods.vol_hr)
-    np.save(os.path.join(tmpdir, "vol_blur.npy"), prods.vol_blur)
-    np.save(os.path.join(tmpdir, "vol_lr.npy"), prods.vol_lr)
-    np.save(os.path.join(tmpdir, "mask_hr.npy"), prods.mask_hr.astype(np.uint8))
-    np.save(os.path.join(tmpdir, "mask_lr.npy"), prods.mask_lr.astype(np.uint8))
+    # save intermediates for reuse in NIfTI format (fallback to .npy if nibabel unavailable)
+    save_nifti(prods.vol_hr.astype(np.float32), prods.spacing_hr, os.path.join(tmpdir, "vol_hr.nii.gz"))
+    save_nifti(prods.vol_blur.astype(np.float32), prods.spacing_hr, os.path.join(tmpdir, "vol_blur.nii.gz"))
+    save_nifti(prods.vol_lr.astype(np.float32), prods.spacing_lr, os.path.join(tmpdir, "vol_lr.nii.gz"))
+    save_nifti(prods.mask_hr.astype(np.uint8), prods.spacing_hr, os.path.join(tmpdir, "mask_hr.nii.gz"))
+    save_nifti(prods.mask_lr.astype(np.uint8), prods.spacing_lr, os.path.join(tmpdir, "mask_lr.nii.gz"))
 
     # S0
     fig = plt.figure(figsize=(6.5, 6)); ax = fig.add_subplot(111, projection="3d")
@@ -694,7 +759,7 @@ def save_stage_images(outdir: str, prods: StageProducts,
     # S2b blurred as cut-away
     fig = plt.figure(figsize=(6.5, 6)); ax = fig.add_subplot(111, projection="3d")
     plot_S2_cutaway(ax, prods.vol_blur, coords=coords)
-    fig.tight_layout(); fig.savefig(os.path.join(outdir, "S2b_Blur_cutaway.png"), dpi=250); plt.close(fig)
+    fig.tight_layout(); fig.savefig(os.path.join(outdir, "S2b_Blur_cutaway.png"), dpi=500); plt.close(fig)
 
     # S3
     fig = plt.figure(figsize=(7, 6)); ax = fig.add_subplot(111, projection="3d")
@@ -743,7 +808,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--slice_coronal", type=int, default=None, help="Coronal index i (x) for octant cut-away. Negative allowed.")
     ap.add_argument("--slice_sagittal", type=int, default=None, help="Sagittal index j (y) for octant cut-away. Negative allowed.")
     ap.add_argument("--n_planes", type=int, default=10, help="Number of axial planes for stack rendering.")
-    ap.add_argument("--vis_stride", type=int, default=1, help="Pixel stride for 3D surfaces (>=1). Use 2+ for speed.")
+    ap.add_argument("--vis_stride", type=int, default=3, help="Pixel stride for 3D surfaces (>=1). Use 2+ for speed.")
     ap.add_argument("--loglevel", type=str, default="INFO", help="Logging level.")
     return ap.parse_args()
 

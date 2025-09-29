@@ -33,7 +33,10 @@ from typing import Tuple
 
 import numpy as np
 from skimage import measure
-
+import nibabel as nib
+from nibabel.orientations import (io_orientation, axcodes2ornt,
+                                  ornt_transform, apply_orientation,
+                                  inv_ornt_aff)
 from mgmGrowth.preprocessing import LOGGER  # marching_cubes
 
 try:
@@ -86,7 +89,7 @@ class CutawayConfig:
     min_margin: int = 1
     specular: float = 0.3
     specular_power: float = 20.0
-    plane_bias: float = 0.05
+    plane_bias: float = 0.01
     # cube overlay
     cube_enable: bool = False
     cube_margin: float = 2.0   # voxels added to each side of mask bbox
@@ -97,6 +100,24 @@ class CutawayConfig:
 
 # ──────────────────────────────────────────────────────────────────────────
 # Geometry helpers
+
+
+def load_volume_ras(path):
+    """Load .nii/.nii.gz as float64 in RAS; return (vol, affine)."""
+    img = nib.load(str(path))
+    # canonicalizes to RAS without resampling
+    img = nib.as_closest_canonical(img)                       # → RAS
+    assert nib.aff2axcodes(img.affine) == ('R','A','S')       # sanity
+    return np.asarray(img.get_fdata(), dtype=np.float64), img.affine
+
+def array_to_ras(vol, affine):
+    """Reorient an arbitrary array+affine to RAS using NiBabel transforms."""
+    start = io_orientation(affine)
+    target = axcodes2ornt(('R','A','S'))
+    xform = ornt_transform(start, target)
+    vol_ras = apply_orientation(vol, xform)
+    aff_ras = affine @ inv_ornt_aff(xform, vol.shape)
+    return vol_ras, aff_ras
 
 def lps_indices_to_ras(i: int, j: int, k: int, shape: Tuple[int, int, int]) -> Tuple[int, int, int]:
     """Convert LPS voxel indices to RAS index space (x,y flip; z unchanged)."""
@@ -308,6 +329,7 @@ def plot_cutaway_octant_pv(
     dist = 2.2 * np.linalg.norm(span)
     cam_pos = (center[0] + dist, center[1] + dist, center[2] + 0.9 * dist)
     LOGGER.info(f"[camera] center={center}, pos={cam_pos}, dist={dist}")
+    cam_pos = (float(cam_pos[0]+200), float(cam_pos[1]), float(cam_pos[2]-300))
     plotter.set_position(cam_pos)
     plotter.set_viewup((0, 0, 1))
     plotter.camera.SetViewAngle(23)
@@ -317,6 +339,7 @@ def plot_cutaway_octant_pv(
 
         
     return plotter
+
 
 # ──────────────────────────────────────────────────────────────────────────
 # CLI
@@ -337,7 +360,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--no_mask_extent", action="store_true",
                    help="Disable camera framing to mask bbox.")
     p.add_argument("--save", type=pathlib.Path, help="Output image path (PNG)")
-    p.add_argument("--window", nargs=2, type=int, default=(1300, 1000),
+    p.add_argument("--window", nargs=2, type=int, default=(1000, 900),
                    help="Render window size: width height")
     p.add_argument("--specular", type=float, default=CutawayConfig.specular)
     p.add_argument("--specular_power", type=float, default=CutawayConfig.specular_power)
@@ -392,14 +415,26 @@ def main() -> None:
         else:
             g = float(args.mesh_color)
             mesh_rgb = (g, g, g)
-        cfg = CutawayConfig(
-            mesh_alpha=cfg.mesh_alpha, slice_alpha=cfg.slice_alpha, cmap=cfg.cmap,
-            mesh_color=mesh_rgb, specular=cfg.specular, specular_power=cfg.specular_power,
-            plane_bias=cfg.plane_bias,
-        )
+            cfg = CutawayConfig(
+                mesh_alpha=args.alpha_mesh,
+                slice_alpha=args.alpha_slice,
+                cmap=args.cmap,
+                mesh_color=mesh_rgb,
+                specular=args.specular,
+                specular_power=args.specular_power,
+                plane_bias=args.plane_bias,
+                cube_enable=bool(args.cube),
+                cube_margin=args.cube_margin,
+                cube_line_width=args.cube_lw,
+                cube_tubes=bool(args.cube_tubes),
+            )
 
     i, j, k = args.coronal_i, args.sagittal_j, args.axial_k
     if args.index_space.lower() == "lps":
+        # Convert to RAS
+        vol, img = load_volume_ras(args.volume)
+        logger.info(f"Converted LPS→RAS: volume shape {vol.shape}")
+        
         i, j, k = lps_indices_to_ras(i, j, k, vol.shape)
 
     off = bool(args.save)  # off-screen if we will screenshot
@@ -412,7 +447,8 @@ def main() -> None:
     )
 
     if args.save:
-        plotter.show(screenshot=str(args.save))
+        #plotter.show(screenshot=str(args.save))
+        plotter.save_graphic(str(args.save).replace(".png", ".pdf"))
     else:
         plotter.show()
 
