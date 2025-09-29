@@ -32,7 +32,9 @@ from dataclasses import dataclass
 from typing import Tuple
 
 import numpy as np
-from skimage import measure  # marching_cubes
+from skimage import measure
+
+from mgmGrowth.preprocessing import LOGGER  # marching_cubes
 
 try:
     import nibabel as nib
@@ -73,10 +75,10 @@ def load_volume(path: pathlib.Path) -> np.ndarray:
 # ──────────────────────────────────────────────────────────────────────────
 # Config
 
+# --- extend config
 @dataclass(frozen=True)
 class CutawayConfig:
-    """Rendering and geometry parameters."""
-    iso_level: float = 0.1                     # marching cubes ISO for head mask
+    iso_level: float = 0.1
     mesh_alpha: float = 1.0
     mesh_color: Tuple[float, float, float] = (0.65, 0.65, 0.65)
     slice_alpha: float = 0.95
@@ -84,7 +86,14 @@ class CutawayConfig:
     min_margin: int = 1
     specular: float = 0.3
     specular_power: float = 20.0
-    plane_bias: float = 0.05                   # shift slice plane into cavity along its normal
+    plane_bias: float = 0.05
+    # cube overlay
+    cube_enable: bool = False
+    cube_margin: float = 2.0   # voxels added to each side of mask bbox
+    cube_color: Tuple[float, float, float] = (0.1, 0.1, 0.1)
+    cube_line_width: float = 2.0
+    cube_tubes: bool = False   # render lines as tubes
+
 
 # ──────────────────────────────────────────────────────────────────────────
 # Geometry helpers
@@ -105,18 +114,36 @@ def faces_to_pv(faces_tri: np.ndarray) -> np.ndarray:
     return f.ravel()
 
 def make_uniform_grid_from_volume(vol: np.ndarray) -> pv.ImageData():
-    """
-    Build a PyVista UniformGrid whose cell centers coincide with integer voxel indices.
-    - origin = (-0.5,-0.5,-0.5)   so voxel centers are at (i,j,k)
-    - dimensions = vol.shape + 1  so #cells == vol.shape
-    Scalars are stored in cell_data["I"].
-    """
     grid = pv.ImageData()
     grid.dimensions = np.array(vol.shape, dtype=int) + 1
     grid.spacing = (1.0, 1.0, 1.0)
     grid.origin = (-0.5, -0.5, -0.5)
     grid.cell_data["I"] = vol.ravel(order="F")
+    # ensure slice() yields scalars on the resulting PolyData
+    grid = grid.cell_data_to_point_data(pass_cell_data=True)  # keep both. 
     return grid
+
+
+def _bounds_from_mask(mask: np.ndarray, margin: float = 0.0) -> tuple[float, float, float, float, float, float]:
+    idx = np.argwhere(mask)
+    (xmin, ymin, zmin), (xmax, ymax, zmax) = idx.min(0), idx.max(0)
+    # convert voxel indices (centers) to world edges and pad
+    return (xmin - 0.5 - margin, xmax + 0.5 + margin,
+            ymin - 0.5 - margin, ymax + 0.5 + margin,
+            zmin - 0.5 - margin, zmax + 0.5 + margin)
+    
+    # --- cube overlay
+def _add_cube_wire(plotter: pv.Plotter, bounds, color, line_width, tubes) -> None:
+    box = pv.Box(bounds=bounds)
+    actor = plotter.add_mesh(
+        box,
+        style="wireframe",
+        color=color,
+        line_width=float(line_width),
+        lighting=False,
+    )
+    if tubes:
+        actor.prop.render_lines_as_tubes = True
 
 # ──────────────────────────────────────────────────────────────────────────
 # Rendering primitives
@@ -268,7 +295,6 @@ def plot_cutaway_octant_pv(
     _add_axial_slice(plotter, grid, i, j, k, vmin, vmax, cfg)
     _add_coronal_slice(plotter, grid, i, j, k, vmin, vmax, cfg)
     _add_sagittal_slice(plotter, grid, i, j, k, vmin, vmax, cfg)
-
     # Camera framing
     if mask.any() and use_mask_extent:
         idx = np.argwhere(mask)
@@ -281,9 +307,15 @@ def plot_cutaway_octant_pv(
     span = np.array([nx, ny, nz], dtype=float)
     dist = 2.2 * np.linalg.norm(span)
     cam_pos = (center[0] + dist, center[1] + dist, center[2] + 0.9 * dist)
+    LOGGER.info(f"[camera] center={center}, pos={cam_pos}, dist={dist}")
     plotter.set_position(cam_pos)
     plotter.set_viewup((0, 0, 1))
-    plotter.camera.SetViewAngle(30)
+    plotter.camera.SetViewAngle(23)
+    if cfg.cube_enable and mask.any():
+        cube_bounds = _bounds_from_mask(mask, margin=cfg.cube_margin)
+        _add_cube_wire(plotter, cube_bounds, cfg.cube_color, cfg.cube_line_width, cfg.cube_tubes)
+
+        
     return plotter
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -305,11 +337,17 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--no_mask_extent", action="store_true",
                    help="Disable camera framing to mask bbox.")
     p.add_argument("--save", type=pathlib.Path, help="Output image path (PNG)")
-    p.add_argument("--window", nargs=2, type=int, default=(1400, 1000),
+    p.add_argument("--window", nargs=2, type=int, default=(1300, 1000),
                    help="Render window size: width height")
     p.add_argument("--specular", type=float, default=CutawayConfig.specular)
     p.add_argument("--specular_power", type=float, default=CutawayConfig.specular_power)
     p.add_argument("--plane_bias", type=float, default=CutawayConfig.plane_bias)
+    p.add_argument("--cube", action="store_true", help="Draw a wireframe cube around the head")
+    p.add_argument("--cube_margin", type=float, default=CutawayConfig.cube_margin, help="Cube padding in voxels")
+    p.add_argument("--cube_color", type=str, default=None, help="Cube RGB, e.g. '#222222' or gray float 0–1")
+    p.add_argument("--cube_lw", type=float, default=CutawayConfig.cube_line_width, help="Cube line width in px")
+    p.add_argument("--cube_tubes", action="store_true", help="Render cube lines as tubes")
+
     p.add_argument("--loglevel", default="INFO", help="Logging level")
     return p.parse_args()
 
@@ -326,7 +364,25 @@ def main() -> None:
         specular=args.specular,
         specular_power=args.specular_power,
         plane_bias=args.plane_bias,
+        cube_enable=bool(args.cube),
+        cube_margin=args.cube_margin,
+        cube_line_width=args.cube_lw,
+        cube_tubes=bool(args.cube_tubes),
     )
+
+    if args.cube_color is not None:
+        import matplotlib.colors as mcolors
+        if args.cube_color.startswith("#"):
+            cube_rgb = mcolors.to_rgb(args.cube_color)
+        else:
+            g = float(args.cube_color); cube_rgb = (g, g, g)
+        cfg = CutawayConfig(
+            mesh_alpha=cfg.mesh_alpha, slice_alpha=cfg.slice_alpha, cmap=cfg.cmap,
+            mesh_color=cfg.mesh_color, specular=cfg.specular, specular_power=cfg.specular_power,
+            plane_bias=cfg.plane_bias,
+            cube_enable=cfg.cube_enable, cube_margin=cfg.cube_margin,
+            cube_color=cube_rgb, cube_line_width=cfg.cube_line_width, cube_tubes=cfg.cube_tubes,
+        )
 
     # Optional mesh color parsing
     if args.mesh_color is not None:
