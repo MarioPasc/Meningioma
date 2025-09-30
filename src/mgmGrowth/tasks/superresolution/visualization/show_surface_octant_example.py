@@ -58,6 +58,7 @@ except Exception as e:
 
 try:
     import pyvista as pv
+    pv.global_theme.allow_empty_mesh = True
 except Exception as e:
     raise RuntimeError("This script requires pyvista (>=0.43).") from e
 
@@ -68,6 +69,9 @@ from mgmGrowth.tasks.superresolution.visualization.mask_brain import (
     compute_head_mask_from_hr,
     laplacian_smooth,
 )
+
+# Logger
+logger = logging.getLogger(__name__)
 
 
 # -------------------- styling ----------------------------------------------
@@ -132,7 +136,9 @@ def build_black_center_diverging() -> ListedColormap:
 
 def load_nii(path: Path):
     try:
-        return nib.load(str(path))
+        img = nib.load(str(path))
+        logger.debug("Loaded NIfTI %s | shape=%s", path, getattr(img, 'shape', None))
+        return img
     except Exception as e:
         raise FileNotFoundError(f"Failed to load NIfTI: {path}") from e
 
@@ -142,6 +148,7 @@ def data_LPS(nii) -> np.ndarray:
     arr = ras.get_fdata(dtype=np.float32)
     arr = np.flip(arr, axis=0)  # R→L
     arr = np.flip(arr, axis=1)  # A→P
+    logger.debug("Converted to LPS | shape=%s | dtype=%s", arr.shape, arr.dtype)
     return arr
 
 
@@ -154,7 +161,10 @@ def resample_like(src, like, order: int = 1):
         from nibabel.processing import resample_from_to  # type: ignore
     except Exception as e:
         raise RuntimeError("Resampling requires nibabel[scipy] (SciPy installed).") from e
-    return resample_from_to(src, (like.shape, like.affine), order=order)
+    logger.info("Resampling volume | from=%s to=%s | order=%d", getattr(src, 'shape', None), getattr(like, 'shape', None), order)
+    out = resample_from_to(src, (like.shape, like.affine), order=order)
+    logger.debug("Resampled shape=%s", getattr(out, 'shape', None))
+    return out
 
 
 def hr_pulse_path(hr_dir: Path, subject: str, pulse: str) -> Path:
@@ -193,6 +203,7 @@ def center_of_mass(mask: np.ndarray) -> Tuple[int, int, int]:
 def compute_coords(subject: str, highres_dir: Path, pulses: Sequence[str], coord_mode: str,
                    coords: Optional[Tuple[int, int, int]]) -> Tuple[int, int, int]:
     if coords is not None:
+        logger.info("Using provided coords (k,i,j)=%s", coords)
         return coords
     seg_p = hr_seg_path(highres_dir, subject)
     if seg_p.exists():
@@ -202,13 +213,17 @@ def compute_coords(subject: str, highres_dir: Path, pulses: Sequence[str], coord
             if coord_mode == "auto":
                 # Nudge axial index slightly towards cranial if possible
                 k = min(k + 3, seg.shape[2] - 2)
+            logger.info("Coords from %s center: (k,i,j)=(%d,%d,%d)", coord_mode, k, i, j)
             return k, i, j
         if coord_mode == "com":
-            return center_of_mass(seg)
+            out = center_of_mass(seg)
+            logger.info("Coords from center-of-mass: %s", out)
+            return out
     # Fallback: center of any HR pulse
     hr_any = load_nii(hr_pulse_path(highres_dir, subject, pulses[0]))
     vol = data_LPS(hr_any)
     nz = np.array(vol.shape) // 2
+    logger.info("Coords from fallback center: (k,i,j)=(%d,%d,%d)", int(nz[2]), int(nz[0]), int(nz[1]))
     return int(nz[2]), int(nz[0]), int(nz[1])
 
 
@@ -223,6 +238,7 @@ def signed_residual(sr: np.ndarray, hr: np.ndarray) -> np.ndarray:
             cx = (sx - t[0]) // 2; cy = (sy - t[1]) // 2; cz = (sz - t[2]) // 2
             return x[cx:cx+t[0], cy:cy+t[1], cz:cz+t[2]]
         a, b = crop(a, tgt), crop(b, tgt)
+        logger.debug("Residual shapes differ; cropped to %s", tgt)
     return a - b
 
 
@@ -232,13 +248,19 @@ def symmetric_rmax(residuals: Sequence[np.ndarray], q: float = 99.0) -> float:
         m = np.isfinite(r)
         if m.any():
             vals.append(float(np.percentile(np.abs(r[m]), q)))
-    return float(max(vals)) if vals else 1.0
+    rmax_val: float = float(max(vals)) if vals else 1.0
+    logger.info("Global residual rmax (q=%.1f) = %.6f from %d volumes", q, rmax_val, len(vals))
+    return rmax_val
 
 
 # -------------------- PyVista helpers (adapted) ----------------------------
 
 def _marching_surface_from_mask(mask: np.ndarray, iso: float) -> tuple[np.ndarray, np.ndarray]:
-    verts, faces, _, _ = measure.marching_cubes(mask.astype(np.float32), level=iso)
+    mask_f = mask.astype(np.float32)
+    ntrue = int(np.count_nonzero(mask))
+    logger.debug("Marching cubes on mask | shape=%s | true=%d | iso=%.3f", mask.shape, ntrue, iso)
+    verts, faces, _, _ = measure.marching_cubes(mask_f, level=iso)
+    logger.debug("Surface verts=%d | faces=%d", len(verts), len(faces))
     return verts, faces
 
 
@@ -259,6 +281,7 @@ def _make_uniform_grid_from_volume(vol: np.ndarray) -> pv.ImageData:
     # ensure no duplicate lingering in cell_data
     if "I" in grid.cell_data:
         del grid.cell_data["I"]
+    logger.debug("Uniform grid | dims=%s | n_points=%d | n_cells=%d", grid.dimensions, grid.n_points, grid.n_cells)
     return grid
 
 
@@ -274,7 +297,9 @@ def _add_surface(plotter: pv.Plotter, mask: np.ndarray, i0: int, j0: int, k0: in
         pass
     mesh_full = pv.PolyData(verts, _faces_to_pv(faces))
     bounds = (i0 - 0.5, nx - 0.5, j0 - 0.5, ny - 0.5, k0 - 0.5, nz - 0.5)
+    logger.debug("Clipping surface with bounds=%s", bounds)
     mesh_clip = mesh_full.clip_box(bounds=bounds, invert=True, merge_points=True)
+    logger.debug("Clipped surface | n_points=%d | n_cells=%d", mesh_clip.n_points, mesh_clip.n_cells)
     plotter.add_mesh(
         mesh_clip,
         color=mesh_color,
@@ -298,6 +323,7 @@ def _add_slices(plotter: pv.Plotter, grid: pv.ImageData,
     slc = grid.slice(normal=(0, 0, 1), origin=(0.0, 0.0, z0))
     slc = slc.clip(normal=(1, 0, 0), origin=(float(i), 0.0, 0.0), invert=False)
     slc = slc.clip(normal=(0, 1, 0), origin=(0.0, float(j), 0.0), invert=False)
+    logger.debug("Add axial slice at k=%d (bias=%.3f) | clip x>=%d, y>=%d", k, plane_bias, i, j)
     plotter.add_mesh(
         slc, scalars="I", cmap=cmap, clim=(vmin, vmax), opacity=slice_alpha, nan_opacity=0.0,
         show_scalar_bar=False,
@@ -308,6 +334,7 @@ def _add_slices(plotter: pv.Plotter, grid: pv.ImageData,
     slc = grid.slice(normal=(1, 0, 0), origin=(x0, 0.0, 0.0))
     slc = slc.clip(normal=(0, 1, 0), origin=(0.0, float(j), 0.0), invert=False)
     slc = slc.clip(normal=(0, 0, 1), origin=(0.0, 0.0, float(k)), invert=False)
+    logger.debug("Add coronal slice at i=%d | clip y>=%d, z>=%d", i, j, k)
     plotter.add_mesh(
         slc, scalars="I", cmap=cmap, clim=(vmin, vmax), opacity=slice_alpha, nan_opacity=0.0,
         show_scalar_bar=False,
@@ -318,6 +345,7 @@ def _add_slices(plotter: pv.Plotter, grid: pv.ImageData,
     slc = grid.slice(normal=(0, 1, 0), origin=(0.0, y0, 0.0))
     slc = slc.clip(normal=(1, 0, 0), origin=(float(i), 0.0, 0.0), invert=False)
     slc = slc.clip(normal=(0, 0, 1), origin=(0.0, 0.0, float(k)), invert=False)
+    logger.debug("Add sagittal slice at j=%d | clip x>=%d, z>=%d", j, i, k)
     plotter.add_mesh(
         slc, scalars="I", cmap=cmap, clim=(vmin, vmax), opacity=slice_alpha, nan_opacity=0.0,
         show_scalar_bar=False,
@@ -362,6 +390,8 @@ def render_cutaway_octant_image(
         mask = np.isfinite(vol_ras) & (np.abs(vol_ras) > 0)
     vol_masked = vol_ras.copy()
     vol_masked[~mask] = np.nan
+    mask_ratio = float(np.count_nonzero(mask)) / float(mask.size)
+    logger.info("SR render: shape=%s | mask true=%.2f%%", vol_ras.shape, 100.0 * mask_ratio)
 
     # Determine intensity window
     if enforce_minmax is not None:
@@ -372,6 +402,7 @@ def render_cutaway_octant_image(
             vmin, vmax = np.percentile(inside, [1.0, 99.0])
         else:
             vmin, vmax = (float(np.nanmin(vol_masked)), float(np.nanmax(vol_masked)))
+    logger.debug("SR window: vmin=%.6f vmax=%.6f", vmin, vmax)
 
     # Off-screen plotter
     pv.global_theme.background = "black"  # type: ignore[assignment]
@@ -431,6 +462,7 @@ def render_cutaway_octant_image(
 
     # If RGBA, composite to black
     np_img = np.asarray(img)
+    logger.debug("SR screenshot shape=%s dtype=%s", np_img.shape, np_img.dtype)
     if np_img.ndim == 3 and np_img.shape[-1] == 4:
         rgb = np_img[..., :3].astype(np.float32) / 255.0
         a = np_img[..., 3:4].astype(np.float32) / 255.0
@@ -469,6 +501,8 @@ def render_residual_cutaway_octant_image(
     hr_masked = hr_ras.copy(); hr_masked[~head_mask] = np.nan
     # SR can remain unmasked; we will only sample on HR-derived geometry
     sr_unmasked = sr_ras
+    mask_ratio = float(np.count_nonzero(head_mask)) / float(head_mask.size)
+    logger.info("Residual render: hr shape=%s | sr shape=%s | head mask true=%.2f%%", hr_ras.shape, sr_ras.shape, 100.0 * mask_ratio)
 
     # 3) Uniform grids for probing
     hr_grid = _make_uniform_grid_from_volume(hr_masked)
@@ -486,6 +520,7 @@ def render_residual_cutaway_octant_image(
 
     # 5) Sample HR and SR on surface; color by |SR−HR|
     surf_hr = hr_grid.sample(mesh)
+    logger.debug("Surface sampling: HR arrays=%s", list(surf_hr.point_data.keys()))
     if 'I' in surf_hr.point_data:
         try:
             surf_hr.point_data.rename('I', 'I_HR', deep=False)
@@ -494,6 +529,7 @@ def render_residual_cutaway_octant_image(
             surf_hr.point_data.remove('I')
             surf_hr['I_HR'] = arr
     surf_sr = sr_grid.sample(mesh)
+    logger.debug("Surface sampling: SR arrays=%s", list(surf_sr.point_data.keys()))
     if 'I' in surf_sr.point_data:
         try:
             surf_sr.point_data.rename('I', 'I_SR', deep=False)
@@ -513,6 +549,12 @@ def render_residual_cutaway_octant_image(
             res_surf = res_surf.astype(float)
             res_surf[invalid] = np.nan
         mesh.point_data.clear(); mesh['RES'] = res_surf
+        # Log residual stats on surface
+        finite = np.isfinite(res_surf)
+        if finite.any():
+            q1, q99 = np.percentile(res_surf[finite], [1, 99])
+            logger.debug("Surface residual stats: min=%.6f q1=%.6f med=%.6f q99=%.6f max=%.6f",
+                         float(res_surf[finite].min()), float(q1), float(np.median(res_surf[finite])), float(q99), float(res_surf[finite].max()))
 
     # 6) Create three slice geometries from HR grid, clip to wedge, sample both, color by |res|
     def _slice_and_color(normal, origin, clips: list[Tuple[Tuple[int,int,int], Tuple[float,float,float]]]):
@@ -528,14 +570,34 @@ def render_residual_cutaway_octant_image(
                 slc.point_data.remove('I')
                 slc['I_HR'] = arr
         # Sample SR onto slice
-        slc_sr = sr_grid.sample(slc)
-        if 'I' in slc_sr.point_data:
-            vals = np.asarray(slc_sr.point_data['I'])
-        elif 'I' in slc_sr.cell_data:
-            tmp = slc_sr.cell_data_to_point_data(pass_cell_data=False)
-            vals = np.asarray(tmp.point_data['I'])
-        else:
-            raise KeyError("Sampled slice missing 'I' in point or cell data")
+        sampled = sr_grid.sample(slc)
+
+        def _extract_point_I(ds: pv.DataSet) -> Optional[np.ndarray]:
+            if 'I' in ds.point_data and ds.point_data['I'].size == slc.n_points:
+                return np.asarray(ds.point_data['I'])
+            if 'I' in ds.cell_data and ds.n_cells == slc.n_cells:
+                ds2 = ds.cell_data_to_point_data(pass_cell_data=False)
+                if 'I' in ds2.point_data and ds2.point_data['I'].size == slc.n_points:
+                    return np.asarray(ds2.point_data['I'])
+            return None
+
+        vals = _extract_point_I(sampled)
+        if vals is None:
+            # Some PyVista builds invert semantics; sample with the slice as caller
+            sampled2 = slc.sample(sr_grid)
+            vals = _extract_point_I(sampled2)
+
+        if vals is None:
+            # Final fallback: trilinear interpolation via SciPy
+            try:
+                from scipy.ndimage import map_coordinates
+                # slice points are already in voxel coords (origin -0.5, spacing 1)
+                pts = slc.points
+                coords = np.vstack([pts[:, 0], pts[:, 1], pts[:, 2]])
+                vals = map_coordinates(sr_unmasked, coords, order=1, mode='nearest').astype(np.float32)
+            except Exception as e:
+                raise RuntimeError(f"SR sampling failed: {e}")
+
         slc['I_SR'] = vals
         if ('I_SR' in slc.point_data) and ('I_HR' in slc.point_data):
             res_slice = np.abs(slc['I_SR'] - slc['I_HR'])
@@ -544,6 +606,7 @@ def render_residual_cutaway_octant_image(
                 res_slice = res_slice.astype(float)
                 res_slice[invalid] = np.nan
             slc['RES'] = res_slice
+        logger.debug("Slice residual added | points=%d | has RES=%s", slc.n_points, 'RES' in slc.point_data)
         return slc
 
     z0 = float(k_ras) + plane_bias
@@ -605,6 +668,7 @@ def render_residual_cutaway_octant_image(
             pass
 
     np_img = np.asarray(img)
+    logger.debug("Residual screenshot shape=%s dtype=%s", np_img.shape, np_img.dtype)
     if np_img.ndim == 3 and np_img.shape[-1] == 4:
         rgb = np_img[..., :3].astype(np.float32) / 255.0
         a = np_img[..., 3:4].astype(np.float32) / 255.0
@@ -697,6 +761,7 @@ def make_pulse_figure(
     res_rows: Sequence[int] = RES_ROWS,
 ) -> None:
     # Load HR reference and segmentation
+    logger.info("Start pulse figure | subject=%s | pulse=%s | coords(k,i,j)=%s", args.subject, pulse, coords_kij)
     hr_nii = load_nii(hr_pulse_path(args.highres_dir, args.subject, pulse))
     hr_LPS = data_LPS(hr_nii)
     seg_LPS: Optional[np.ndarray] = None
@@ -710,6 +775,7 @@ def make_pulse_figure(
     # Head mask from HR only; apply to HR and all SR/residuals
     head_mask = compute_head_mask_from_hr(hr_LPS)
     masked_hr = hr_LPS.copy(); masked_hr[~head_mask] = 0.0
+    logger.info("HR volume shape=%s | mask true=%.2f%%", hr_LPS.shape, 100.0 * (np.count_nonzero(head_mask) / head_mask.size))
 
     # Cache SR (masked) and collect residuals for global symmetric window
     sr_cache: Dict[Tuple[str, int], np.ndarray] = {}
@@ -727,10 +793,12 @@ def make_pulse_figure(
             sr_LPS = data_LPS(sr_nii)
             masked_sr = sr_LPS.copy(); masked_sr[~head_mask] = 0.0
             sr_cache[(m, rmm)] = masked_sr
+            logger.debug("Cached SR | model=%s | res=%dmm | shape=%s", m, rmm, masked_sr.shape)
             all_residuals.append(signed_residual(masked_sr, masked_hr))
 
     # Residual window
     rmax = max(symmetric_rmax(all_residuals, q=99.0), 1e-6)
+    logger.info("Final rmax used for residuals: %.6f", rmax)
     div_cmap = build_black_center_diverging()
 
     # Layout
@@ -746,6 +814,7 @@ def make_pulse_figure(
             masked_sr = sr_cache[(m, rmm)]
 
             # SR octant+surface
+            logger.debug("Render SR panel | row=%d res=%dmm | model=%s", r_idx, rmm, m)
             sr_img = render_cutaway_octant_image(
                 masked_sr, coords_kij,
                 cmap='gray', enforce_minmax=None, window_size=(600, 600),
@@ -757,6 +826,7 @@ def make_pulse_figure(
             axL.set_facecolor('black')
 
             # Residual octant+surface (absolute residual on HR geometry only)
+            logger.debug("Render Residual panel | row=%d res=%dmm | model=%s", r_idx, rmm, m)
             res_img = render_residual_cutaway_octant_image(
                 masked_hr, masked_sr, coords_kij,
                 window_size=(600, 600), plane_bias=0.01, rmax=rmax, cmap='afmhot',
@@ -806,6 +876,7 @@ def make_pulse_figure(
     out_dir = args.out_dir / "octants_by_model" / args.subject
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / f"{args.subject}_{pulse}_octants_models_surface.{args.fmt}"
+    logger.info("Saving figure to %s", out_file)
     if args.fmt == "pdf":
         with PdfPages(out_file) as pdf:
             pdf.savefig(fig, dpi=600, facecolor=fig.get_facecolor(), bbox_inches='tight')
@@ -819,7 +890,7 @@ def make_pulse_figure(
 
 def main() -> None:
     args = parse_args()
-    logging.basicConfig(level=getattr(logging, args.log, logging.INFO),
+    logging.basicConfig(level=getattr(logging, args.log, logging.DEBUG),
                         format="%(levelname)s: %(message)s")
     configure_matplotlib()
 
