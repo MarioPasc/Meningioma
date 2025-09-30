@@ -179,6 +179,22 @@ def sr_model_path(models_dir: Path, model: str, res_mm: int, subject: str, pulse
     return models_dir / model / f"{res_mm}mm" / "output_volumes" / f"{subject}-{pulse}.nii.gz"
 
 
+def save_abs_residual_nii(
+    hr_nii,
+    residual_LPS: np.ndarray,
+    out_path: Path,
+) -> None:
+    """
+    Save |SR−HR| as NIfTI in HR canonical RAS geometry.
+    Background is left as 0.0 in the file; visualization masks it out.
+    """
+    hr_can = nib.as_closest_canonical(hr_nii)
+    res_ras = to_RAS_from_LPS(residual_LPS)
+    img = nib.Nifti1Image(res_ras.astype(np.float32), hr_can.affine, header=hr_can.header)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    nib.save(img, str(out_path))
+
+
 def bbox_center(mask: np.ndarray) -> Tuple[int, int, int]:
     pos = np.argwhere(mask > 0)
     if pos.size == 0:
@@ -370,11 +386,9 @@ def render_cutaway_octant_image(
     specular: float = 0.3,
     specular_power: float = 20.0,
     plane_bias: float = 0.01,
+    head_mask_LPS: Optional[np.ndarray] = None,
 ) -> np.ndarray:
-    """
-    Render an octant+surface cutaway for the given volume and coordinates.
-    Returns an RGB image (numpy array) suitable for plt.imshow.
-    """
+    """Render an octant+surface cutaway. If head_mask_LPS is given, use it."""
     k_lps, i_lps, j_lps = coords_kij
 
     # Convert to RAS for PyVista
@@ -382,12 +396,15 @@ def render_cutaway_octant_image(
     nx, ny, nz = vol_ras.shape
     i_ras, j_ras, k_ras = _lps_indices_to_ras(i_lps, j_lps, k_lps, (nx, ny, nz))
 
-    # Build head mask from this volume and mask outside with NaN
-    try:
-        mask = compute_head_mask_from_hr(vol_ras)
-    except Exception:
-        # Simple fallback: non-zero as foreground
-        mask = np.isfinite(vol_ras) & (np.abs(vol_ras) > 0)
+    # Use external mask if provided; otherwise derive from this volume
+    if head_mask_LPS is not None:
+        mask = to_RAS_from_LPS(head_mask_LPS.astype(bool))
+    else:
+        try:
+            mask = compute_head_mask_from_hr(vol_ras)
+        except Exception:
+            # Simple fallback: non-zero as foreground
+            mask = np.isfinite(vol_ras) & (np.abs(vol_ras) > 0)
     vol_masked = vol_ras.copy()
     vol_masked[~mask] = np.nan
     mask_ratio = float(np.count_nonzero(mask)) / float(mask.size)
@@ -398,10 +415,8 @@ def render_cutaway_octant_image(
         vmin, vmax = float(enforce_minmax[0]), float(enforce_minmax[1])
     else:
         inside = vol_masked[np.isfinite(vol_masked)]
-        if inside.size:
-            vmin, vmax = np.percentile(inside, [1.0, 99.0])
-        else:
-            vmin, vmax = (float(np.nanmin(vol_masked)), float(np.nanmax(vol_masked)))
+        vmin, vmax = (float(np.nanmin(vol_masked)), float(np.nanmax(vol_masked))) if inside.size == 0 \
+                     else np.percentile(inside, [1.0, 99.0])
     logger.debug("SR window: vmin=%.6f vmax=%.6f", vmin, vmax)
 
     # Off-screen plotter

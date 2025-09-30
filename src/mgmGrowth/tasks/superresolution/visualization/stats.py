@@ -407,7 +407,7 @@ def make_panels_for_pulse(pulse: str,
         # Unified legend outside bottom
         if leg_handles and leg_labels:
             fig.legend(leg_handles, leg_labels, loc="lower center",
-                       ncol=len(leg_labels), frameon=False, bbox_to_anchor=(0.5, -0.06))
+                       ncol=len(leg_labels), frameon=False, bbox_to_anchor=(0.5, -0.12))
             fig.subplots_adjust(bottom=0.18)
 
         for ext in ("pdf","png"):
@@ -430,7 +430,7 @@ def make_panels_for_pulse(pulse: str,
     axes[2].tick_params(axis='y', which='both', labelleft=False)
     if leg_handles and leg_labels:
         fig.legend(leg_handles, leg_labels, loc="lower center",
-                   ncol=len(leg_labels), frameon=False, bbox_to_anchor=(0.5, -0.08))
+                   ncol=len(leg_labels), frameon=False, bbox_to_anchor=(0.5, -10.5))
         fig.subplots_adjust(bottom=0.20)
     for ext in ("pdf","png"):
         out = out_dir / f"sr_panel_{pulse}_COMBINED.{ext}"
