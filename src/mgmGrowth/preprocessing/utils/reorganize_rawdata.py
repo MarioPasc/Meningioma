@@ -172,16 +172,16 @@ def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description="Re-organise meningioma dataset.")
     parser.add_argument("--baseline", type=Path, default=Path(
-        "/home/mpascual/research/datasets/meningiomas/raw/baseline"
+        "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/raw/processed/baseline"
     ))
     parser.add_argument("--followup", type=Path, default=Path(
-        "/home/mpascual/research/datasets/meningiomas/raw/controls"
+        "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/raw/processed/controls"
     ))
     parser.add_argument("--out", type=Path, default=Path(
-        "/home/mpascual/research/datasets/meningiomas/raw/MenGrowth-2025"
+        "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/preprocessed"
     ))
     parser.add_argument(
-        "--pulses", default="T1,T2,SWI,FLAIR,TC",
+        "--pulses", default="T1,T2,T1SIN,FLAIR",
         help="Comma-separated pulse list"
     )
     return parser.parse_args()

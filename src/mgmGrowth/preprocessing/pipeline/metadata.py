@@ -296,9 +296,9 @@ def main() -> None:
     It reads an XLSX file, applies codification, writes an intermediate CSV,
     then reads that CSV to build a final JSON structure.
     """
-    xlsx_path = "/home/mariopasc/Python/Datasets/Meningiomas/Meningioma_Adquisition/metadata.xlsx"
+    xlsx_path = "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/raw/processed/baseline/metadata.xlsx"
     output_folder = (
-        "/home/mariopasc/Python/Datasets/Meningiomas/preprocessing/metadata/"
+        "/media/mpascual/PortableSSD/Meningiomas/MenGrowth/preprocessed/"
     )
     csv_path = os.path.join(output_folder, "metadata_recodified.csv")
 
