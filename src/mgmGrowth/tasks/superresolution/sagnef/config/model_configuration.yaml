@@ -1,0 +1,48 @@
+# Global config for MRI SR-SAGNEF (Super-Resolution Spatially-Adaptive Gated Nonlinear Ensemble Fusion)
+seed: 23102003
+device: "cuda"         # "cuda" | "cpu"
+amp: true              # mixed precision
+
+data:
+  cv_json: "/path/to/kfolds_manifest.json"
+  spacings: ["3mm", "5mm", "7mm"]
+  pulses: ["t1c", "t1n", "t2w", "t2f"]
+  experts: ["BSPLINE", "ECLARE", "SMORE", "UNIRES"]
+  include_lr: true
+  sanity_fix: true           # one-time shape/affine sanity
+  sanity_max_vox_diff: 3
+  normalization: "zscore"    # "zscore" | "percentile"
+  norm_percentiles: [0.5, 99.5]
+
+train:
+  epochs: 60
+  batch_size: 2
+  num_workers: 4
+  lr: 1.0e-3
+  weight_decay: 0.0
+  grad_clip_norm: 1.0
+  patience: 12               # early stop patience on val loss
+  save_every: 5              # epochs
+  fold_subset: []            # e.g., ["fold_1","fold_2"]; empty=all
+
+patch:
+  patch_size: [64, 64, 64]   # D, H, W
+  stride: [32, 32, 32]
+  train_patches_per_volume: 64
+  val_patches_per_volume: 16
+  hann_blend: true
+
+loss:
+  w_mse: 1.0
+  w_ssim: 0.2               # multiplies (1-SSIM)
+  w_tv: 0.01                # TV on gating weights
+  w_entropy: 0.001          # entropy regularization
+  ssim:
+    window: 7
+    sigma: 1.5
+    K1: 0.01
+    K2: 0.03
+
+out_root: "/media/.../tasks/superresolution/results/models/SAGNEF"
+save_train_outputs: false
+save_weight_maps: false

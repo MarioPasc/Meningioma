@@ -153,22 +153,28 @@ def exclude_z_slices(arr: np.ndarray, idx: Sequence[int]) -> np.ndarray:
         return arr
 
     z = arr.shape[0]
-    idx_arr = np.asarray(list(idx), dtype=int)
+    # Direct conversion without intermediate list - more efficient
+    idx_arr = np.asarray(idx, dtype=np.intp)  # Use native int type for indexing
     in_bounds = (idx_arr >= 0) & (idx_arr < z)
-    if not bool(np.all(in_bounds)):               # tell the user once
+    
+    if not np.all(in_bounds):               # tell the user once
         bad = idx_arr[~in_bounds]
         LOGGER.debug("Ignoring %d slice indices outside [0,%d]: %s",
-                     int(bad.size), z - 1, bad.tolist())
-    idx_arr = idx_arr[in_bounds]
+                     bad.size, z - 1, bad.tolist())
+        idx_arr = idx_arr[in_bounds]
 
-    mask = np.ones(z, dtype=bool)
-    mask[idx_arr] = False
-    return arr[mask, ...]
+    # More efficient: use np.delete for known indices
+    if idx_arr.size == 0:
+        return arr
+    return np.delete(arr, idx_arr, axis=0)
 
 
 # --------------------------------------- metric helpers (robust to NaN/Inf)
 def _finite(a: np.ndarray, b: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """Return only finite-valued voxels of both arrays (element-wise AND)."""
+    # Check if we even need to filter (common case: all finite)
+    if np.all(np.isfinite(a)) and np.all(np.isfinite(b)):
+        return a, b
     m = np.isfinite(a) & np.isfinite(b)
     return a[m], b[m]
 
@@ -248,19 +254,30 @@ def bhattacharyya(hr: np.ndarray, sr: np.ndarray, bins: int = 256,
     if hr.size == 0 or sr.size == 0:
         return np.nan
 
-    # un-normalised counts
-    h_cnt, _ = np.histogram(hr, bins=bins, density=False)
-    s_cnt, _ = np.histogram(sr, bins=bins, density=False)
+    # Use common range for both histograms - more accurate comparison
+    vmin = min(hr.min(), sr.min())
+    vmax = max(hr.max(), sr.max())
+    bin_edges = np.linspace(vmin, vmax, bins + 1)
+    
+    # Compute both histograms with same bins
+    h_cnt, _ = np.histogram(hr, bins=bin_edges, density=False)
+    s_cnt, _ = np.histogram(sr, bins=bin_edges, density=False)
 
-    # convert to probabilities (sum = 1)
-    p = h_cnt / h_cnt.sum()
-    q = s_cnt / s_cnt.sum()
+    # convert to probabilities (sum = 1) - avoid division if sum is 0
+    h_sum = h_cnt.sum()
+    s_sum = s_cnt.sum()
+    if h_sum == 0 or s_sum == 0:
+        return np.nan
+    
+    p = h_cnt / h_sum
+    q = s_cnt / s_sum
 
-    bc = np.sum(np.sqrt(p * q))                # coefficient in [0,1]
+    # Compute BC directly without intermediate array
+    bc = np.sqrt(p * q).sum()                # coefficient in [0,1]
 
     if return_distance:
         # guard against log(0)
-        return -np.log(np.clip(bc, 1e-12, 1.0))
+        return -np.log(max(bc, 1e-12))
     else:
         return bc
 
@@ -366,20 +383,25 @@ def collect_paths(hr_root: pathlib.Path,
                   results_root: pathlib.Path,
                   pulse: str,
                   model: str,
-                  resolution_mm: int) -> Iterable[VolumePaths]:
+                  resolution_mm: int) -> List[VolumePaths]:
     """
-    Yield VolumePaths for every patient that has both HR and SR volumes.
+    Collect all VolumePaths for every patient that has both HR and SR volumes.
+    Returns a list instead of generator for better multiprocessing performance.
     """
     res_dir = results_root / model / f"{resolution_mm}mm" / "output_volumes"
     LOGGER.info("Collecting paths for %s | %d mm | %s", model, resolution_mm, pulse)
     LOGGER.info("res_dir = %s", res_dir)
+    
+    paths = []
     for patient_dir in sorted(hr_root.iterdir()):
         pid = patient_dir.name
         hr_path = patient_dir / f"{pid}-{pulse}.nii.gz"
         seg_path = patient_dir / f"{pid}-seg.nii.gz"
         sr_path = res_dir / f"{pid}-{pulse}.nii.gz"
         if hr_path.exists() and seg_path.exists() and sr_path.exists():
-            yield VolumePaths(hr=hr_path, seg=seg_path, sr=sr_path)
+            paths.append(VolumePaths(hr=hr_path, seg=seg_path, sr=sr_path))
+    
+    return paths
 
 
 # ------------------------------------------------ worker (per patient) ----
@@ -415,9 +437,11 @@ def process_patient(vpaths: VolumePaths,
             raise ValueError(f"SEG/HR size mismatch – {geo_err}") from None
 
         # ---------- axial slice exclusion ---------------------------------
-        hr_arr  = exclude_z_slices(hr_arr,  exclude)
-        sr_arr  = exclude_z_slices(sr_arr,  exclude)
-        seg_arr = exclude_z_slices(seg_arr, exclude)
+        # Only exclude if necessary - avoid unnecessary array operations
+        if exclude:
+            hr_arr  = exclude_z_slices(hr_arr,  exclude)
+            sr_arr  = exclude_z_slices(sr_arr,  exclude)
+            seg_arr = exclude_z_slices(seg_arr, exclude)
 
         # ---------- metrics -----------------------------------------------
         return compute_metrics(hr_arr, sr_arr, seg_arr)
@@ -514,6 +538,7 @@ def main() -> None:
 
                 pulse_idx = PULSES.index(pulse)
                 with PoolClass(workers) as pool:
+                    # Use imap instead of imap for ordered results matching items list
                     iterator = pool.imap(
                         _process_patient_args,
                         [(vp, exclude) for vp in items],
@@ -522,7 +547,8 @@ def main() -> None:
 
                     # Progress bar per (model, pulse, resolution)
                     for idx, metr in enumerate(
-                        tqdm(iterator, total=len(items), desc=f"{model} | {pulse} | {res}mm")
+                        tqdm(iterator, total=len(items), desc=f"{model} | {pulse} | {res}mm", 
+                             unit="patient", smoothing=0.1)
                     ):
                         vp = items[idx]
                         p = patient_idx[vp.hr.parent.name]
@@ -538,7 +564,8 @@ def main() -> None:
                                 len(items),
                             )
 
-    np.savez(args.out,
+    # Save with compression to reduce file size
+    np.savez_compressed(args.out,
              metrics=metrics_arr,
              patient_ids=patients,
              pulses=PULSES,
@@ -558,7 +585,7 @@ metrics_arr.shape
 #  |  |  |  |  └────── METRIC_NAMES
 #  |  |  |  └───────── model index
 #  |  |  └──────────── resolution {3,5,7} mm
-#  |  └─────────────── pulse {t1c,t2w,t2f}
+#  |  └─────────────── pulse {t1c,t1n,t2w,t2f}
 #  └────────────────── patient
 """
 

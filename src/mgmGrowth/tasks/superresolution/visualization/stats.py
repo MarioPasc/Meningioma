@@ -208,6 +208,7 @@ def model_colors(models: List[str]) -> Dict[str, str]:
     base = tol_bright()
     order = ["BSPLINE","ECLARE","SMORE","UNIRES"]
     palette = {
+        "LINEAR_SUPER_LEARNER": base["purple"],
         "BSPLINE": base["grey"],
         "ECLARE":  base["blue"],
         "SMORE":   base["red"],

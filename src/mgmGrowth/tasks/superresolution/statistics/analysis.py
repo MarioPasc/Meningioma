@@ -55,6 +55,7 @@ class Paths:
     hr_root: pathlib.Path
     results_root: pathlib.Path
     out_npz: pathlib.Path
+    baseline_model: Optional[str] = None
 
 class PipelineError(RuntimeError):
     """User-facing fatal error for the SR stats pipeline."""
@@ -306,11 +307,11 @@ def build_fe_X(fit, synth: pd.DataFrame, rhs: str, names: List[str]) -> np.ndarr
     X = X[names]
     return X.to_numpy(dtype=float)
 
-def fit_lmm_primary(df: pd.DataFrame, pulse: str) -> Tuple[pd.DataFrame, List[Dict[str, Any]]]:
+def fit_lmm_primary(df: pd.DataFrame, pulse: str, baseline_model: Optional[str] = None) -> Tuple[pd.DataFrame, List[Dict[str, Any]]]:
     """
     MixedLM on the primary endpoint of `pulse`.
     Fixed: C(model)*C(resolution)+C(roi). Random: intercept per subject.
-    EMM over ROI and pairwise contrasts vs baseline (BSPLINE if present).
+    EMM over ROI and pairwise contrasts vs baseline (default: BSPLINE if present, else first model).
     """
     primary = PRIMARY_BY_PULSE[pulse]
     sub = df[(df["pulse"] == pulse) & (df["metric"] == primary)].copy()
@@ -334,7 +335,16 @@ def fit_lmm_primary(df: pd.DataFrame, pulse: str) -> Tuple[pd.DataFrame, List[Di
     lev_roi = sub["roi_c"].cat.categories
     lev_mod = sub["model_c"].cat.categories
     lev_res = sub["resolution_c"].cat.categories
-    baseline = "BSPLINE" if "BSPLINE" in lev_mod else lev_mod[0]
+    
+    # Determine baseline model
+    if baseline_model and baseline_model in lev_mod:
+        baseline = baseline_model
+    elif "BSPLINE" in lev_mod:
+        baseline = "BSPLINE"
+    else:
+        baseline = lev_mod[0]
+    LOG.info("Using baseline model: %s (pulse=%s)", baseline, pulse)
+    
     fe_rhs = "C(model_c)*C(resolution_c) + C(roi_c)"
 
     fit = None
@@ -437,14 +447,22 @@ def holm_adjust(pvals: List[float]) -> List[float]:
     """Holm step-down family-wise adjustment."""
     return multipletests(pvals, alpha=0.05, method="holm")[1].tolist() if pvals else []
 
-def friedman_wilcoxon(df: pd.DataFrame, pulse: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+def friedman_wilcoxon(df: pd.DataFrame, pulse: str, baseline_model: Optional[str] = None) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """Omnibus Friedman per (resolution, roi) and Wilcoxon vs baseline per model."""
     primary = PRIMARY_BY_PULSE[pulse]
     sub = df[(df["pulse"] == pulse) & (df["metric"] == primary)].copy()
     if sub.empty:
         return [], []
     models = sorted(sub["model"].unique().tolist())
-    baseline = "BSPLINE" if "BSPLINE" in models else models[0]
+    
+    # Determine baseline model
+    if baseline_model and baseline_model in models:
+        baseline = baseline_model
+    elif "BSPLINE" in models:
+        baseline = "BSPLINE"
+    else:
+        baseline = models[0]
+    LOG.debug("Friedman/Wilcoxon baseline: %s (pulse=%s)", baseline, pulse)
     fr_out: List[Dict[str, Any]] = []
     wi_out: List[Dict[str, Any]] = []
 
@@ -846,6 +864,8 @@ def main() -> None:
     ap.add_argument("--hr_root", type=pathlib.Path, required=True)
     ap.add_argument("--results_root", type=pathlib.Path, required=True)
     ap.add_argument("--out_npz", type=pathlib.Path, required=True)
+    ap.add_argument("--baseline-model", type=str, default=None,
+                    help="Baseline model for comparisons (default: BSPLINE if present, else first model alphabetically)")
 
     # Radiomics NPZ
     ap.add_argument("--radiomics_out", type=pathlib.Path, required=False,
@@ -859,7 +879,8 @@ def main() -> None:
     ap.add_argument("--workers", type=int, default=max(1, mp.cpu_count() - 1),
                     help="Process workers for radiomics stages.")
     args = ap.parse_args()
-    paths = Paths(args.metrics_npz, args.hr_root, args.results_root, args.out_npz)
+    paths = Paths(args.metrics_npz, args.hr_root, args.results_root, args.out_npz, 
+                  baseline_model=args.baseline_model)
 
     LOG.info("SR statistics analysis started.")
 
@@ -885,7 +906,7 @@ def main() -> None:
         lmm_emm_all: Dict[str, Any] = {}
         lmm_contr_all: Dict[str, Any] = {}
         for p in tqdm(pulses, desc="LMM (primary)", unit="pulse"):
-            emm_table, contrasts = fit_lmm_primary(df, p)
+            emm_table, contrasts = fit_lmm_primary(df, p, baseline_model=paths.baseline_model)
             lmm_emm_all[p] = {"emm_table": pack_table(emm_table, f"EMM[{p}]")}
             lmm_contr_all[p] = {"contrasts": contrasts}
 
@@ -893,7 +914,7 @@ def main() -> None:
         friedman_all: Dict[str, Any] = {}
         wilcoxon_all: Dict[str, Any] = {}
         for p in tqdm(pulses, desc="Nonparametric tests", unit="pulse"):
-            fr, wi = friedman_wilcoxon(df, p)
+            fr, wi = friedman_wilcoxon(df, p, baseline_model=paths.baseline_model)
             friedman_all[p] = {"by_res_roi": fr}
             wilcoxon_all[p] = {"pairs": wi}
 
@@ -910,6 +931,7 @@ def main() -> None:
             "metric_names": [str(x) for x in metr["metric_names"]],
             "roi_labels": [str(x) for x in metr["roi_labels"]],
             "primary_by_pulse": {str(k): str(v) for k, v in PRIMARY_BY_PULSE.items()},
+            "baseline_model": str(paths.baseline_model) if paths.baseline_model else None,
         }
         meta_json = json.dumps(meta, ensure_ascii=False)
         np.savez_compressed(
